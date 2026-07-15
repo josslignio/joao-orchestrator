@@ -1,0 +1,925 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-07-15T17:22:40Z",
+  "source_repository": "git@github.com:josslignio/weekly-trading-radar.git",
+  "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+  "files": [
+    {
+      "source_path": "src/joss_orchestrator/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "aec10aaad33212e691e3e5f3f0d61baf1c5832684cc3fb009b987d0da75c8800",
+      "classification": "generic-package-init"
+    },
+    {
+      "source_path": "src/joss_orchestrator/capabilities/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "dbedad24f4a6ff9fed55043bc722af11b34188f0fa0f87999327ef6a04d6164a",
+      "classification": "generic-subsystem"
+    },
+    {
+      "source_path": "src/joss_orchestrator/capabilities/contracts.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "8fd4cc2663ee4a7c53ced9fcb823a2c1dd607ebca1b63bae348ec6a6d77c7b6f",
+      "classification": "generic-subsystem"
+    },
+    {
+      "source_path": "src/joss_orchestrator/capabilities/permissions.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "8766d9d8fcd394535e19b86d2ccd325d85bb5dd70792d476a95eabb3256614b7",
+      "classification": "generic-subsystem"
+    },
+    {
+      "source_path": "src/joss_orchestrator/capabilities/registry.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "0e4163b6270bb6a63ffbf596b7d959808e7d2c0de19b146e4f44289d3c14ffbb",
+      "classification": "generic-subsystem"
+    },
+    {
+      "source_path": "src/joss_orchestrator/cli/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "764c0630cdecb42a9c4c8afa3e0ced144daae80199c5276674bc8546b5008a8a",
+      "classification": "generic-package-init"
+    },
+    {
+      "source_path": "src/joss_orchestrator/cli/joss_v2.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "b1b764d1712d74091bc80aa6b2580603aa367114b6be1cb6a1589f1f04c2fb51",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/compat/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "960b5869ee9586ddae2a0727b5a151a44abc080289be06af64b365a023c26fc8",
+      "classification": "generic-package-init"
+    },
+    {
+      "source_path": "src/joss_orchestrator/compat/v140.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "24d7cddfe12e79a1426e60f7c56c2c735f4f9c151a572975563b4f1f8006fbbd",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/domain/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "88413d2d2235776cd6ef66c374794c22eeddb51cda58f434d9ebafbe08faa498",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/domain/approvals.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "f835b00a658438bec2bc2c07409b1c920b08c850b644eabe996e9fb0cc4edb79",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/domain/events.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "82a129a251bc309482b857c052cbeffb8ac4a89fd9470d2b62d642a57c58a37d",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/domain/identifiers.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "929663223da2eb45694d39e3ed850fceffc47cea9e14756e83c6960fb77efce3",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/domain/models.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "9a13fcd34a6d200965a4b1a5737fa377f1a57fc3bc7fa0d5c4d8a4a52470987b",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/domain/projects.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "25baa2d90b27998ead5dc11b986390f3c3fad3f14be28d1030857a5af0be19e7",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/domain/tasks.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "53a27e36e84da0d14bfc7935c030bb3570d84b731118e943c2ee071f4eaf8dbc",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/evaluation/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "f9dff1d21a02b4e5ea8f423087c8c696d716164fa3e27ca41c89740826fdf9d7",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/evaluation/comparator.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "42db54b18cba9cea926bdb1a39624eed16a1833305088c68d6fef7524ee22663",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/evaluation/models.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "214182f9e3c82d0fae1751d811ae6f373201f39316cf6c1dcdedd71935f2a5d2",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/evaluation/runner.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "9a2f58215760e00b9a306331dd765294c149a9b07fc2b470d505941305f7b596",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/memory/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "a388b2261321e1e9449754eb68399afb2293f9744f62cf07452d6f4a097a3a1c",
+      "classification": "generic-subsystem"
+    },
+    {
+      "source_path": "src/joss_orchestrator/memory/lesson_index.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "d2f238679b0b821b69055f0ba67df598d08269f422e0613f004e02529bbe70ef",
+      "classification": "generic-subsystem"
+    },
+    {
+      "source_path": "src/joss_orchestrator/memory/lessons.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "4fd083cea7bfa5b5316fa4be32189fba3816a901ec0ae4302eef6f0c9d27798c",
+      "classification": "generic-subsystem"
+    },
+    {
+      "source_path": "src/joss_orchestrator/multiproject.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "b95d444f727eaef10f75ad0d9b2cfd8c692219f46fe727e5400f35a9e5c24008",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/observability/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "c61056f8e173133dd3d896eb93a92320d4e8ab05d2e72bec056572214d71ef65",
+      "classification": "generic-subsystem"
+    },
+    {
+      "source_path": "src/joss_orchestrator/observability/events.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "37ef7aef986c59ea1ea6b9cc27e2b398cbe6ae2ab1aa050a09cc178b043b4bd7",
+      "classification": "generic-subsystem"
+    },
+    {
+      "source_path": "src/joss_orchestrator/observability/redaction.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "be9292236f9d213fea4c77ae340e77689badcb993ad824c26498ea2089b47f54",
+      "classification": "generic-subsystem"
+    },
+    {
+      "source_path": "src/joss_orchestrator/observability/secrets_engine.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "2b4650e3a570b3015c00092e2069bd36f321141b73bb8f79257b958b836f9787",
+      "classification": "generic-subsystem"
+    },
+    {
+      "source_path": "src/joss_orchestrator/operator_cli.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "e67a80920702ea4766306c594bf0ba72c9c2d1e1d4b1c57147197def12441ab7",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "f2c797c1f0becf11d4341ee6dacdf5ed5c3f65fc927f0216457ec2077fc0736d",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/benchmark.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "4ec3613bb4573b9f168b47a3078eaa7184c487ff68896273735c18c26995e51c",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/budget_routing.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "bc7e3a90d6ca2ceaf4ff1b3f0dc6df2b2af0752b49fc4739ee441005aa9ba0da",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/cache.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "b211445a41c95acdebfa4457cbc739db22d8a3fec9fa59154af60d6cb5d7c5df",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/circuit_breaker.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "d156d0f3caf8a7165a3e76e7902d53dc06925483fcc76fc381da7a0059ac4063",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/context_delta.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "0bb04a0b4f9b9516a023d98aeb5c66ae32c1dfc9fdb7a4b977e5b9acf15ce0ed",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/nightly.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "2cb66a442b3d80f38f710fdb70965b8a0029d6a5f45f0b7cd5a9b628f9d73506",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/nightly_v2.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "b16d9eb057730aba48d530fa9328f5d1d3d3a643f059ec23bf0899ed97989b3d",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/parallel.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "02c73892366b614d4bd776eee95024a08e0836635d778878c7c9c510f2eda824",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/plan_compiler.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "5da45b37e67bc64822afa585ce6ee9a38811df425f685ca035932393f898a8a6",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/repo_index.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "b3fc2c80a723151e6a0217e97e0851631b81b584addb072f3172355a295ea9c4",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/telemetry.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "f4107c0fc2638d86b591af39123f5d597985bcce33968be8663da9e8c41db02e",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/test_selector.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "13d42771b026c3f24514fc88583a5732e5ddadad273a965cfa0797a0d5141a53",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/turbo_v11.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "ab89f521d7a0c891b74c4263e7cb1f748228f1c9c2dd3f0599ca7158d8bdeb65",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/optimization/warm_cache.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "f0d979563074bee7e79344d11929f3a2dbf146c815bfe76511edfac546817ad3",
+      "classification": "generic-evaluation"
+    },
+    {
+      "source_path": "src/joss_orchestrator/policy/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "0894928e96575ffdb6195662e4f89bc1fbb52db17b7fd4e3a20f1509dc8fc860",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/policy/capabilities.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "725c4188289972b8e99ce54ef2eab8122dbc395023024633a094596aa6f65cd7",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/policy/commands.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "487e7d64390c23e574a0fcd564de8b8cda430104b8eea5394f26e9bb96f17cb8",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/policy/engine.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "8847b9cffbf12a7c3bbfc1787283250959101b3c92af8341b5ab14b16dc579b4",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/policy/environment.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "b87c2af2ad9b7c880f034d0873f3c0821f0c8a23faf0381aaea9d86c50e81c75",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/policy/paths.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "e1812cf38525624fe0437057a03e6641ec6308219c7629b86d9af8cdb7ec93cc",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/policy/secrets.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "275a056c40583741a69967e313c669dfc3cbcd8a8ad424f92ae6d54fa9d2b45e",
+      "classification": "generic-core"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "6641437775650fcb117ce66bd2f511e8618b2552f00a4e44aee4fb335d33d71a",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/base.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "0b16c2301c5a44263d298c73897207790402bf67ddbd1bddad08aae9398b6fc5",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/budget.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "72cdaa1a8d316513bfbacfd848470a22cea12457d7e4f6f00c304c1c8d832669",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/codex_subscription.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "ccf1099f812214e072477d14fad2c5570f6c4efd3d201b2f5e68d6288261469c",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/disabled_claude.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "000e1d870d0b71a44024c4149a855548fdfa0ebfd47c70277929c63f5c8a8845",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/disabled_codex.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "48c70f36069d88e674861bba426ffd8db006ee06a4a221ccc6bd83cba2920e20",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/disabled_hermes.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "5d72a2d8ed1ea2381e2e58117b507c48fe3602b533e37340f1a620488fbac657",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/disabled_openai.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "9e2838d1e05b81e60beac5d371779a2d9688c9448b6ba7e934f0ad2d6e400004",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/disabled_zai.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "af9c250b81a3ba796ba68388aa6dcd8eed8e0bbaab932f8b8c69681758224b6a",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/fake_provider.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "9948b226e547bb7c30f85682e0754a8b0edb8a076c74971990924cdcc018e79e",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/manual_file.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "453d1804acc915b8e5d0721170ebbe284be82e7bd46a5342acd87541bee08871",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/mock.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "f5630e8198bd4e5e855c55eff7218a4f062234282647254c8f611f23bc3b62e7",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/opencode_provider.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "48874bb2f4c122534148bd4d903fa023821739bc37186c9bf3e6feb38fb47e14",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/router.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "eed627ef9a12723994e60e5acbba6a63ee11cfbe1a9d0cdb89b99483c34ffd77",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/smart_router.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "7cc446363741a6ce59e23fd9d9a266f0c992c4e4356cbf5e60b1bd451a3431d3",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/subprocess_cli.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "1a97042de411a6a1c1c70e482e9c3c6a1530e0935f8f5993002ead63027cd45a",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/providers/zai_coding_plan.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "2170d90b623a034516ad0b89b25b6cefd7cb0400d028436362291fc9ec385058",
+      "classification": "generic-providers"
+    },
+    {
+      "source_path": "src/joss_orchestrator/registry.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "f666a3de71b2630f81c4960f306b2ac400094d0b6d736994f7ebf5e0283df6bc",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/roadmap/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "cdf5d12417faf4b66422667d5b74e51b21cea4fba62b166d3cbe5536d5733e63",
+      "classification": "generic-package-init"
+    },
+    {
+      "source_path": "src/joss_orchestrator/roadmap/compiler.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "6045237f1c7f75ddddc5588a8340b42c598e86fa3042d92f6e4e4886dd1d0905",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/roadmap/models.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "d730f1d6cbea328e475cc8dff796ad42addb2d93dca7de6c4f9ed32f65d35cdf",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/roadmap/store.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "587881db64770d4e58fc5c15320983d8cb91750d136d8fc2474a5c72466cb47c",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/roadmap/templates.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "f17e9902533f7ed9b2ca646d59d000de72ab3c78e89fc16f09f92e884e6163a0",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/roadmap/validator.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "3c2ca33ed20d1b0991d6e98b7d6143d702c11a888db04f8ae851f7265599f5a1",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "b1ab8c3a75f889d78c94a47aa01f31c76e897935b8cb69a9656ae04cc6f373b0",
+      "classification": "generic-package-init"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/autopilot.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "56b7af2b17f6f2ce4d5b107ff128881696b8ccae7a40ae12480fa587e1b8eff6",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/budgets.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "545b3b28bfd3746ace8d4834be989cbac78fcceb6fdbcd096c55ee6966f781ce",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/clarification_broker.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "1e40b861b454b1b8a6208225ffa1144bc8d5a6b1b55cbaf9112e531ebeb8e109",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/complexity.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "530e83351360467a7e51e4889a977e6f4f095e25c8cb4e64ed9d345cd7d04414",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/context_broker.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "c599f8e11310bd2ae751bd15ad77019d6c2536735df9c9f5af289f317b497d68",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/convergence.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "7d28be8602e6aa76722801d5ee20424b8c7d2f92d4eb363e5e09278534451940",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/critic.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "3043c92b73d45e03f3c73c32e1380c7508e1b3bb4cded880cd16e5c5e56182a7",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/drift.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "67985bda8a1745bf233f9e66588276e0afc8dd8d905498fd898ec94529dedcbe",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/engine.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "476aa2bfee1ffd19a3ab5c6c2b6586169cc6efb177f1cb8fc8a5179632dcb4e0",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/goal_loop.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "6148f607c4a15e05e94fe649c1579f6bfae8754d05a0c747d71dd916580e23b3",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/low_risk_policy.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "0a488c3fbe227359de5bf98791a5f2ff8645cdd1d632d8ad787341f0de0f2cc7",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/progress.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "1933e054308b66de76783c8f1d12e983aa2153dba5bdb1bd3b059b6fc826ddd5",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/queue.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "94a06660f95d3def548b82d2aa51b2950c86ed8b730c22cbd9c0584836394916",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/reconciler.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "de3dc5401f3b5d6d628bccb471f73e73edaced7492ec21f58bca2af542aad24d",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/schedule.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "a45406b8f1f10dd2f098ccd3cd52a6a63fcc0d03af82fa3d50cde5b6ec199973",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/runtime/transitions.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "ea53d2f46c5c21c0d8cfe2c47837ced3a303725fa6648a7fc90ab6e404bfec5c",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/skills/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "3ee7df8d36e95f7d26b9242325f03c45fcd925b97fa6c83b6d3f4cdba6ae788d",
+      "classification": "generic-package-init"
+    },
+    {
+      "source_path": "src/joss_orchestrator/storage/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "6e5211b28ecf47548b014c217335b49ba3fe02065f27385b2de838afa1ae1d9e",
+      "classification": "generic-infrastructure"
+    },
+    {
+      "source_path": "src/joss_orchestrator/storage/artifacts.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "4ccc8fbdcb9ada97789baec8169c5acaa8b2444a5fa0f63fa5b79af5a95a1e4f",
+      "classification": "generic-infrastructure"
+    },
+    {
+      "source_path": "src/joss_orchestrator/storage/atomic.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "5dde1fe32f0fc52b48bdda198f0394fa73e3bf5f548fe2e250fd320a1025c40e",
+      "classification": "generic-infrastructure"
+    },
+    {
+      "source_path": "src/joss_orchestrator/storage/memory.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "5f6511005c1b7add0fd15ce4b360eaf5b45fd28cbb42346bce730c4ab0cfcd6d",
+      "classification": "generic-infrastructure"
+    },
+    {
+      "source_path": "src/joss_orchestrator/storage/sqlite_store.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "4b07f6269cb4ab422052ce5da46ed98b0cad064e0f6ea1c35ad88885eb0a3ed1",
+      "classification": "generic-infrastructure"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "edc90a86ae1913a6811a56b6e47ad8af5529e2cbc1cb70223ce5e94349595f56",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/autonomy.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "fb6a415e156292d204553a19eab601bf2f79ad11e444696b3f56d0369ccba3fa",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/benchmark.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "f772b2bcaa263d09499a8cad6f3c0dffc1fc21510512fb64b78a3b16981ecc11",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/budget_guard.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "db0bfe54b4486c1a9625e810dac053c4ca9d2f919924a3a7b7d85a888cb43dff",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/cli.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "101b4a1d8ba16f78184ffe5e2594008cdbee8b1a6ddc1d8fa91375d89281e725",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/context_router.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "219eef565e20b56074d8d5cdbd56fd674b29b5cda769ff593aa378ddc8c67314",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/control_plane.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "7bc18d1160da68e20ad22409624265461d33e190a242bd24d0762b88c0304172",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/deploy_controller.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "d618caeb6221245072cb43dbdfb8ee8eec38b94c6dc52bbae62063340fdbb94a",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/fixtures.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "2cf8cd81034622708130d42cc1889592828bedaf663a7e425c966e7a679d46f6",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/gate_ledger.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "4f3725989f53c544f99b1a658c5509b3332c192a8bbaaedefb59e3d4d910efaf",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/genesis.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "e87a553df7eba560e3a672ea993b8e73a3c461abe70684d11e7e058e5d62ca56",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/gh_discovery.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "d5c4635c33581ae814d9e69e804ba75302baeb761e8c309cfad6cf72a6a3d6b0",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/governance.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "9b6e8e984243c45056549093806411815297d5b47d23f63e5388d165fb63786d",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/learning.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "b92ed831917f0153b5d914dc932746d421318ce3c0fe4f1ee03e5799e94ed336",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/objective.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "83c604723aa2f054ac81c2011cabdb0a543068f9d6c630d12497033d9ca5a25d",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/pr_gates.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "f345e575dec237ad826078a5b0af6e85f62f2a9bff35fd85620d9d740020d3b4",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/preflight.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "df2261752ab15ab417a553f2360fc49c6ec9512f03aa761cc4c5fdf4bdd90639",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/profiles.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "6b72e9354d4057b69641eb529a836576d70560d8b8156157cf276af191307b7b",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/resume.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "e38b6376337c2da0e0a2dc77c3c1a44aa7bb3191fbcf5e7b7d191d25cadb28ea",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/review.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "9316aa77b384506a0e7a6faac58b40681ec3320b801e095bba95cffd170c123f",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/roadmap.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "a7e49b0cacd281539b465755e9719f1ecd551c4c496cd8ef3d088ca7e6765b06",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/state.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "ea781744db8253bfeafe7d6baf17ed0ba328467959adec95c83166d81e5cdd7c",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/telemetry.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "c86cae9046a45cc0b4ed41f7d613c8c7c06fd59038819f4ca8c81beaba206456",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v2/test_selection.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "91abb2af6606f57e5d07ef93c1a3678a0c6cbde738413c04aafe0319d9dcad24",
+      "classification": "generic-v2-governance"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v3/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "49abed0e7ed80ef926333f760151a35ac81bbfcac572912ca1c171a6623c89a2",
+      "classification": "generic-package-init"
+    },
+    {
+      "source_path": "src/joss_orchestrator/v3/rename_events.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "44bad1b82760d8811e5d7aea3acb63fc795ee70c8dbb51ef9f06f5413b47b8d7",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/validation/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "c49452fc5e303529b8c37410262d0ac62353c34f334294ba75211970646bae21",
+      "classification": "generic-package-init"
+    },
+    {
+      "source_path": "src/joss_orchestrator/validation/evidence.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "621185c2d5dbf5698a095812185f53859ecb8b02b38027e25e1355654406b027",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/validation/executor.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "456166ba1e41c6f41470080ce078d88b853473a5d1db7073b141791f3dce9ced",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/validation/profiles.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "c51cf7e6519f23daf63ffd3d15e0341aaf483ed18d22b4d271339ec496c55e3b",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/workspace/__init__.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "6a5c21a1684fdb2b003d0e4425acb6d7142c58e6ae6587e1971ef10b2b24c0ba",
+      "classification": "generic-package-init"
+    },
+    {
+      "source_path": "src/joss_orchestrator/workspace/git.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "300a2f6e8a5cdbf5be1be357f854d50b68d616003a2b9f68f1a99be62392ddfe",
+      "classification": "generic-other"
+    },
+    {
+      "source_path": "src/joss_orchestrator/workspace/worktree.py",
+      "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+      "source_repo": "git@github.com:josslignio/weekly-trading-radar.git",
+      "source_content_sha256": "456a468ce3eaa4e83b4bd4141a7bd08a04ca594142437ff3d6ad6e10d926bad6",
+      "classification": "generic-other"
+    }
+  ]
+}

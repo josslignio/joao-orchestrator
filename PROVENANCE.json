@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "product": "JO\u00c3O.AI",
+  "generated_at": "2026-07-15T17:22:40Z",
+  "repository": "josslignio/joao-orchestrator",
+  "visibility": "PRIVATE",
+  "origin": {
+    "source_repository": "git@github.com:josslignio/weekly-trading-radar.git",
+    "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+    "source_ref": "autopilot/joao/corrective-foundation",
+    "option": "C \u2014 new repository with selected history import and PROVENANCE.json"
+  },
+  "canonical_package": "joao_orchestrator",
+  "compat_shim_package": "joss_orchestrator",
+  "canonical_cli": "joao",
+  "legacy_cli_aliases": [
+    "joss",
+    "joss_v2"
+  ],
+  "import_policy": "source history NOT rewritten; source repo NOT deleted",
+  "files_imported": 131
+}
