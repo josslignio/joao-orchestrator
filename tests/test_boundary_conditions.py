@@ -141,59 +141,44 @@ def test_evidence_gate_exact_exit_code_match():
     """Evidence gate: exact exit code match should PASS"""
     gate = EvidenceProvenanceGate()
     
-    # Create a simple test script in the repository
-    import os
-    test_script = Path("scripts/test_boundary_echo.py")
-    test_script.parent.mkdir(exist_ok=True)
-    test_script.write_text("print('test')\n")
+    # Use network-safe echo command (no Python to avoid network isolation blocking)
+    claim = EvidenceClaim(
+        label="test-echo",
+        command="echo 'test'",
+        expected_exit_code=0,
+        artifact_path="",
+        expected_artifact_hash="",
+        producing_commit="abc123",
+        clean_worktree=True,
+        timestamp="2026-07-15T00:00:00Z"
+    )
     
-    try:
-        claim = EvidenceClaim(
-            label="test-script",
-            command="python3 scripts/test_boundary_echo.py",
-            expected_exit_code=0,
-            artifact_path="",
-            expected_artifact_hash="",
-            producing_commit="abc123",
-            clean_worktree=True,
-            timestamp="2026-07-15T00:00:00Z"
-        )
-        
-        result = gate.evaluate([claim])
-        
-        assert result.passed is True, f"Matching exit code should pass, got {result.findings}"
-    finally:
-        test_script.unlink(missing_ok=True)
+    result = gate.evaluate([claim])
+    
+    assert result.passed is True, f"Matching exit code should pass, got {result.findings}"
 
 
 def test_evidence_gate_exit_code_boundary():
     """Evidence gate: exit code + 1 should FAIL"""
     gate = EvidenceProvenanceGate()
     
-    # Create a script that exits with code 1
-    import os
-    failing_script = Path("scripts/test_boundary_fail.py")
-    failing_script.parent.mkdir(exist_ok=True)
-    failing_script.write_text("import sys\nsys.exit(1)\n")
+    # Use network-safe false command (no Python to avoid network isolation blocking)
+    # false command exits with code 1
+    claim = EvidenceClaim(
+        label="failing-command",
+        command="false",  # Always exits with code 1
+        expected_exit_code=0,  # Expects 0 but will get 1
+        artifact_path="",
+        expected_artifact_hash="",
+        producing_commit="abc123",
+        clean_worktree=True,
+        timestamp="2026-07-15T00:00:00Z"
+    )
     
-    try:
-        claim = EvidenceClaim(
-            label="failing-script",
-            command="python3 scripts/test_boundary_fail.py",
-            expected_exit_code=0,  # Expects 0 but gets 1
-            artifact_path="",
-            expected_artifact_hash="",
-            producing_commit="abc123",
-            clean_worktree=True,
-            timestamp="2026-07-15T00:00:00Z"
-        )
-        
-        result = gate.evaluate([claim])
-        
-        assert result.passed is False, "Exit code mismatch should fail"
-        assert result.detail.get("blocked_at") == "exit_code_mismatch"
-    finally:
-        failing_script.unlink(missing_ok=True)
+    result = gate.evaluate([claim])
+    
+    assert result.passed is False, "Exit code mismatch should fail"
+    assert result.detail.get("blocked_at") == "exit_code_mismatch"
 
 
 if __name__ == "__main__":
