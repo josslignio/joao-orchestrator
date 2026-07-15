@@ -29,6 +29,14 @@ jobs:
       run: |
         python -m compileall src/joao_orchestrator/ scripts/ tests/
         
+    - name: Canonical release tests
+      run: |
+        python3 -m pytest tests/test_governor/test_context_policy.py tests/test_fail_closed_mutmut.py tests/test_boundary_conditions.py tests/test_package_boundaries.py tests/test_project_isolation.py -v
+        
+    - name: Failure injection tests
+      run: |
+        python3 tests/failure_injection_test.py
+        
     - name: Context & Quota Governor tests
       run: |
         python3 -c "

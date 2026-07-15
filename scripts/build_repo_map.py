@@ -122,6 +122,7 @@ def determine_owner_product(root_dir: Path, modules: List[Dict]) -> Dict[str, st
     # Check for common indicators
     setup_files = ['pyproject.toml', 'setup.py', 'setup.cfg']
     project_name = "unknown"
+    owner = "unknown"
     
     for setup_file in setup_files:
         setup_path = root_dir / setup_file
@@ -132,12 +133,30 @@ def determine_owner_product(root_dir: Path, modules: List[Dict]) -> Dict[str, st
                     with open(setup_path, 'rb') as f:
                         data = tomllib.load(f)
                         project_name = data.get('project', {}).get('name', 'unknown')
+                        # Try to derive owner from project metadata
+                        owner = data.get('tool', {}).get('poetry', {}).get('authors', ["unknown"])[0] if data.get('tool', {}).get('poetry') else "unknown"
                 break
             except:
                 pass
     
+    # Try git remote to determine owner as fallback
+    if owner == "unknown":
+        try:
+            import subprocess
+            result = subprocess.run(['git', 'config', '--get', 'remote.origin.url'], 
+                                  capture_output=True, text=True, cwd=root_dir)
+            if result.returncode == 0 and result.stdout:
+                # Extract owner from git URL (e.g., git@github.com:owner/repo.git)
+                git_url = result.stdout.strip()
+                if 'github.com' in git_url or 'git@github.com' in git_url:
+                    parts = git_url.split('/')[-1].replace('.git', '')
+                    owner_part = git_url.split('/')[-2].split(':')[-1] if ':' in git_url else git_url.split('/')[-2]
+                    owner = owner_part
+        except:
+            pass
+    
     return {
-        "owner": "josslignio",
+        "owner": owner,
         "product": project_name,
         "determination_method": "static_analysis"
     }
