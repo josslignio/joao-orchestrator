@@ -453,9 +453,14 @@ class EvidenceProvenanceGate:
             # Non-code templates (true/false/echo/shasum) are safe to run.
             if tokens[0] in ("python3", "python") \
                     and self.NETWORK_ISOLATION_STATUS == "NETWORK_NOT_PROVEN":
-                # We still RUN the command (the evidence must reproduce), but the
-                # network-isolation status is recorded honestly in the result.
-                pass
+                # FAIL-CLOSED: Python evidence without network isolation immediately blocks
+                return GateResult(
+                    gate="EvidenceProvenanceGate", passed=False,
+                    findings=[f"{tag} python evidence without network isolation blocked"],
+                    detail={
+                        "claims_checked": 0,
+                        "blocked_at": "network_isolation_required",
+                        "blocker_claim": c.label})
             # C2.2: isolated empty temp HOME + stripped env
             with tempfile.TemporaryDirectory(prefix="c22_exec_") as tmp_home:
                 env = self._build_isolated_env(Path(tmp_home))
