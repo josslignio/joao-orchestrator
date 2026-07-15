@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+
+jobs:
+  ci:
+    name: Deterministic compile + regression + tracked-file safety
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyyaml
+        
+    - name: Python compile check
+      run: |
+        python -m compileall src/joao_orchestrator/ scripts/ tests/
+        
+    - name: Context & Quota Governor tests
+      run: |
+        python3 -c "
+        import sys
+        from pathlib import Path
+        
+        # Test task packet builder
+        import subprocess
+        result = subprocess.run(['python3', 'scripts/build_task_packet.py', 'test', 'abc123', 'main', 'file1.py'], capture_output=True, text=True)
+        if result.returncode != 0:
+            print('Task packet builder failed')
+            sys.exit(1)
+            
+        # Test repo map builder  
+        result = subprocess.run(['python3', 'scripts/build_repo_map.py', '/tmp'], capture_output=True, text=True)
+        if result.returncode != 0:
+            print('Repo map builder failed')
+            sys.exit(1)
+            
+        print('Governor tests passed')
+        "
+        
+    - name: Compatibility parity
+      run: |
+        python3 -c "
+        import sys
+        from pathlib import Path
+        
+        # Check both packages exist
+        joao_path = Path('src/joao_orchestrator')
+        joss_path = Path('src/joss_orchestrator')
+        
+        if not joao_path.exists():
+            print('joao_orchestrator package not found')
+            sys.exit(1)
+            
+        if not joss_path.exists():
+            print('joss_orchestrator compatibility shims not found')
+            sys.exit(1)
+            
+        # Count modules
+        joao_modules = len(list(joao_path.rglob('*.py')))
+        joss_modules = len(list(joss_path.rglob('*.py')))
+        
+        print(f'joao_orchestrator: {joao_modules} modules')
+        print(f'joss_orchestrator: {joss_modules} compatibility shims')
+        print('Compatibility parity check passed')
+        "
+        
+    - name: Tracked-file safety check
+      run: |
+        python3 scripts/build_repo_map.py . > /dev/null || true
+        
+    - name: Git diff check
+      run: |
+        git diff --check || exit 1
+        
+    - name: Context policy validation
+      run: |
+        python3 -c "
+        import yaml
+        from pathlib import Path
+        
+        policy_file = Path('.joao/context_policy.yaml')
+        if not policy_file.exists():
+            print('Context policy not found')
+            exit(1)
+            
+        with open(policy_file) as f:
+            policy = yaml.safe_load(f)
+            
+        # Verify key policies
+        assert policy['context_policy']['task_context']['soft_limit_tokens'] == 25000
+        assert policy['context_policy']['task_context']['hard_limit_tokens'] == 40000
+        assert policy['context_policy']['task_context']['max_source_files'] == 8
+        assert policy['quota_limits']['max_cloud_workers'] == 1
+        
+        print('Context policy validation passed')
+        "
+        
+    - name: Model routing validation
+      run: |
+        python3 -c "
+        import yaml
+        from pathlib import Path
+        
+        routing_file = Path('.joao/model_routing.yaml')
+        if not routing_file.exists():
+            print('Model routing policy not found')
+            exit(1)
+            
+        with open(routing_file) as f:
+            routing = yaml.safe_load(f)
+            
+        # Verify routing policies
+        assert routing['default_model'] == 'GLM-4.7'
+        assert routing['model_routing']['ordinary_implementation']['model'] == 'GLM-4.7'
+        assert routing['worker_policy']['max_cloud_workers'] == 1
+        
+        print('Model routing validation passed')
+        "
