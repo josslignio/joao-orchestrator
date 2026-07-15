@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-07-15T20:10:00Z",
+  "repository": "josslignio/joao-orchestrator (local; push pending gh auth)",
+  "source_repository": "git@github.com:josslignio/weekly-trading-radar.git",
+  "source_commit": "c8d8390c8f76b51578471dd9cc1b17520ccd2e46",
+  "option": "C \u2014 selected history import + PROVENANCE.json",
+  "canonical_package": "joao_orchestrator",
+  "compat_shim": "joss_orchestrator",
+  "canonical_cli": "joao",
+  "legacy_aliases": [
+    "joss",
+    "joss_v2"
+  ],
+  "files_imported": 131,
+  "shim_files": 131,
+  "parity_tests_run": 8,
+  "parity_tests_passed": 8,
+  "parity_result": "PASS",
+  "shim_has_business_logic": false,
+  "source_rewritten": false,
+  "source_deleted": false,
+  "main_merged": false
+}
