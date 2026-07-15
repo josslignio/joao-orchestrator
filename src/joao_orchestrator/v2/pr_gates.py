@@ -104,25 +104,36 @@ class PRBudgetGate:
 
     def evaluate(self, files: Sequence[ChangedFile],
                  declared_concerns: Sequence[str]) -> GateResult:
-        findings: list[str] = []
         non_gen_lines = sum(f.non_generated_lines for f in files)
         behavioral_files = [f for f in files if not f.is_generated]
 
         if non_gen_lines > self.config.max_non_generated_changed_lines:
-            findings.append(
-                f"non-generated changed lines {non_gen_lines} > max "
-                f"{self.config.max_non_generated_changed_lines}")
+            # FAIL-CLOSED: budget violation immediately blocks the mission
+            return GateResult(
+                gate="PRBudgetGate", passed=False,
+                findings=[f"non-generated changed lines {non_gen_lines} > max {self.config.max_non_generated_changed_lines}"],
+                detail={"blocked_at": "budget_lines", "non_generated_changed_lines": non_gen_lines,
+                        "behavioral_files": len(behavioral_files),
+                        "declared_concerns": len(declared_concerns)})
         if len(behavioral_files) > self.config.max_behavioral_files:
-            findings.append(
-                f"behavioral files {len(behavioral_files)} > max "
-                f"{self.config.max_behavioral_files}")
+            # FAIL-CLOSED: too many behavioral files immediately blocks the mission
+            return GateResult(
+                gate="PRBudgetGate", passed=False,
+                findings=[f"behavioral files {len(behavioral_files)} > max {self.config.max_behavioral_files}"],
+                detail={"blocked_at": "budget_files", "non_generated_changed_lines": non_gen_lines,
+                        "behavioral_files": len(behavioral_files),
+                        "declared_concerns": len(declared_concerns)})
         if len(declared_concerns) != self.config.required_concerns:
-            findings.append(
-                f"declared concerns {len(declared_concerns)} != required "
-                f"{self.config.required_concerns}")
+            # FAIL-CLOSED: wrong concern count immediately blocks the mission
+            return GateResult(
+                gate="PRBudgetGate", passed=False,
+                findings=[f"declared concerns {len(declared_concerns)} != required {self.config.required_concerns}"],
+                detail={"blocked_at": "concerns_count", "non_generated_changed_lines": non_gen_lines,
+                        "behavioral_files": len(behavioral_files),
+                        "declared_concerns": len(declared_concerns)})
 
         return GateResult(
-            gate="PRBudgetGate", passed=not findings, findings=findings,
+            gate="PRBudgetGate", passed=True, findings=[],
             detail={"non_generated_changed_lines": non_gen_lines,
                     "behavioral_files": len(behavioral_files),
                     "declared_concerns": len(declared_concerns)})
@@ -147,7 +158,6 @@ class ScopeGate:
 
     def evaluate(self, files: Sequence[ChangedFile],
                  contract: ScopeContract) -> GateResult:
-        findings: list[str] = []
         undeclared: list[str] = []
         forbidden_hit: list[str] = []
 
@@ -155,7 +165,11 @@ class ScopeGate:
             # forbidden check applies to ALL files (even generated)
             if any(f.path.startswith(p) for p in contract.forbidden_paths):
                 forbidden_hit.append(f.path)
-                continue
+                # FAIL-CLOSED: forbidden path hit immediately blocks the mission
+                return GateResult(
+                    gate="ScopeGate", passed=False,
+                    findings=[f"forbidden path touched: {f.path}"],
+                    detail={"blocked_at": "forbidden_path", "blocker_file": f.path})
             if f.is_generated:
                 # generated files must be declared in generated_paths to be excluded
                 if f.path not in contract.generated_paths \
@@ -166,13 +180,15 @@ class ScopeGate:
             if not any(f.path.startswith(p) for p in contract.allowed_paths):
                 undeclared.append(f.path)
 
-        if forbidden_hit:
-            findings.append(f"forbidden paths touched: {forbidden_hit}")
         if undeclared:
-            findings.append(f"undeclared behavioral/generated paths: {undeclared}")
+            # FAIL-CLOSED: undeclared paths immediately block the mission
+            return GateResult(
+                gate="ScopeGate", passed=False,
+                findings=[f"undeclared behavioral/generated paths: {undeclared}"],
+                detail={"blocked_at": "undeclared_paths", "undeclared": undeclared})
 
         return GateResult(
-            gate="ScopeGate", passed=not findings, findings=findings,
+            gate="ScopeGate", passed=True, findings=[],
             detail={"forbidden_hit": forbidden_hit, "undeclared": undeclared})
 
 
@@ -406,19 +422,31 @@ class EvidenceProvenanceGate:
 
     def evaluate(self, claims: Sequence[EvidenceClaim]) -> GateResult:
         import tempfile
-        findings: list[str] = []
+        findings: list[str] = []  # Used for accumulating findings in this gate
         for c in claims:
             tag = f"[{c.label}]"
             errs = c.validate_shape()
             if errs:
                 findings.append(f"{tag} malformed claim: {errs}")
-                continue
+                # FAIL-CLOSED: malformed claim immediately blocks the mission
+                return GateResult(
+                    gate="EvidenceProvenanceGate", passed=False,
+                    findings=findings, detail={
+                        "claims_checked": 0,
+                        "blocked_at": "claim_validation",
+                        "blocker_claim": c.label})
             # C2.2: fixed-template match (replaces bare allowlist)
             tokens = c.command.split()
             matched, why, script_path = self._match_template(tokens)
             if not matched:
                 findings.append(f"{tag} command rejected: {why}")
-                continue
+                # FAIL-CLOSED: command rejection immediately blocks the mission
+                return GateResult(
+                    gate="EvidenceProvenanceGate", passed=False,
+                    findings=findings, detail={
+                        "claims_checked": 0,
+                        "blocked_at": "command_template_match",
+                        "blocker_claim": c.label})
             # NETWORK_NOT_PROVEN: fail closed for general-purpose-code templates
             # (python3/python can execute arbitrary code; without proven network
             # isolation we cannot claim evidence commands are network-free).
@@ -435,33 +463,71 @@ class EvidenceProvenanceGate:
                     rc, out, err = self._runner(tokens, self._root, env,
                                                 self._timeout)
                 except subprocess.TimeoutExpired:
-                    findings.append(f"{tag} command timed out (>{self._timeout}s)")
-                    continue
+                    # FAIL-CLOSED: timeout immediately blocks the mission
+                    return GateResult(
+                        gate="EvidenceProvenanceGate", passed=False,
+                        findings=[f"{tag} command timed out (>{self._timeout}s)"],
+                        detail={
+                            "claims_checked": 0,
+                            "blocked_at": "execution_timeout",
+                            "blocker_claim": c.label})
                 except Exception as e:  # noqa: BLE001
-                    findings.append(f"{tag} command failed to run: {e!r}")
-                    continue
+                    # FAIL-CLOSED: any exception immediately blocks the mission
+                    return GateResult(
+                        gate="EvidenceProvenanceGate", passed=False,
+                        findings=[f"{tag} command failed to run: {e!r}"],
+                        detail={
+                            "claims_checked": 0,
+                            "blocked_at": "execution_exception",
+                            "blocker_claim": c.label})
             if rc != c.expected_exit_code:
-                findings.append(
-                    f"{tag} exit code {rc} != expected {c.expected_exit_code}")
-                continue
+                # FAIL-CLOSED: unexpected exit code immediately blocks the mission
+                return GateResult(
+                    gate="EvidenceProvenanceGate", passed=False,
+                    findings=[f"{tag} exit code {rc} != expected {c.expected_exit_code}"],
+                    detail={
+                        "claims_checked": 1,
+                        "blocked_at": "exit_code_mismatch",
+                        "blocker_claim": c.label})
             if c.expected_artifact_hash:
                 resolved = self._confine_artifact(c.artifact_path)
                 if resolved is None:
-                    findings.append(
-                        f"{tag} artifact path escapes authorized roots: "
-                        f"{c.artifact_path}")
-                    continue
+                    # FAIL-CLOSED: unauthorized artifact path immediately blocks
+                    return GateResult(
+                        gate="EvidenceProvenanceGate", passed=False,
+                        findings=[f"{tag} artifact path escapes authorized roots: {c.artifact_path}"],
+                        detail={
+                            "claims_checked": 1,
+                            "blocked_at": "artifact_path_confine",
+                            "blocker_claim": c.label})
                 if not resolved.exists():
-                    findings.append(f"{tag} artifact missing: {resolved}")
-                    continue
+                    # FAIL-CLOSED: missing artifact immediately blocks the mission
+                    return GateResult(
+                        gate="EvidenceProvenanceGate", passed=False,
+                        findings=[f"{tag} artifact missing: {resolved}"],
+                        detail={
+                            "claims_checked": 1,
+                            "blocked_at": "artifact_missing",
+                            "blocker_claim": c.label})
                 actual = _sha256_file(resolved)
                 if actual != c.expected_artifact_hash:
-                    findings.append(
-                        f"{tag} artifact hash mismatch: {actual[:12]} != "
-                        f"{c.expected_artifact_hash[:12]}")
-                    continue
+                    # FAIL-CLOSED: hash mismatch immediately blocks the mission
+                    return GateResult(
+                        gate="EvidenceProvenanceGate", passed=False,
+                        findings=[f"{tag} artifact hash mismatch: {actual[:12]} != {c.expected_artifact_hash[:12]}"],
+                        detail={
+                            "claims_checked": 1,
+                            "blocked_at": "artifact_hash_mismatch",
+                            "blocker_claim": c.label})
             if not c.clean_worktree:
-                findings.append(f"{tag} clean_worktree=False; evidence invalid")
+                # FAIL-CLOSED: unclean worktree immediately blocks the mission
+                return GateResult(
+                    gate="EvidenceProvenanceGate", passed=False,
+                    findings=[f"{tag} clean_worktree=False; evidence invalid"],
+                    detail={
+                        "claims_checked": 1,
+                        "blocked_at": "clean_worktree_check",
+                        "blocker_claim": c.label})
         return GateResult(
             gate="EvidenceProvenanceGate", passed=not findings,
             findings=findings, detail={"claims_checked": len(claims)})
