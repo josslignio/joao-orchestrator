@@ -1,0 +1,73 @@
+# JOÃO.AI Model Routing Policy V1
+# GLM-4.7 first routing with bounded escalation paths
+
+default_model: "GLM-4.7"
+
+model_routing:
+  # Read-only exploration tasks
+  read_only_exploration:
+    primary: "local_model"
+    fallback: "GLM-4.7"
+    use_when: "path discovery, file reading, state verification"
+    
+  # Ordinary implementation work
+  ordinary_implementation:
+    model: "GLM-4.7"
+    use_when: "implementation, tests, documentation, refactors"
+    
+  # Architecture and security decisions
+  architecture_security:
+    escalation_requirement: "2 failures with GLM-4.7"
+    target_model: "GLM-5.2 High"
+    use_when: "security-sensitive architecture, cross-repo operations"
+    
+  # Critical incidents only
+  critical_incident:
+    model: "GLM-5.2 Max"
+    use_when: "critical incident only"
+    
+  # Independent review
+  independent_review:
+    model: "Codex"
+    context: "contract + diff + direct dependencies only"
+    use_when: "independent code review"
+    
+  # Manual escalation
+  claude_manual:
+    model: "Claude"
+    use_when: "manual escalation only"
+
+worker_policy:
+  max_cloud_workers: 1
+  no_parallel_cloud_subagents: true
+  
+  # Single worker enforcement
+  worker_coordination: "sequential"
+  
+escalation_policy:
+  # Model switching requirements
+  automatic_switch: "when_runtime_exposes_control"
+  manual_switch: "otherwise"
+  
+  # Escalation prerequisites
+  requires_exact_blocker_packet: true
+  requires_two_cheap_failures: true
+  
+quota_aware_routing:
+  # Prefer cheapest model that can do the job
+  cost_optimization: true
+  local_model_preferred: true
+  
+  # Quality vs cost balance
+  quality_first: false
+  acceptable_quality: "GLM-4.7"
+  
+runtime_limitations:
+  # ZCode runtime capabilities
+  can_auto_switch_conversation_model: false
+  can_spawn_parallel_workers: true
+  can_use_local_models: "when_configured"
+  
+  # Policy enforcement
+  respect_runtime_limits: true
+  do_not_claim_capabilities: true

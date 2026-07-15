@@ -1,0 +1,53 @@
+# JOÃO.AI Context & Quota Governor V1
+# Enforces bounded context and minimal quota usage
+
+context_policy:
+  resume_entry_point: "RUN_STATE.json"
+  
+  # Exclude historical full reports by default
+  default_exclusions:
+    - "**/FULL_*_REPORT.md"
+    - "**/*LONG_REPORT*.md"
+    - "**/*DETAILED_REPORT*.md"
+    - "**/program/joao/master-run/*.md"
+    
+  # Fresh bounded context per atomic task
+  task_context:
+    soft_limit_tokens: 25000
+    hard_limit_tokens: 40000
+    max_source_files: 8
+    max_repair_loops: 2
+    
+  # Prevent repeated full repository reads
+  read_policy:
+    allow_full_repo_reread: false
+    bounded_resume_verification_only: true
+    path_discovery_preferred: true
+    
+  # Deterministic tool usage
+  local_tools:
+    - path_discovery
+    - git_state
+    - hash_verification
+    - test_execution
+    - pr_metadata
+    - deterministic_repo_maps
+
+quota_limits:
+  # Stop conditions
+  weekly_quota_threshold: 15
+  
+  # Worker limits
+  max_cloud_workers: 1
+  no_parallel_cloud_subagents: true
+  
+  # Checkpoint behavior
+  on_quota_threshold: "SAFE_STOP_AND_CHECKPOINT"
+
+task_packet_limits:
+  max_files: 8
+  max_tokens_soft: 25000
+  max_tokens_hard: 40000
+  max_repair_loops: 2
+  resume_from_files_only: true
+  no_chat_history_reload: true
