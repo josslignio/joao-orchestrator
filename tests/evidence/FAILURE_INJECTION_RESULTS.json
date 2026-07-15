@@ -1,0 +1,74 @@
+[
+  {
+    "scenario": "provider_timeout_mid_task",
+    "injected_fault": "Model provider timeout during request",
+    "expected": "Current atomic state checkpointed, bounded retry policy, clean resumable state",
+    "observed": "State checkpointed successfully, no duplicate work risk",
+    "state_before": "task_in_progress_checkpoint_pending",
+    "state_after": "checkpoint_saved_task_resumable",
+    "checkpoint_evidence": "Checkpoint contains valid progress state",
+    "recovery_evidence": "Task can resume from 50% progress",
+    "result": "PASS",
+    "severity": "P1"
+  },
+  {
+    "scenario": "malformed_model_output",
+    "injected_fault": "Invalid JSON, missing required fields",
+    "expected": "Validation rejects output, bounded retry, no corrupted state",
+    "observed": "Validation rejected malformed JSON",
+    "state_before": "awaiting_model_response",
+    "state_after": "state_clean_rollback_to_last_valid",
+    "checkpoint_evidence": "No checkpoint written for malformed output",
+    "recovery_evidence": "Safe retry triggered",
+    "result": "PASS",
+    "severity": "P0"
+  },
+  {
+    "scenario": "gate_script_crash",
+    "injected_fault": "Gate execution failure",
+    "expected": "FAIL CLOSED - mission must block",
+    "observed": "FAIL_CLOSED - mission blocked",
+    "state_before": "gate_execution_started",
+    "state_after": "mission_blocked_no_execution",
+    "checkpoint_evidence": "No unsafe state recorded",
+    "recovery_evidence": "Safe stop - no execution allowed",
+    "result": "PASS",
+    "severity": "P0"
+  },
+  {
+    "scenario": "context_budget_exceeded",
+    "injected_fault": "Context limit hit during operation (39k tokens)",
+    "expected": "Compact according to policy, preserve mandatory invariants, continue when below hard limit",
+    "observed": "Soft limit exceeded - compaction triggered",
+    "state_before": "context_at_39k_tokens",
+    "state_after": "compacted_to_35k_tokens_continue",
+    "checkpoint_evidence": "Compaction checkpoint created",
+    "recovery_evidence": "Task continues with compacted context",
+    "result": "PASS",
+    "severity": "P1"
+  },
+  {
+    "scenario": "process_killed_during_write",
+    "injected_fault": "Sudden process termination during state write",
+    "expected": "Atomic write prevents partial committed state, corruption detected, recovery from last-valid state or journal",
+    "observed": "Atomic write protection verified, clean deterministic recovery",
+    "state_before": "run_state_write_in_progress",
+    "state_after": "atomic_write_prevents_partial_commit",
+    "checkpoint_evidence": "Atomic write pattern prevents corruption",
+    "recovery_evidence": "Recovery from last valid state",
+    "result": "PASS",
+    "severity": "P1"
+  },
+  {
+    "scenario": "subagent_garbage",
+    "injected_fault": "Invalid subagent output format",
+    "expected": "Schema/evidence validation catches result, no approval or promotion, bounded repair or safe stop",
+    "observed": "Schema validation caught invalid response",
+    "state_before": "subagent_response_expected",
+    "state_after": "no_state_pollution_safe_stop",
+    "checkpoint_evidence": "Invalid response rejected, no checkpoint written",
+    "recovery_evidence": "Safe stop with error code",
+    "result": "PASS",
+    "severity": "P0"
+  }
+]
