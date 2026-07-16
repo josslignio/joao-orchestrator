@@ -86,7 +86,22 @@ class FrozenContractGuard:
         if not frozen_contract:
             raise ValueError("Frozen contract cannot be empty or None")
 
-        self._frozen = dict(frozen_contract)  # Defensive copy
+        if not isinstance(frozen_contract, dict):
+            raise ValueError("Frozen contract must be a dictionary")
+
+        frozen = dict(frozen_contract)  # Defensive copy
+
+        # Validate frozen contract structure
+        if "governor_steps" in frozen and not isinstance(frozen.get("governor_steps"), dict):
+            raise ValueError("Frozen contract governor_steps must be a dictionary")
+        if "stage_a" in frozen and not isinstance(frozen.get("stage_a"), dict):
+            raise ValueError("Frozen contract stage_a must be a dictionary")
+        if "global_invariants" in frozen and not isinstance(frozen.get("global_invariants"), dict):
+            raise ValueError("Frozen contract global_invariants must be a dictionary")
+        if "diff_policy" in frozen and not isinstance(frozen.get("diff_policy"), dict):
+            raise ValueError("Frozen contract diff_policy must be a dictionary")
+
+        self._frozen = frozen
         self._frozen_ids = self._extract_requirement_ids(self._frozen)
 
     def _extract_requirement_ids(self, contract: Mapping[str, Any]) -> set[str]:
@@ -132,6 +147,54 @@ class FrozenContractGuard:
 
         wildcards = {"*", "?", "[", "]"}
         return any(char in path_pattern for char in wildcards)
+
+    def _safe_to_string_set(self, data: Any) -> tuple[set[str], list[str]]:
+        """
+        Safely convert data to a set of strings.
+
+        Returns:
+            Tuple of (valid_string_set, list_of_errors encountered)
+        """
+        if not isinstance(data, list):
+            return set(), ["Field is not a list"]
+
+        result = set()
+        errors = []
+        for i, item in enumerate(data):
+            if isinstance(item, str):
+                result.add(item)
+            else:
+                errors.append(f"Item {i} is not a string (type: {type(item).__name__})")
+
+        return result, errors
+
+    def _is_narrower_path(self, frozen_path: str, candidate_path: str) -> bool:
+        """
+        Check if candidate_path is a narrower (more specific) version of frozen_path.
+
+        For example, "src/foo/bar.py" is narrower than "src/foo".
+        """
+        if not isinstance(frozen_path, str) or not isinstance(candidate_path, str):
+            return False
+
+        # Exact match is always allowed
+        if frozen_path == candidate_path:
+            return True
+
+        # Candidate must not contain wildcards
+        if self._contains_wildcard(candidate_path):
+            return False
+
+        # Check if candidate is a subpath of frozen (more specific)
+        # For directory paths: candidate starts with frozen + "/"
+        if candidate_path.startswith(frozen_path + "/"):
+            return True
+
+        # For file paths: if frozen is a directory and candidate is a file in it
+        if frozen_path.endswith("/") and candidate_path.startswith(frozen_path):
+            return True
+
+        return False
 
     def _compare_paths_strictness(self, frozen_path: str, candidate_path: str) -> bool:
         """
@@ -391,32 +454,94 @@ class FrozenContractGuard:
                     continue
 
                 # Check for expanded allowed files
-                frozen_files = set(frozen_step.get("allowed_files", []))
-                candidate_files = set(candidate_step.get("allowed_files", []))
+                frozen_files, frozen_errors = self._safe_to_string_set(frozen_step.get("allowed_files", []))
+                candidate_files, candidate_errors = self._safe_to_string_set(candidate_step.get("allowed_files", []))
 
-                if not candidate_files.issubset(frozen_files):
+                # Report any malformed data errors
+                if frozen_errors:
                     violations.append(
                         ContractViolation(
-                            requirement_id=f"STEP-{step_id}-FILES",
-                            reason="Allowed files expanded beyond frozen contract",
-                            details=f"Frozen: {frozen_files}, Candidate: {candidate_files}"
+                            requirement_id=f"STEP-{step_id}-MALFORMED-FROZEN",
+                            reason="Frozen allowed_files contains malformed data",
+                            details=f"Errors: {frozen_errors}"
                         )
                     )
 
-                # Check for wildcards in allowed files
-                for file_path in candidate_files:
-                    if self._contains_wildcard(file_path):
+                if candidate_errors:
+                    violations.append(
+                        ContractViolation(
+                            requirement_id=f"STEP-{step_id}-MALFORMED-CANDIDATE",
+                            reason="Candidate allowed_files contains malformed data",
+                            details=f"Errors: {candidate_errors}"
+                        )
+                    )
+
+                # Check for wildcard in frozen files (should never happen, but fail-closed)
+                for fpath in frozen_files:
+                    if self._contains_wildcard(fpath):
+                        violations.append(
+                            ContractViolation(
+                                requirement_id=f"STEP-{step_id}-FROZEN-WILDCARD",
+                                reason="Frozen contract contains wildcard in allowed files",
+                                details=f"Path: {fpath}"
+                            )
+                        )
+
+                # Check for expanded or invalid allowed files
+                expanded_files = set()
+                for cfile in candidate_files:
+                    # Check for wildcards
+                    if self._contains_wildcard(cfile):
                         violations.append(
                             ContractViolation(
                                 requirement_id=f"STEP-{step_id}-WILDCARD",
                                 reason="Wildcard detected in allowed files",
-                                details=f"Path: {file_path}"
+                                details=f"Path: {cfile}"
                             )
                         )
+                        continue
+
+                    # Check if file is allowed (exact match or narrower path)
+                    is_allowed = False
+                    for ffile in frozen_files:
+                        if self._is_narrower_path(ffile, cfile):
+                            is_allowed = True
+                            break
+
+                    if not is_allowed:
+                        expanded_files.add(cfile)
+
+                if expanded_files:
+                    violations.append(
+                        ContractViolation(
+                            requirement_id=f"STEP-{step_id}-FILES",
+                            reason="Allowed files expanded beyond frozen contract",
+                            details=f"Expanded files: {expanded_files}"
+                        )
+                    )
 
                 # Check for reduced required_tests
-                frozen_tests = set(frozen_step.get("required_tests", []))
-                candidate_tests = set(candidate_step.get("required_tests", []))
+                frozen_tests, frozen_test_errors = self._safe_to_string_set(frozen_step.get("required_tests", []))
+                candidate_tests, candidate_test_errors = self._safe_to_string_set(candidate_step.get("required_tests", []))
+
+                if frozen_test_errors:
+                    violations.append(
+                        ContractViolation(
+                            requirement_id=f"STEP-{step_id}-MALFORMED-TESTS-FROZEN",
+                            reason="Frozen required_tests contains malformed data",
+                            details=f"Errors: {frozen_test_errors}"
+                        )
+                    )
+
+                if candidate_test_errors:
+                    violations.append(
+                        ContractViolation(
+                            requirement_id=f"STEP-{step_id}-MALFORMED-TESTS-CANDIDATE",
+                            reason="Candidate required_tests contains malformed data",
+                            details=f"Errors: {candidate_test_errors}"
+                        )
+                    )
+
                 if not candidate_tests.issuperset(frozen_tests):
                     violations.append(
                         ContractViolation(
@@ -427,8 +552,27 @@ class FrozenContractGuard:
                     )
 
                 # Check for reduced forbidden_paths
-                frozen_forbidden_paths = set(frozen_step.get("forbidden_paths", []))
-                candidate_forbidden_paths = set(candidate_step.get("forbidden_paths", []))
+                frozen_forbidden_paths, frozen_path_errors = self._safe_to_string_set(frozen_step.get("forbidden_paths", []))
+                candidate_forbidden_paths, candidate_path_errors = self._safe_to_string_set(candidate_step.get("forbidden_paths", []))
+
+                if frozen_path_errors:
+                    violations.append(
+                        ContractViolation(
+                            requirement_id=f"STEP-{step_id}-MALFORMED-PATHS-FROZEN",
+                            reason="Frozen forbidden_paths contains malformed data",
+                            details=f"Errors: {frozen_path_errors}"
+                        )
+                    )
+
+                if candidate_path_errors:
+                    violations.append(
+                        ContractViolation(
+                            requirement_id=f"STEP-{step_id}-MALFORMED-PATHS-CANDIDATE",
+                            reason="Candidate forbidden_paths contains malformed data",
+                            details=f"Errors: {candidate_path_errors}"
+                        )
+                    )
+
                 if not candidate_forbidden_paths.issuperset(frozen_forbidden_paths):
                     violations.append(
                         ContractViolation(
@@ -439,8 +583,27 @@ class FrozenContractGuard:
                     )
 
                 # Check for reduced forbidden_operations
-                frozen_forbidden_ops = set(frozen_step.get("forbidden_operations", []))
-                candidate_forbidden_ops = set(candidate_step.get("forbidden_operations", []))
+                frozen_forbidden_ops, frozen_ops_errors = self._safe_to_string_set(frozen_step.get("forbidden_operations", []))
+                candidate_forbidden_ops, candidate_ops_errors = self._safe_to_string_set(candidate_step.get("forbidden_operations", []))
+
+                if frozen_ops_errors:
+                    violations.append(
+                        ContractViolation(
+                            requirement_id=f"STEP-{step_id}-MALFORMED-OPS-FROZEN",
+                            reason="Frozen forbidden_operations contains malformed data",
+                            details=f"Errors: {frozen_ops_errors}"
+                        )
+                    )
+
+                if candidate_ops_errors:
+                    violations.append(
+                        ContractViolation(
+                            requirement_id=f"STEP-{step_id}-MALFORMED-OPS-CANDIDATE",
+                            reason="Candidate forbidden_operations contains malformed data",
+                            details=f"Errors: {candidate_ops_errors}"
+                        )
+                    )
+
                 if not candidate_forbidden_ops.issuperset(frozen_forbidden_ops):
                     violations.append(
                         ContractViolation(
