@@ -289,7 +289,7 @@ class LocalProfileAdapter(ProjectProfileAdapter):
 class LocalTestRunner(TestRunnerAdapter):
     def run(self, argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
         try:
-            proc = subprocess.run(argv, cwd=str(cwd), shell=False, capture_output=True, text=True, timeout=timeout)
+            proc = subprocess.run(argv, cwd=str(cwd), shell=False, capture_output=True, text=True, timeout=timeout, env=bounded_provider_env())
             return {"argv": argv, "returncode": proc.returncode, "ok": proc.returncode == 0, "stdout": proc.stdout[-16000:], "stderr": proc.stderr[-16000:]}
         except subprocess.TimeoutExpired as exc:
             return {"argv": argv, "returncode": 124, "ok": False, "stdout": (exc.stdout or "")[-16000:], "stderr": (exc.stderr or "")[-16000:], "timed_out": True}
