@@ -255,7 +255,11 @@ class LocalAPIServer:
             raise ValueError("mission cannot be empty")
         builder_name, reviewer_names, review_policy, is_self_review = self._quick_configuration(data)
         root = self.quick_sandbox()
-        contract = "Work only in src/ and tests/. Do not install packages, commit, push, access external paths, or modify the sandbox policy. Run the tests.\n\nUser task:\n" + mission
+        contract = (
+            "Work only inside this disposable Git sandbox. Do not install packages, commit, "
+            "push, access external paths, or modify the sandbox policy. Run the tests.\n\n"
+            "User task:\n" + mission
+        )
         return self._start("quick-sandbox", root, contract, ["*"], ["python3", "-m", "pytest", "-q"], [], builder_name, reviewer_names, review_policy)
 
     def launch(self, data):

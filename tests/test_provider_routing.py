@@ -292,6 +292,8 @@ def test_http_bubble_start_passes_selectors_to_runtime(tmp_path):
         run = api.runtime.get(run_id)
         assert run["builder_name"] == "glm"
         assert run["review_policy"] == "none"
+        assert "Work only inside this disposable Git sandbox." in run["mission"]
+        assert "Work only in src/ and tests/." not in run["mission"]
         assert run["status"] == "needs_approval"
         assert run["evidence_directory"]
         assert run["progress"]["total"] == 4
