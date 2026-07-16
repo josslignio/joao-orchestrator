@@ -617,7 +617,13 @@ class ClaudeCLIReviewer(ReviewerAdapter):
         prompt = (
             "You are a read-only JOAO reviewer. Review the " + stage + " gate for the mission below. "
             f"Inspect the current Git diff and local evidence in {run_dir}. Do not edit files, install packages, "
-            "commit, push, or use the network. For P1 or BLOCK, print CLAUDE_FINDING: followed by one "
+            "commit, push, or use the network. Judge only this gate: at the plan gate, assess only whether "
+            "the bounded plan and safety contract are sound. At the build gate, inspect only the produced "
+            "diff; JOAO itself executes the recorded test commands at the dedicated test gate, so never "
+            "demand test execution or test output at the build gate. At the test gate, inspect the recorded "
+            "test results. At the final gate, recheck the complete diff, tests, scope, and evidence. "
+            "A P1 requires a concrete correctness or safety defect, not a speculative enhancement. "
+            "For P1 or BLOCK, print CLAUDE_FINDING: followed by one "
             "concrete repair line. End with exactly CLAUDE_REVIEW: ACCEPT, "
             "CLAUDE_REVIEW: P1, or CLAUDE_REVIEW: BLOCK.\n\n" + run["mission"]
         )
