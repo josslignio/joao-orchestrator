@@ -192,8 +192,22 @@ class SubprocessCLIEngine:
                 timed_out=True,
             )
 
-    def run(self, cwd: Path, prompt: str,
-            extra_args: Optional[Iterable[str]] = None) -> CLIExecutionResult:
+    def run_argv(
+        self,
+        cwd: Path,
+        argv_tail: Iterable[str],
+        *,
+        stdin_text: Optional[str] = None,
+        env_overrides: Optional[Dict[str, str]] = None,
+        timeout_seconds: Optional[int] = None,
+    ) -> CLIExecutionResult:
+        """Run an explicitly constructed CLI argv without a shell.
+
+        Some agents (notably ``opencode run``) accept the task as a positional
+        argument rather than stdin.  This method keeps that invocation explicit
+        and auditable while preserving the same bounded execution and redaction
+        guarantees as :meth:`run`.
+        """
         executable = self.resolve_executable()
         if not executable:
             raise SubprocessCLIError(f"{self.config.name} executable unavailable")
@@ -204,18 +218,22 @@ class SubprocessCLIEngine:
         if not resolved_cwd.is_dir():
             raise SubprocessCLIError(f"cwd is not a directory: {resolved_cwd}")
 
-        argv = [executable, *self.config.base_args, *(list(extra_args or []))]
+        argv = [executable, *self.config.base_args, *list(argv_tail)]
+        env = self.build_env()
+        if env_overrides:
+            env.update({str(k): str(v) for k, v in env_overrides.items()})
         started_at = now_iso()
         start = time.monotonic()
+        effective_timeout = timeout_seconds or self.config.timeout_seconds
         try:
             completed = subprocess.run(
                 argv,
-                input=prompt,
+                input=stdin_text,
                 capture_output=True,
                 text=True,
                 cwd=str(resolved_cwd),
-                env=self.build_env(),
-                timeout=self.config.timeout_seconds,
+                env=env,
+                timeout=effective_timeout,
                 shell=False,
             )
             duration = time.monotonic() - start
@@ -244,3 +262,11 @@ class SubprocessCLIEngine:
                 duration_seconds=duration,
                 timed_out=True,
             )
+
+    def run(self, cwd: Path, prompt: str,
+            extra_args: Optional[Iterable[str]] = None) -> CLIExecutionResult:
+        return self.run_argv(
+            cwd,
+            list(extra_args or []),
+            stdin_text=prompt,
+        )

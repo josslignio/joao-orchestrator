@@ -15,6 +15,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -394,6 +395,7 @@ class ConvergenceConfig:
     fix_executable: Optional[str] = None
     review_timeout: int = 60
     fix_timeout: int = 120
+    glm_adapter: str = "~/.local/bin/joao-glm"
     now_fn: Any = None  # Injectable for tests.
 
     def now(self) -> str:
@@ -991,9 +993,45 @@ def _invoke_fixer(
     provider = routing.get("selected_provider", "")
     if provider == "fake":
         return ("", 0, "")
-    # Real provider (codex-subscription, opencode-zai) not implemented here.
-    # Fail-closed: unavailable real fixer returns non-zero failure, never success.
-    return ("Fixer unavailable or unimplemented", 1, "")
+    if provider == "opencode-zai":
+        adapter = Path(config.glm_adapter).expanduser().resolve()
+        if not adapter.is_file() or not os.access(adapter, os.X_OK):
+            return (f"Fixer unavailable or unimplemented: GLM adapter unavailable: {adapter}", 1, "")
+        try:
+            with tempfile.TemporaryDirectory(prefix="joao-fix-") as temp_raw:
+                temp = Path(temp_raw)
+                task_file = temp / "fix-task.json"
+                output_file = temp / "glm-output.jsonl"
+                task_file.write_text(
+                    json.dumps(fix_request, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                argv = [
+                    str(adapter),
+                    "--workspace", str(Path(worktree_path).resolve()),
+                    "--task-file", str(task_file),
+                    "--output", str(output_file),
+                    "--mode", "workspace-write",
+                    "--budget", "normal",
+                ]
+                for rule in profile.allowed_write_paths:
+                    argv.extend(["--allowed-path", str(rule)])
+                proc = subprocess.run(
+                    argv, capture_output=True, text=True, shell=False,
+                    timeout=config.fix_timeout, cwd=str(Path(worktree_path).resolve()),
+                    env=strip_provider_tokens(dict(os.environ)),
+                )
+                stdout = output_file.read_text(encoding="utf-8") if output_file.is_file() else proc.stdout
+                if proc.returncode and not stdout.strip():
+                    stdout = f"Fixer unavailable or unimplemented: {proc.stderr.strip()}"
+                return (stdout, proc.returncode, proc.stderr)
+        except subprocess.TimeoutExpired:
+            return ("", 124, "GLM adapter timed out")
+        except Exception as exc:
+            detail = f"GLM adapter failed closed: {exc}"
+            return (f"Fixer unavailable or unimplemented: {detail}", 1, detail)
+    # No supported real fixer for any other provider.
+    return (f"Fixer unavailable or unimplemented for {provider}", 1, "")
 
 
 def _capture_changed_files(worktree_path: Path) -> List[str]:
