@@ -142,7 +142,8 @@ def execute_row(api: LocalAPIServer, state_root: Path, builder: str, review: str
     try:
         launched = request(api, "quick-missions", {
             "mission": MISSION, "builder_name": builder, "review_mode": review,
-            "allowed_paths": ["todo.py", "test_todo.py", "todo.json", "test_tasks.json"],
+            "allowed_paths": ["todo.py", "test_todo.py", "todo.json", "test_tasks.json",
+                              "todo.json.tmp", "test_tasks.json.tmp"],
         })
     except Exception as exc:
         runs_after = set((state_root / "runs").glob("run-*")) if (state_root / "runs").exists() else set()
@@ -193,7 +194,8 @@ def execute_row(api: LocalAPIServer, state_root: Path, builder: str, review: str
     changed = json.loads((folder / "changed-paths.json").read_text()) if (folder / "changed-paths.json").exists() else {}
     delivered_paths = set(changed.get("after", []))
     row["no_changed_path_outside_sandbox"] = not changed.get("violations")
-    row["no_runtime_data_artifacts"] = not bool(delivered_paths & {"todo.json", "test_tasks.json"})
+    row["no_runtime_data_artifacts"] = not bool(
+        delivered_paths & {"todo.json", "test_tasks.json", "todo.json.tmp", "test_tasks.json.tmp"})
     restored = runtime(state_root).get(run_id)
     row["restart_restored"] = restored["status"] == final["status"]
     row["final_diff_sha256"] = final.get("final_diff_sha256")

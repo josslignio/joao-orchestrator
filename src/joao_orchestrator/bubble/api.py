@@ -268,7 +268,8 @@ class LocalAPIServer:
         if not mission:
             raise ValueError("mission cannot be empty")
         builder_name, reviewer_names, review_policy, is_self_review = self._quick_configuration(data)
-        default_quick_paths = ["todo.py", "test_todo.py", "todo.json", "test_tasks.json", "src/", "tests/"]
+        default_quick_paths = ["todo.py", "test_todo.py", "todo.json", "test_tasks.json",
+                               "todo.json.tmp", "test_tasks.json.tmp", "src/", "tests/"]
         safe_quick_paths = set(default_quick_paths)
         requested_paths = data.get("allowed_paths")
         allowed = [str(path) for path in requested_paths] if requested_paths is not None else default_quick_paths
@@ -281,11 +282,13 @@ class LocalAPIServer:
             "standard-library unittest framework for tests, and run the recorded test command. "
             "The term needs_approval names a JOAO runtime state: never create a file or directory "
             "with that name. The sandbox-local todo.json and test_tasks.json paths may be used "
-            "during validation, but remove test/runtime data before delivery.\n\n"
+            "during validation, and their .tmp siblings are the only permitted atomic-write "
+            "staging files; remove test/runtime data before delivery.\n\n"
             "User task:\n" + mission
         )
         full_test = ["python3", "-m", "unittest", "discover", "-s", ".", "-p", "test*.py"]
-        generated = [path for path in ("todo.json", "test_tasks.json") if path in allowed]
+        generated = [path for path in ("todo.json", "test_tasks.json",
+                                       "todo.json.tmp", "test_tasks.json.tmp") if path in allowed]
         return self._start("quick-sandbox", root, contract, allowed, full_test, [], builder_name, reviewer_names, review_policy, generated)
 
     def launch(self, data):
