@@ -113,6 +113,33 @@ def test_workspace_write_rejects_unauthorized_path(tmp_path: Path) -> None:
     assert evidence["unauthorized_paths"] == ["result.txt"]
 
 
+def test_workspace_write_removes_transient_interpreter_caches(tmp_path: Path) -> None:
+    fake = _fake_opencode(tmp_path)
+    original = fake.read_text()
+    marker = "(work/'result.txt').write_text('JOAO_GLM_WORKSPACE_WRITE_OK\\n')"
+    assert marker in original, "fake opencode build branch changed; update this test"
+    fake.write_text(original.replace(
+        marker,
+        marker + ";(work/'__pycache__').mkdir(exist_ok=True)"
+        ";(work/'__pycache__'/'result.cpython-312.pyc').write_bytes(b'x')",
+    ), encoding="utf-8")
+    repo = _repo(tmp_path)
+    task = tmp_path / "task.md"
+    task.write_text("Create result.txt.\n", encoding="utf-8")
+    output = tmp_path / "out.jsonl"
+    proc = subprocess.run(
+        [sys.executable, str(ADAPTER), "--workspace", str(repo), "--task-file", str(task),
+         "--output", str(output), "--mode", "workspace-write", "--opencode", str(fake),
+         "--allowed-path", "result.txt"],
+        env=_env(tmp_path), capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert not (repo / "__pycache__").exists()
+    evidence = json.loads(output.with_suffix(output.suffix + ".evidence.json").read_text())
+    assert evidence["transient_cache_paths_removed"] == ["__pycache__/result.cpython-312.pyc"]
+    assert evidence["unauthorized_paths"] == []
+
+
 def test_convergence_invokes_real_glm_adapter_path(tmp_path: Path) -> None:
     from types import SimpleNamespace
     from joao_orchestrator.runtime.convergence import ConvergenceConfig, _invoke_fixer

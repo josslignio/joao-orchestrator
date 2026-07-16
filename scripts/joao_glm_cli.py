@@ -206,8 +206,37 @@ def clean_env(config: dict[str, Any]) -> dict[str, str]:
         "OPENCODE_DISABLE_CLAUDE_CODE": "1",
         "GIT_TERMINAL_PROMPT": "0",
         "GIT_OPTIONAL_LOCKS": "0",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTEST_ADDOPTS": "-p no:cacheprovider",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
     })
     return env
+
+
+TRANSIENT_CACHE_RE = re.compile(r"(^|/)(__pycache__(/|$)|[^/]+\.py[co]$|\.pytest_cache(/|$))")
+
+
+def remove_transient_caches(workspace: Path, before: list[str]) -> list[str]:
+    """Delete interpreter caches the task run introduced; they are never deliverables."""
+    workspace = workspace.resolve()
+    baseline = set(before)
+    removed: list[str] = []
+    for path in git_changed_paths(workspace):
+        if path in baseline or not TRANSIENT_CACHE_RE.search(path):
+            continue
+        target = (workspace / path).resolve()
+        try:
+            target.relative_to(workspace)
+        except ValueError:
+            continue
+        if target.is_file() or target.is_symlink():
+            target.unlink(missing_ok=True)
+            removed.append(path)
+            parent = target.parent
+            while parent != workspace and parent.is_dir() and not any(parent.iterdir()):
+                parent.rmdir()
+                parent = parent.parent
+    return sorted(removed)
 
 
 def probe(opencode: str, model: str) -> dict[str, Any]:
@@ -341,6 +370,7 @@ def main() -> int:
         ]
         timeouts = {"small": 300, "normal": 900, "large": 1800}
         proc = run_cmd(argv, cwd=workspace, env=env, timeout=timeouts[args.budget])
+        evidence["transient_cache_paths_removed"] = remove_transient_caches(workspace, before)
         after = git_changed_paths(workspace)
         evidence["changed_paths_after"] = after
         changed_by_task = sorted(set(after) - set(before))
