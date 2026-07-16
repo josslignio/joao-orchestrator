@@ -337,11 +337,15 @@ class CodexCLIReviewer(ReviewerAdapter):
             "Inspect only the current worktree, that evidence directory, and git diff. Do not "
             "edit, commit, push, install packages or call external services. At the "
             "plan gate, assess only whether the bounded plan and safety contract are sound; do not "
-            "require implementation or run tests. At the build gate, inspect the produced diff. "
+            "require implementation or run tests. For the plan gate, read only mission.md, "
+            "plan.json, and project-profile.json in the evidence directory; do not scan checkpoints "
+            "or propose preferences already answered by objective_verbatim. A P1 requires a concrete "
+            "correctness or safety defect, not a speculative enhancement. At the build gate, inspect the produced diff. "
             "At the test gate, inspect or rerun the recorded tests. At the final gate, recheck the "
             "complete diff, tests, scope, and evidence. "
-            "end, print exactly one final line: JOAO_REVIEW: ACCEPT, JOAO_REVIEW: P1, "
-            "or JOAO_REVIEW: BLOCK. A P1 must name the concrete repair."
+            "For P1 or BLOCK, print JOAO_FINDING: followed by one concrete repair line. "
+            "Then end with exactly one final line: JOAO_REVIEW: ACCEPT, JOAO_REVIEW: P1, "
+            "or JOAO_REVIEW: BLOCK."
         )
         argv = [found, "exec", "--json", "--ephemeral", "--ignore-user-config", "--model", self.model,
                 "--sandbox", "workspace-write", "-C", str(workspace), prompt]
@@ -362,6 +366,10 @@ class CodexCLIReviewer(ReviewerAdapter):
         verdict = parse_review_verdict(text, "JOAO_REVIEW")
         finding = extract_agent_finding(proc.stdout, "JOAO_REVIEW")
         decision = {"ACCEPT": "pass", "P1": "p1", "BLOCK": "block"}.get(verdict, "block")
+        concrete = re.sub(r"JOAO_REVIEW:\s*(ACCEPT|P1|BLOCK)", "", finding, flags=re.I).strip(" \n—:-")
+        malformed_finding = verdict in {"P1", "BLOCK"} and len(concrete) < 12
+        if malformed_finding:
+            decision = "block"
         after_paths = git_status_paths(workspace)
         reviewer_drift = sorted(set(after_paths) ^ set(before_paths))
         if git_worktree_fingerprint(workspace) != before_fingerprint and not reviewer_drift:
@@ -372,6 +380,7 @@ class CodexCLIReviewer(ReviewerAdapter):
             "ok": proc.returncode == 0 and verdict == "ACCEPT" and not reviewer_drift,
             "decision": decision, "stage": stage, "verdict": verdict or "MISSING",
             "finding": finding,
+            "malformed_finding": malformed_finding,
             "returncode": proc.returncode, "output": str(output),
             "output_sha256": digest(output), "stderr": proc.stderr[-4000:],
             "proof": {"verdict": verdict, "reviewed_diff_sha256": run.get("final_diff_sha256")},
