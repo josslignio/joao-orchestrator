@@ -171,7 +171,11 @@ def test_all_twelve_ui_selections_route_exactly(tmp_path, builder, mode, expecte
         api.close()
 
 
-def test_unavailable_claude_is_disabled_and_refused_before_sandbox(tmp_path):
+def test_unavailable_claude_is_disabled_and_refused_before_sandbox(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "joao_orchestrator.bubble.runtime.resolve_claude_executable",
+        lambda executable: None,
+    )
     builder = FixtureBuilder()
     value = RunRuntime(
         tmp_path / "state", builder=builder,
@@ -246,6 +250,36 @@ def test_provider_environment_disables_python_and_pytest_cache_drift():
     env = bounded_provider_env()
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
     assert env["PYTEST_ADDOPTS"] == "-p no:cacheprovider"
+
+
+def test_glm_repair_declares_existing_diff_as_explicit_baseline(tmp_path, monkeypatch):
+    from joao_orchestrator.bubble.runtime import GLMBuilder
+
+    root = git_workspace(tmp_path)
+    (root / "todo.py").write_text("VALUE = 2\n")
+    run_dir = tmp_path / "evidence"
+    run_dir.mkdir()
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        output = Path(argv[argv.index("--output") + 1])
+        output.write_text("{}\n")
+        return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(
+        "joao_orchestrator.bubble.runtime.resolve_executable",
+        lambda executable, fallback: "/mock/joao-glm",
+    )
+    monkeypatch.setattr(
+        "joao_orchestrator.bubble.runtime.git_status_paths",
+        lambda workspace: ["todo.py"],
+    )
+    monkeypatch.setattr("joao_orchestrator.bubble.runtime.subprocess.run", fake_run)
+    result = GLMBuilder().build("repair", root, run_dir, ["todo.py"], True)
+    assert result["ok"] is True
+    index = captured["argv"].index("--baseline-path")
+    assert captured["argv"][index + 1] == "todo.py"
 
 
 def test_quick_sandbox_rejects_unsafe_requested_paths(tmp_path):

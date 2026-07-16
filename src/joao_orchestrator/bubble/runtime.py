@@ -325,6 +325,9 @@ class GLMBuilder(BuilderAdapter):
         output = run_dir / ("glm-correction.jsonl" if correction else "glm-builder.jsonl")
         argv = [found, "--workspace", str(workspace), "--task-file", str(task), "--output", str(output), "--mode", "workspace-write", "--budget", "small"]
         for item in allowed: argv.extend(["--allowed-path", item])
+        if correction:
+            for item in git_status_paths(workspace):
+                argv.extend(["--baseline-path", item])
         try:
             proc = subprocess.run(argv, shell=False, capture_output=True, text=True,
                                   timeout=900, env=bounded_provider_env())
