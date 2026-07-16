@@ -260,6 +260,12 @@ class LocalAPIServer:
         if not mission:
             raise ValueError("mission cannot be empty")
         builder_name, reviewer_names, review_policy, is_self_review = self._quick_configuration(data)
+        default_quick_paths = ["todo.py", "test_todo.py", "src/", "tests/"]
+        safe_quick_paths = set(default_quick_paths)
+        requested_paths = data.get("allowed_paths")
+        allowed = [str(path) for path in requested_paths] if requested_paths is not None else default_quick_paths
+        if not allowed or len(set(allowed)) != len(allowed) or any(path not in safe_quick_paths for path in allowed):
+            raise ValueError("quick sandbox allowed_paths must be a non-empty subset of the safe quick paths")
         root = self.quick_sandbox()
         contract = (
             "Work only inside this disposable Git sandbox. Do not install packages, commit, "
@@ -267,7 +273,6 @@ class LocalAPIServer:
             "standard-library unittest framework for tests, and run the recorded test command.\n\n"
             "User task:\n" + mission
         )
-        allowed = ["todo.py", "test_todo.py", "src/", "tests/"]
         full_test = ["python3", "-m", "unittest", "discover", "-s", ".", "-p", "test*.py"]
         return self._start("quick-sandbox", root, contract, allowed, full_test, [], builder_name, reviewer_names, review_policy)
 

@@ -185,6 +185,19 @@ def test_unavailable_claude_is_disabled_and_refused_before_sandbox(tmp_path):
         api.close()
 
 
+def test_quick_sandbox_rejects_unsafe_requested_paths(tmp_path):
+    api = LocalAPIServer(runtime(tmp_path))
+    try:
+        with pytest.raises(ValueError, match="safe quick paths"):
+            api.quick_launch({
+                "mission": "test", "builder_name": "glm", "review_mode": "none",
+                "allowed_paths": [".git/"],
+            })
+        assert not (tmp_path / "state" / "sandboxes").exists()
+    finally:
+        api.close()
+
+
 def test_no_review_runs_real_builder_and_requires_human_approval(tmp_path):
     root = git_workspace(tmp_path)
     builder = FixtureBuilder()

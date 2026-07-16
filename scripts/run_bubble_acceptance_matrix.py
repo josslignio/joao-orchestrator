@@ -133,6 +133,7 @@ def execute_row(api: LocalAPIServer, state_root: Path, builder: str, review: str
     try:
         launched = request(api, "quick-missions", {
             "mission": MISSION, "builder_name": builder, "review_mode": review,
+            "allowed_paths": ["todo.py", "test_todo.py"],
         })
     except Exception as exc:
         runs_after = set((state_root / "runs").glob("run-*")) if (state_root / "runs").exists() else set()
