@@ -1,7 +1,6 @@
 """Phase 6 — Multi-project factory proof.
 
-Proves the factory can manage itself (JOSS orchestrator) and Trading Radar
-without mixing state. Checks:
+Proves generic multi-project isolation without mixing state. Checks:
 
   - unique registry keys
   - separate profiles
@@ -220,13 +219,12 @@ def _check_cache_isolation(state_root: Path, proj_a: str, proj_b: str) -> bool:
 def run_multi_project_proof(state_root: Path) -> MultiProjectProof:
     """Run the multi-project isolation proof.
 
-    Uses the two real projects (JOSS orchestrator + Trading Radar) with their
-    actual C3 flow. Task execution is fixture-based (we do not make meaningless
-    changes to real repos just to pass the test); the proof verifies isolation
-    of state, not real commits.
+    Uses two neutral fixture projects. Task execution is fixture-based (we do
+    not make meaningless changes to real repositories just to pass a test);
+    the proof verifies isolation of state, not real commits.
     """
-    proj_joss = "joss-orchestrator"
-    proj_radar = "trading-radar"
+    proj_joss = "project-alpha"
+    proj_radar = "project-beta"
 
     ns_joss = _namespace_for(proj_joss)
     ns_radar = _namespace_for(proj_radar)

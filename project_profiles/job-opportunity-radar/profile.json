@@ -1,0 +1,11 @@
+{
+  "project_id": "job-opportunity-radar",
+  "repository_path": "/Users/jocelyngrosjean/job-opportunity-radar",
+  "runtime_root": "~/.local/share/joss-orchestrator/projects/job-opportunity-radar",
+  "known_good_command": "scripts/run_daily.sh",
+  "mode": "ACTIVE",
+  "acceptance_checks": ["state resumes after interruption", "no application fired"],
+  "forbidden_patterns": [
+    {"pattern": "\\bgreenhouse|lever|workable\\b", "label": "project board rule"}
+  ]
+}

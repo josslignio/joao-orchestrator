@@ -22,6 +22,8 @@ State, queue, artifacts, and worktrees are project-scoped. Runtime state is
 outside managed repositories. Legacy MCP/control-plane names are not active
 runtime dependencies; historical branches and worktrees remain forensic-only.
 
-The V2 product preset and benchmark-fixture modules are a legacy boundary
-exception awaiting extraction. They are not imported by the default queue path
-and must not be extended as generic-core functionality.
+Concrete product defaults, forbidden-pattern data, and historical regression
+scenarios live under `project_profiles/`, outside `src/joao_orchestrator`.
+The generic V2 profile loader accepts an explicitly selected JSON file; it does
+not select or import a project. Generic fixture and benchmark interfaces accept
+explicitly supplied fixtures only.

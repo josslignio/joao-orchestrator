@@ -15,7 +15,7 @@
 | --- | --- | --- |
 | P1 | `validation.json` rendered the executable basename and omitted `args_extra`, so an evidence record could not prove the command actually declared. | Repaired. Evidence now stores exact `argv` and a `shlex.join` rendering. |
 | P1 | The former hostile-command regression did not require a unique complete argv match through `args_extra`. | Repaired with a real failing Git command, resolved Git executable, nonempty `args_extra`, unique-match assertion, and fail-closed assertions. |
-| P1 | V2 contains legacy product preset/fixture material (`v2/profiles.py`, `v2/fixtures.py`) that is outside the generic-core boundary. | Not removed in this checkpoint: extraction needs a separately bounded compatibility migration because V2 benchmark imports it. No default queue/runtime path imports these modules. |
+| P1 | V2 contained product presets, fixture predicates, and benchmark data inside the generic package. | Repaired. Concrete definitions now live under repository-level `project_profiles/`; the canonical package exposes only generic profile, fixture, and benchmark interfaces. |
 | P2 | Historical ZCode terminology remains in compatibility models and disabled capability declarations. | Inactive compatibility material; it must not be selected as a runtime implementation path. |
 
 ## Safety checks

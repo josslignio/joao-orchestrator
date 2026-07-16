@@ -6,7 +6,7 @@ Commands::
     preflight   — run the §11 evidence-first preflight
     plan        — write a backward-planned objective contract (§10)
     resume      — verify drift + resume an interrupted run (§20)
-    benchmark   — run the §26 historical fixtures + §27 sharpness score
+    benchmark   — report that a selected external fixture provider is required
     lessons     — list/manage the §24 learning ladder
     review      — run the §21 review gate (honest Codex fallback)
     genesis     — Product Genesis Engine: gate production coding behind an
@@ -35,9 +35,6 @@ _SRC = _HERE.parents[2]  # .../src
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from joao_orchestrator.v2 import (  # noqa: E402
-    profiles, fixtures, telemetry as tele,
-)
 from joao_orchestrator.v2.state import ProjectStateStore, StateValidationError  # noqa: E402
 from joao_orchestrator.v2.roadmap import RoadmapEngine, Roadmap  # noqa: E402
 from joao_orchestrator.v2.objective import ObjectivePlanner  # noqa: E402
@@ -125,14 +122,9 @@ def cmd_status(args) -> int:
 def cmd_preflight(args) -> int:
     project = args.project
     repo = Path(args.repo) if args.repo else Path.cwd()
-    # Look up the profile to find the dashboard URL (deterministic).
-    url = None
-    try:
-        prof = profiles.load_profile(project)
-        url = prof.dashboard_urls[0] if prof.dashboard_urls else None
-    except KeyError:
-        pass
-    report = run_preflight(project, repo_path=repo, check_public_url=url)
+    # Product-specific public endpoints are supplied by an external profile
+    # caller, never selected by the generic CLI.
+    report = run_preflight(project, repo_path=repo, check_public_url=None)
     out = report.to_dict()
     out["resume_command"] = (
         f"joss_v2 status --project {project}" if report.ok
@@ -188,16 +180,11 @@ def cmd_resume(args) -> int:
 
 
 def cmd_benchmark(args) -> int:
-    import tempfile
-    from joao_orchestrator.v2 import benchmark as bench_mod
-    tmp = Path(tempfile.mkdtemp(prefix="joss_v2_bench_"))
-    summary = bench_mod.run_benchmark(tmp_root=tmp)
-    out = summary.to_dict()
-    _emit(args, out)
-    total = len(out["fixture_results"])
-    passed = sum(1 for r in out["fixture_results"].values()
-                 if r["status"] == "PASS")
-    return 0 if passed == total else 1
+    _emit(args, {
+        "blocker": "benchmark requires an explicitly selected external fixture provider",
+        "next_action": "run the benchmark from the relevant project_profiles boundary",
+    })
+    return 2
 
 
 def cmd_lessons(args) -> int:
@@ -233,7 +220,7 @@ def cmd_gh_discover(args) -> int:
     res = discover_gh_environment(persist=not args.no_persist)
     out = res.to_dict()
     out["resume_command"] = (
-        "joss_v2 preflight --project weekly-trading-radar"
+        "joss_v2 preflight --project <project-id>"
         if res.classification == "GH_AVAILABLE_AND_AUTHENTICATED"
         else "gh auth login  # then re-run joss_v2 gh-discover")
     _emit(args, out)
@@ -242,11 +229,9 @@ def cmd_gh_discover(args) -> int:
 
 def cmd_review_packet(args) -> int:
     """Item 5: generate the full 11-file review packet."""
-    import tempfile
     from pathlib import Path as _P
     from joao_orchestrator.v2.review import (
         ReviewGate, ReviewPacket, generate_review_packet, REQUIRED_PACKET_FILES)
-    from joao_orchestrator.v2 import benchmark as bench_mod, telemetry
 
     run_id = args.run_id or "joss-v2-review"
     out_dir = _P.home() / ".local/share/joss-orchestrator/joss-v2-upgrade" \
@@ -263,30 +248,21 @@ def cmd_review_packet(args) -> int:
     generic = [Path(p) for p in glob.glob("src/joao_orchestrator/v2/**/*.py",
                                           recursive=True)]
     packet = ReviewPacket(
-        acceptance_criteria=["all 24 fixtures pass", "811 existing tests pass",
+        acceptance_criteria=["external fixtures pass", "existing tests pass",
                              "generic core pure", "no unsafe subprocess"],
         tests=["scripts/test_joss_v2.py", "scripts/test_orchestrator_core.py"],
         limitations=["live Codex reviewer UNAVAILABLE — deterministic fallback"])
     verdict = gate.review(packet, generic_core_files=generic,
                           diff_files=generic, all_files=generic)
 
-    # Benchmark + sharpness for the packet.
-    tmp = Path(tempfile.mkdtemp(prefix="joss_v2_pkt_"))
-    bm = bench_mod.run_benchmark(tmp_root=tmp)
-    base_score, v2_score = telemetry.score_from_benchmark(
-        bm.baseline_median, bm.v2_median)
-
     out_dir = generate_review_packet(
         out_dir, verdict=verdict,
         objective_contract={"single_objective": "V2 delivery engine upgrade",
-                            "visible_acceptance_artifact": "24/24 fixtures + CLI"},
+                            "visible_acceptance_artifact": "external fixtures + CLI"},
         final_diff=diff[:200000],   # bounded
         changed_symbols=names,
-        acceptance_results=bm.fixture_results,
-        benchmark_summary={"baseline_median": bm.baseline_median,
-                           "v2_median": bm.v2_median,
-                           "baseline_sharpness": base_score.to_dict(),
-                           "v2_sharpness": v2_score.to_dict()},
+        acceptance_results={},
+        benchmark_summary={"status": "external project benchmark required"},
         telemetry={"verdict": verdict.verdict, "checks": len(verdict.checks)},
         gate_ledger_lines=[],
         known_limitations=verdict.limitations + [
