@@ -191,8 +191,8 @@ class LocalAPIServer:
             raise ValueError("test command must not use a shell")
         return argv
 
-    def _start(self, project, workspace, mission, paths, full, target, builder_name, reviewer_names, review_policy):
-        profile = ProjectProfile(project_id=project, display_name=project, repository_root=str(workspace), allowed_write_paths=paths, forbidden_paths=[], approval_required=True)
+    def _start(self, project, workspace, mission, paths, full, target, builder_name, reviewer_names, review_policy, generated_paths=None):
+        profile = ProjectProfile(project_id=project, display_name=project, repository_root=str(workspace), allowed_write_paths=paths, forbidden_paths=[], generated_paths=list(generated_paths or []), approval_required=True)
         run = self.runtime.start(project_id=project, workspace=workspace, mission=mission, targeted_tests=[target] if target else [], full_tests=[full], profile=profile, builder_name=builder_name, reviewer_names=reviewer_names, review_policy=review_policy)
         self.drive(run)
         return {"run_id": run, "status": "queued"}
@@ -277,7 +277,8 @@ class LocalAPIServer:
             "User task:\n" + mission
         )
         full_test = ["python3", "-m", "unittest", "discover", "-s", ".", "-p", "test*.py"]
-        return self._start("quick-sandbox", root, contract, allowed, full_test, [], builder_name, reviewer_names, review_policy)
+        generated = [path for path in ("todo.json", "test_tasks.json") if path in allowed]
+        return self._start("quick-sandbox", root, contract, allowed, full_test, [], builder_name, reviewer_names, review_policy, generated)
 
     def launch(self, data):
         root = Path(data["workspace"]).expanduser().resolve()

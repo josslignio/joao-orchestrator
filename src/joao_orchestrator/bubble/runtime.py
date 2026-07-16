@@ -39,6 +39,7 @@ def resolve_executable(configured: str | Path, *, fallback: Path | None = None) 
     if candidate.is_absolute():
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
+        return None
     else:
         found = shutil.which(str(configured))
         if found:
@@ -106,7 +107,7 @@ NEXT = {
     RunStatus.PLANNING: {RunStatus.READY, RunStatus.FAILED, RunStatus.STOPPED},
     RunStatus.READY: {RunStatus.BUILDING, RunStatus.BLOCKED, RunStatus.PAUSED, RunStatus.STOPPED},
     RunStatus.BUILDING: {RunStatus.TESTING, RunStatus.CORRECTING, RunStatus.BLOCKED, RunStatus.FAILED, RunStatus.PAUSED, RunStatus.STOPPED},
-    RunStatus.TESTING: {RunStatus.REVIEWING, RunStatus.FAILED, RunStatus.BLOCKED, RunStatus.PAUSED, RunStatus.STOPPED},
+    RunStatus.TESTING: {RunStatus.REVIEWING, RunStatus.CORRECTING, RunStatus.FAILED, RunStatus.BLOCKED, RunStatus.PAUSED, RunStatus.STOPPED},
     RunStatus.REVIEWING: {RunStatus.NEEDS_APPROVAL, RunStatus.CORRECTING, RunStatus.BLOCKED, RunStatus.FAILED, RunStatus.PAUSED, RunStatus.STOPPED},
     RunStatus.CORRECTING: {RunStatus.BUILDING, RunStatus.NEEDS_APPROVAL, RunStatus.BLOCKED, RunStatus.FAILED, RunStatus.STOPPED},
     RunStatus.NEEDS_APPROVAL: {RunStatus.ACCEPTED, RunStatus.CORRECTING, RunStatus.STOPPED},
@@ -616,6 +617,7 @@ class RunRuntime:
                 "forbidden_paths": profile.forbidden_paths,
                 "external_dependencies": "forbidden unless the mission and human policy explicitly allow them",
                 "network": "forbidden for quick sandbox builds",
+                "delivery_excluded_generated_paths": profile.generated_paths,
             },
             "validation_contract": {
                 "targeted_test_commands": targeted_tests,
@@ -628,6 +630,7 @@ class RunRuntime:
                 {"gate": "plan", "action": "validate objective, scope, provider routing, and tests"},
                 {"gate": "build", "action": "implement every objective requirement only inside allowed paths"},
                 {"gate": "test", "action": "run every recorded targeted and full-test command"},
+                {"gate": "cleanup", "action": "remove every delivery_excluded_generated_path before diff review"},
                 {"gate": "review", "action": "bind reviewer verdicts to the final diff hash"},
                 {"gate": "delivery", "action": "stop for explicit human approval"},
             ],
@@ -982,6 +985,19 @@ class RunRuntime:
         if self._apply_control(run):
             return run
         if not all(item["ok"] for item in results): self._transition(run, RunStatus.FAILED, "tests failed"); self._finalize(run); return run
+        remaining_generated = sorted(set(self._paths(workspace)) & set(profile.generated_paths))
+        if remaining_generated:
+            cleanup_review = {"reviews": [{
+                "reviewer": "deterministic-cleanup-gate", "provider": "joao-local",
+                "decision": "p1", "finding": "Remove generated delivery artifacts: " + ", ".join(remaining_generated),
+            }]}
+            if run["corrections_used"] < run["max_corrections"]:
+                self._request_repair(run, cleanup_review, "cleanup")
+                self._transition(run, RunStatus.CORRECTING, "generated artifacts remain; one cleanup repair permitted")
+                return run
+            self._transition(run, RunStatus.BLOCKED, "generated artifacts remain after repair")
+            self._finalize(run)
+            return run
         run["tasks"][2]["status"] = "completed"; self._transition(run, RunStatus.REVIEWING, "independent test review")
         test_review = self._review_gate(run, "test")
         if self._apply_control(run):

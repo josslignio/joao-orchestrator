@@ -213,7 +213,7 @@ def test_no_review_runs_real_builder_and_requires_human_approval(tmp_path):
     assert plan["objective_verbatim"] == "Create the bounded TODO fixture"
     assert plan["implementation_scope"]["allowed_write_paths"] == ["todo.py", "tests/"]
     assert plan["validation_contract"]["all_commands_must_pass"] is True
-    assert [step["gate"] for step in plan["execution_steps"]] == ["plan", "build", "test", "review", "delivery"]
+    assert [step["gate"] for step in plan["execution_steps"]] == ["plan", "build", "test", "cleanup", "review", "delivery"]
 
 
 def test_reviewed_run_calls_every_gate_and_verifies_exact_diff(tmp_path):
@@ -297,6 +297,35 @@ def test_build_gate_p1_can_enter_the_same_bounded_repair(tmp_path):
     assert value.get(run_id)["repair_request"]["stage"] == "build"
     assert value.run_once(run_id)["status"] == "needs_approval"
     assert value.get(run_id)["corrections_used"] == 1
+
+
+def test_generated_data_artifact_triggers_cleanup_repair(tmp_path):
+    root = git_workspace(tmp_path)
+
+    class CleanupBuilder(FixtureBuilder):
+        def build(self, mission, workspace, run_dir, allowed, correction):
+            result = super().build(mission, workspace, run_dir, allowed, correction)
+            data = workspace / "test_tasks.json"
+            if correction:
+                data.unlink(missing_ok=True)
+            else:
+                data.write_text("[]")
+            return result
+
+    builder = CleanupBuilder()
+    value = runtime(tmp_path, builder=builder)
+    cleanup_profile = profile(root)
+    cleanup_profile.allowed_write_paths.append("test_tasks.json")
+    cleanup_profile.generated_paths.append("test_tasks.json")
+    run_id = value.start(
+        project_id="fixture", workspace=root, mission="Create the bounded TODO fixture",
+        targeted_tests=[], full_tests=[[sys.executable, "-m", "pytest", "-q"]],
+        profile=cleanup_profile, builder_name="glm", reviewer_names=[], review_policy="none",
+    )
+    assert value.run_once(run_id)["status"] == "correcting"
+    assert value.get(run_id)["repair_request"]["stage"] == "cleanup"
+    assert value.run_once(run_id)["status"] == "needs_approval"
+    assert not (root / "test_tasks.json").exists()
 
 
 def test_pause_after_plan_review_does_not_repeat_the_review(tmp_path):
@@ -408,6 +437,7 @@ def test_http_bubble_start_passes_selectors_to_runtime(tmp_path):
         assert "never create a file or directory with that name" in run["mission"]
         assert run["profile"]["allowed_write_paths"] == ["todo.py", "test_todo.py", "todo.json", "test_tasks.json", "src/", "tests/"]
         assert run["full_tests"] == [["python3", "-m", "unittest", "discover", "-s", ".", "-p", "test*.py"]]
+        assert run["profile"]["generated_paths"] == ["todo.json", "test_tasks.json"]
         assert run["status"] == "needs_approval"
         assert run["evidence_directory"]
         assert run["progress"]["total"] == 4
