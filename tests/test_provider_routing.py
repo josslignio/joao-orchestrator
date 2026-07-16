@@ -270,6 +270,35 @@ def test_single_p1_triggers_one_bounded_repair_with_exact_finding(tmp_path):
     assert (folder / "builder-repair-1-evidence.json").is_file()
 
 
+def test_build_gate_p1_can_enter_the_same_bounded_repair(tmp_path):
+    root = git_workspace(tmp_path)
+
+    class P1AtFirstBuild(FixtureReviewer):
+        def __init__(self):
+            super().__init__("codex-fixture")
+            self.build_calls = 0
+
+        def review_stage(self, run, run_dir, stage):
+            if stage == "build":
+                self.build_calls += 1
+                self.decision = "p1" if self.build_calls == 1 else "pass"
+            else:
+                self.decision = "pass"
+            result = super().review_stage(run, run_dir, stage)
+            if stage == "build" and self.build_calls == 1:
+                result["finding"] = "P1: repair atomic write default directory"
+            return result
+
+    builder = FixtureBuilder()
+    reviewer = P1AtFirstBuild()
+    value = runtime(tmp_path, builder=builder, codex=reviewer)
+    run_id = start(value, root, reviewers=["codex"], policy="codex")
+    assert value.run_once(run_id)["status"] == "correcting"
+    assert value.get(run_id)["repair_request"]["stage"] == "build"
+    assert value.run_once(run_id)["status"] == "needs_approval"
+    assert value.get(run_id)["corrections_used"] == 1
+
+
 def test_pause_after_plan_review_does_not_repeat_the_review(tmp_path):
     root = git_workspace(tmp_path)
     entered = threading.Event()
