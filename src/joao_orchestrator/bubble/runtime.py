@@ -597,7 +597,38 @@ class RunRuntime:
 
         run = {"schema_version": 1, "run_id": run_id, "project_id": project_id, "workspace": str(workspace), "mission": mission, "status": "pending", "created_at": now(), "updated_at": now(), "current_step": "created", "profile": profile.to_dict(), "targeted_tests": targeted_tests, "full_tests": full_tests, "builder_name": builder_name, "builder_provider": builder_provider, "builder_model": builder_model, "builder_preflight": builder_preflight, "reviewer_names": reviewer_names, "reviewer_providers": reviewer_providers, "reviewer_models": reviewer_models, "reviewer_preflights": reviewer_preflights, "review_policy": review_policy, "review_semantics": review_semantics, "isolated_workspace": isolated_workspace, "codex_review": "codex" in reviewer_names, "corrections_used": 0, "max_corrections": 1, "tasks": tasks, "is_self_review": is_self_review, "no_review_label": review_policy == "none", "review_verified": False}
         atomic_write_text(folder / "mission.md", mission + "\n"); atomic_write_json(folder / "project-profile.json", profile.to_dict())
-        atomic_write_json(folder / "task-graph.json", {"tasks": tasks}); plan_data = {"status": "pending", "bounded": True, "max_corrections": 1, "builder_name": builder_name, "builder_provider": builder_provider, "builder_model": builder_model, "builder_preflight": builder_preflight, "reviewer_names": reviewer_names, "reviewer_preflights": reviewer_preflights, "review_policy": review_policy, "review_semantics": review_semantics, "is_self_review": is_self_review}; atomic_write_json(folder / "plan.json", plan_data); self._write(run)
+        atomic_write_json(folder / "task-graph.json", {"tasks": tasks})
+        plan_data = {
+            "status": "pending", "bounded": True, "max_corrections": 1,
+            "objective_verbatim": mission,
+            "implementation_scope": {
+                "workspace": str(workspace),
+                "allowed_write_paths": profile.allowed_write_paths,
+                "forbidden_paths": profile.forbidden_paths,
+                "external_dependencies": "forbidden unless the mission and human policy explicitly allow them",
+                "network": "forbidden for quick sandbox builds",
+            },
+            "validation_contract": {
+                "targeted_test_commands": targeted_tests,
+                "full_test_commands": full_tests,
+                "all_commands_must_pass": True,
+                "final_state": "needs_approval",
+                "requirements_source": "objective_verbatim and mission.md",
+            },
+            "execution_steps": [
+                {"gate": "plan", "action": "validate objective, scope, provider routing, and tests"},
+                {"gate": "build", "action": "implement every objective requirement only inside allowed paths"},
+                {"gate": "test", "action": "run every recorded targeted and full-test command"},
+                {"gate": "review", "action": "bind reviewer verdicts to the final diff hash"},
+                {"gate": "delivery", "action": "stop for explicit human approval"},
+            ],
+            "builder_name": builder_name, "builder_provider": builder_provider,
+            "builder_model": builder_model, "builder_preflight": builder_preflight,
+            "reviewer_names": reviewer_names, "reviewer_preflights": reviewer_preflights,
+            "review_policy": review_policy, "review_semantics": review_semantics,
+            "is_self_review": is_self_review,
+        }
+        atomic_write_json(folder / "plan.json", plan_data); self._write(run)
         self._event(run, "run_created", builder=builder_name, builder_provider=builder_provider, builder_model=builder_model, reviewers=reviewer_names, review_policy=review_policy, review_semantics=review_semantics, is_self_review=is_self_review); self._checkpoint(run)
         self._transition(run, RunStatus.PLANNING, "load profile and local memory")
         atomic_write_json(folder / "memory.json", self.memory.load(project_id)); plan_data["status"] = "ready"; plan_data["mission_sha256"] = hashlib.sha256(mission.encode()).hexdigest(); atomic_write_json(folder / "plan.json", plan_data)

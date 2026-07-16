@@ -195,6 +195,11 @@ def test_no_review_runs_real_builder_and_requires_human_approval(tmp_path):
     assert state["review_policy"] == "none"
     assert state["review_verified"] is False
     assert value.approve(run_id)["status"] == "accepted"
+    plan = json.loads((tmp_path / "state" / "runs" / run_id / "plan.json").read_text())
+    assert plan["objective_verbatim"] == "Create the bounded TODO fixture"
+    assert plan["implementation_scope"]["allowed_write_paths"] == ["todo.py", "tests/"]
+    assert plan["validation_contract"]["all_commands_must_pass"] is True
+    assert [step["gate"] for step in plan["execution_steps"]] == ["plan", "build", "test", "review", "delivery"]
 
 
 def test_reviewed_run_calls_every_gate_and_verifies_exact_diff(tmp_path):
