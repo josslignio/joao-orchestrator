@@ -243,6 +243,11 @@ def main() -> int:
             order = {item: index for index, item in enumerate(MATRIX)}
             report["rows"].sort(key=lambda row: order[(row["builder"], row["review_mode"])])
             (state_root / "matrix-report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        for row in report["rows"]:
+            if row.get("evidence"):
+                manifest = Path(row["evidence"]) / "manifest.json"
+                row["manifest_sha256"] = sha256(manifest) if manifest.is_file() else None
+        (state_root / "matrix-report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
         (state_root / "matrix-report.md").write_text(markdown(report))
         sums = [
             f"{sha256(state_root / name)}  {name}"
