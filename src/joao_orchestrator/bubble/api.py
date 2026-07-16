@@ -270,7 +270,9 @@ class LocalAPIServer:
         contract = (
             "Work only inside this disposable Git sandbox. Do not install packages, commit, "
             "push, access external paths, or modify the sandbox policy. Use only Python's "
-            "standard-library unittest framework for tests, and run the recorded test command.\n\n"
+            "standard-library unittest framework for tests, and run the recorded test command. "
+            "The term needs_approval names a JOAO runtime state: never create a file or directory "
+            "with that name.\n\n"
             "User task:\n" + mission
         )
         full_test = ["python3", "-m", "unittest", "discover", "-s", ".", "-p", "test*.py"]
