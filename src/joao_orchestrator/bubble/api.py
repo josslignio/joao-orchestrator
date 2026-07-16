@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import secrets
 import shlex
 import subprocess
@@ -13,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from ..domain.models import ProjectProfile
-from .runtime import RunRuntime, RuntimeStateError, claude_capability
+from .runtime import RunRuntime, RuntimeStateError
 
 
 HTML = """<!doctype html>
@@ -27,34 +25,47 @@ HTML = """<!doctype html>
 .state{font-weight:700}.composer{position:sticky;bottom:18px;background:#0d1117;padding-top:12px}
 textarea{width:100%;box-sizing:border-box;min-height:130px;border:1px solid #30363d;border-radius:12px;background:#161b22;color:#e6edf3;padding:15px;font:inherit;resize:vertical}
 button{background:#238636;border:1px solid #2ea043;color:white;border-radius:8px;padding:9px 14px;font-weight:700;margin-right:8px}.ghost{background:#21262d;border-color:#30363d}
+button:disabled{background:#30363d;border-color:#30363d;color:#8b949e;cursor:not-allowed}
 .modes{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.mode{border:1px solid #30363d;border-radius:8px;padding:8px 10px;color:#c9d1d9;cursor:pointer}.mode:has(input:checked){border-color:#58a6ff;background:#0c2d4a}.mode input{accent-color:#58a6ff}
 pre{white-space:pre-wrap;max-height:260px;overflow:auto;color:#c9d1d9}
+.summary{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin:12px 0;font-size:13px}
+label.no-review{color:#f85149;background:#3d1514;padding:4px 8px;border-radius:4px;font-weight:700}
+label.self-review{color:#d29922;background:#4d3800;padding:4px 8px;border-radius:4px;font-weight:700}
 </style>
 <main class="app"><div class="top"><div class="title">JOAO</div><div id="capabilities" class="muted">Chargement…</div></div>
 <div class="sub">Écris comme ici. JOAO pilote GLM, applique seulement les options que tu choisis, et conserve les preuves.</div>
 <section id="chat" class="chat"><div class="empty">Écris une première tâche pour tester JOAO dans son sandbox isolée.</div></section>
-<section class="composer"><textarea id="prompt" autofocus placeholder="Ex. Ajoute une fonction qui normalise un titre et les tests associés."></textarea>
+<section class="composer"><div class="muted">Disposable workspace</div><select id="workspace" style="width:100%;box-sizing:border-box;margin:8px 0;border:1px solid #30363d;border-radius:8px;background:#161b22;color:#e6edf3;padding:10px;font:inherit"><option value="quick-sandbox">Quick Sandbox (auto-generated)</option></select>
+<textarea id="prompt" autofocus placeholder="Ex. Ajoute une fonction qui normalise un titre et les tests associés."></textarea>
 <div class="muted">Moteur de construction — un seul à la fois</div><div class="modes">
 <label class="mode"><input type="radio" name="builder" value="glm" checked> GLM</label>
-<label class="mode"><input type="radio" name="builder" value="codex"> Codex</label>
-<label class="mode"><input type="radio" name="builder" value="claude"> Claude</label></div>
+<label class="mode"><input type="radio" name="builder" value="codex"> Codex</label></div>
 <div class="muted">Review indépendante à chaque gate (plan, diff, validation complète, livraison)</div><div class="modes">
+<label class="mode"><input type="radio" name="review" value="none"> No Review</label>
 <label class="mode"><input type="radio" name="review" value="codex" checked> Codex</label>
-<label class="mode"><input type="radio" name="review" value="claude"> Claude</label>
-<label class="mode"><input type="radio" name="review" value="codex_claude"> Codex + Claude</label>
-</div><button onclick="send()">Run</button><span class="muted">Le test est isolé : aucune modification de tes projets.</span></section></main>
+<label class="mode"><input type="radio" name="review" value="claude" disabled> Claude</label>
+<label class="mode"><input type="radio" name="review" value="codex_and_claude" disabled> Codex + Claude</label>
+</div>
+<div id="safety-summary" class="summary" style="display:none">Provider preflight check pending...</div>
+<button id="start-btn" onclick="send()" disabled>Run</button><span class="muted">Le test est isolé : aucune modification de tes projets.</span></section></main>
 <script>
 const TOKEN="__JOAO_TOKEN__";let active=null;const el=id=>document.getElementById(id);
 async function req(url,opt={}){opt.headers={...(opt.headers||{}),'X-JOAO-Token':TOKEN};const r=await fetch(url,opt),v=await r.json();if(!r.ok)throw Error(v.error||'request failed');return v}
 function esc(s){const n=document.createElement('span');n.textContent=s;return n.innerHTML}
-function show(v){el('chat').innerHTML='<div class="run"><div class="state">'+esc(v.status)+'</div><div class="muted">'+esc(v.current_step)+'</div><pre>'+esc(JSON.stringify(v,null,2))+'</pre><button class="ghost" onclick="act(\\'pause\\')">Pause après étape</button><button class="ghost" onclick="act(\\'resume\\')">Resume</button><button class="ghost" onclick="act(\\'stop\\')">Stop après étape</button><button class="ghost" onclick="act(\\'retry\\')">Retry</button><button class="ghost" onclick="act(\\'approve\\')">Approve</button></div>'}
+function show(v){const isSelfReview=v.is_self_review;const noReview=v.no_review_label;let reviewLabel='';if(noReview)reviewLabel='<label class="no-review">NO REVIEW — HUMAN APPROVAL REQUIRED</label>';else if(isSelfReview)reviewLabel='<label class="self-review">SELF-REVIEW — NOT INDEPENDENT</label>';const progress=v.progress||{completed:0,total:0};const files=v.changed_files?JSON.stringify(v.changed_files.changed_by_builder||[]):'pending';const tests=v.test_results?JSON.stringify(v.test_results):'pending';const review=v.review_findings?JSON.stringify(v.review_findings):'pending';el('chat').innerHTML='<div class="run"><div class="state">'+esc(v.status)+' · '+progress.completed+'/'+progress.total+' gates · '+esc(v.elapsed_seconds)+'s</div>'+reviewLabel+'<div class="muted">'+esc(v.current_step)+'</div><div>Run <code>'+esc(v.run_id)+'</code></div><div>Builder: '+esc(v.builder_provider)+' / '+esc(v.builder_model)+'</div><div>Review: '+esc(v.review_policy)+' ('+esc((v.reviewer_providers||[]).join(' + ')||'none')+')</div><div class="muted">Modified: '+esc(files)+'</div><div class="muted">Tests: '+esc(tests)+'</div><div class="muted">Review: '+esc(review)+'</div><div class="muted">Evidence: '+esc(v.evidence_directory)+'</div><button class="ghost" onclick="openEvidence()">Open evidence</button><button class="ghost" onclick="openDiff()">Open final diff</button><pre id="detail">'+esc(JSON.stringify(v,null,2))+'</pre><button class="ghost" onclick="act(\\'pause\\')">Pause après étape</button><button class="ghost" onclick="act(\\'resume\\')">Resume</button><button class="ghost" onclick="act(\\'stop\\')">Stop après étape</button><button class="ghost" onclick="act(\\'retry\\')">Retry</button><button class="ghost" onclick="act(\\'approve\\')">Approve</button><button class="ghost" onclick="act(\\'reject\\')">Reject</button></div>'}
 function selected(name){return document.querySelector('input[name="'+name+'"]:checked').value}
 async function send(){const mission=el('prompt').value.trim();if(!mission)return;try{const v=await req('/quick-missions',{method:'POST',body:JSON.stringify({mission,builder_name:selected('builder'),review_mode:selected('review')})});active=v.run_id;el('prompt').value='';poll()}catch(e){el('chat').innerHTML='<div class="run">'+esc(e.message)+'</div>'}}
 async function act(name){if(active){try{await req('/runs/'+active+'/'+name,{method:'POST'})}catch(e){el('chat').innerHTML='<div class="run">'+esc(e.message)+'</div>'}}poll()}
+async function openEvidence(){if(active){try{el('detail').textContent=JSON.stringify(await req('/runs/'+active+'/evidence-metadata'),null,2)}catch(e){el('detail').textContent=e.message}}}
+async function openDiff(){if(active){try{const v=await req('/runs/'+active+'/final-diff');el('detail').textContent=v.diff_content||v.error}catch(e){el('detail').textContent=e.message}}}
 async function poll(){if(!active)return;try{show(await req('/runs/'+active))}catch(_){}}
 function enableChoice(name,value,enabled){const input=document.querySelector('input[name="'+name+'"][value="'+value+'"]');input.disabled=!enabled;input.closest('.mode').style.opacity=enabled?'1':'.45'}
 function ensureChoice(name){const current=document.querySelector('input[name="'+name+'"]:checked');if(!current||current.disabled){const fallback=document.querySelector('input[name="'+name+'"]:not(:disabled)');if(fallback)fallback.checked=true}}
-async function caps(){const v=await req('/capabilities');enableChoice('builder','glm',v.glm.available);enableChoice('builder','codex',v.codex.available);enableChoice('builder','claude',v.claude.available);enableChoice('review','codex',v.codex.available);enableChoice('review','claude',v.claude.available);enableChoice('review','codex_claude',v.codex.available&&v.claude.available);ensureChoice('builder');ensureChoice('review');el('capabilities').textContent='GLM '+(v.glm.available?'prêt':'indisponible')+' · Codex '+(v.codex.available?'optionnel':'indisponible')+' · Claude '+(v.claude.available?'optionnel':'non configuré')}
+function updateSafetySummary(caps){const summary=[];if(caps.glm.available)summary.push('GLM: ready ('+caps.glm.executable+')');else summary.push('GLM: unavailable ('+caps.glm.reason+')');if(caps.codex.available)summary.push('Codex: ready ('+caps.codex.executable+')');else summary.push('Codex: unavailable ('+caps.codex.reason+')');summary.push('Claude: '+caps.claude.reason);const isSelfReview=selected('builder')==='codex'&&selected('review').includes('codex');const noReview=selected('review')==='none';if(isSelfReview)summary.push('WARNING: Self-review (Codex builder + Codex reviewer)');if(noReview)summary.push('WARNING: No-review policy - changes will NOT be independently reviewed');el('safety-summary').textContent=summary.join(' | ');el('safety-summary').style.display='block';el('safety-summary').style.color=(isSelfReview||noReview)?'#f85149':'#8b949e';}
+async function caps(){const v=await req('/capabilities');enableChoice('builder','glm',v.glm.available);enableChoice('builder','codex',v.codex.available);enableChoice('review','codex',v.codex.reviewer_available);enableChoice('review','claude',v.claude.reviewer_available);enableChoice('review','codex_and_claude',v.codex.reviewer_available&&v.claude.reviewer_available);ensureChoice('builder');ensureChoice('review');updateSafetySummary(v);el('capabilities').textContent='GLM '+(v.glm.available?'prêt':'indisponible')+' · Codex '+(v.codex.available?'prêt':'indisponible')+' · Claude '+(v.claude.available?'optionnel':'non configuré');validateSelection()}
+function validateSelection(){const builder=selected('builder');const review=selected('review');const capsPromise=req('/capabilities');capsPromise.then(v=>{let valid=el('workspace').value==='quick-sandbox'&&el('prompt').value.trim().length>0&&v[builder].available;if(review==='codex'&&!v.codex.reviewer_available)valid=false;if(review==='claude'&&!v.claude.reviewer_available)valid=false;if(review==='codex_and_claude'&&!(v.codex.reviewer_available&&v.claude.reviewer_available))valid=false;el('start-btn').disabled=!valid;updateSafetySummary(v)}).catch(()=>{el('start-btn').disabled=true})}
+document.querySelectorAll('input[name="builder"],input[name="review"]').forEach(i=>i.addEventListener('change',validateSelection));
+el('prompt').addEventListener('input',validateSelection);el('workspace').addEventListener('change',validateSelection);
 setInterval(poll,1200);caps();
 </script>"""
 
@@ -102,8 +113,12 @@ class LocalAPIServer:
                         return self.send(200, outer.capabilities())
                     if len(bits) == 2 and bits[0] == "runs":
                         return self.send(200, outer.runtime.get(bits[1]))
-                    if len(bits) == 3 and bits[2] == "events":
+                    if len(bits) == 3 and bits[0] == "runs" and bits[2] == "events":
                         return self.send(200, outer.runtime.events(bits[1]))
+                    if len(bits) == 3 and bits[0] == "runs" and bits[2] == "evidence-metadata":
+                        return self.send(200, outer.runtime.get_evidence_metadata(bits[1]))
+                    if len(bits) == 3 and bits[0] == "runs" and bits[2] == "final-diff":
+                        return self.send(200, outer.runtime.get_final_diff(bits[1]))
                     self.send(404, {"error": "not found"})
                 except RuntimeStateError as exc:
                     self.send(404, {"error": str(exc)})
@@ -132,19 +147,41 @@ class LocalAPIServer:
         self.server = ThreadingHTTPServer((host, port), Handler)
 
     def capabilities(self):
-        glm_builder = self.runtime.builders.get("glm")
-        glm_value = getattr(glm_builder, "executable", "") if glm_builder is not None else ""
-        glm_path = Path(glm_value).expanduser() if glm_value else None
-        glm_found = str(glm_path) if glm_path and glm_path.is_absolute() else shutil.which(str(glm_path or ""))
-        glm = {"available": bool(glm_found and Path(glm_found).is_file() and os.access(glm_found, os.X_OK))}
-        try:
-            codex_login = subprocess.run(["codex", "login", "status"], shell=False, capture_output=True, text=True, timeout=3)
-            codex = {"available": bool("codex" in self.runtime.builders and "codex" in self.runtime.reviewers and codex_login.returncode == 0 and "Logged in" in codex_login.stdout + codex_login.stderr)}
-        except (OSError, subprocess.TimeoutExpired):
-            codex = {"available": False}
-        claude = claude_capability()
-        claude.update({"available": False, "reason": "Claude has no configured JOAO quick-task adapter"})
-        return {"glm": glm, "codex": codex, "claude": claude}
+        def preflight(adapter, unavailable_reason):
+            base = {
+                "available": False, "executable": None, "model": None, "provider": None,
+                "reason": unavailable_reason, "auth_status": "unknown",
+                "config_status": "not_configured", "last_error": unavailable_reason,
+                "real_or_mock": "unknown",
+            }
+            if adapter is None:
+                return base
+            if not hasattr(adapter, "preflight"):
+                if self.runtime.allow_test_adapters:
+                    return {**base, "available": True, "provider": getattr(adapter, "provider", "test"),
+                            "model": getattr(adapter, "model", "test"), "real_or_mock": "mock",
+                            "reason": "test adapter", "config_status": "test", "last_error": None}
+                return base
+            try:
+                return {**base, **adapter.preflight()}
+            except Exception as exc:
+                return {**base, "reason": f"preflight exception: {exc}",
+                        "config_status": "error", "last_error": str(exc)}
+
+        glm = preflight(self.runtime.builders.get("glm"), "GLM builder not configured")
+        codex = preflight(self.runtime.builders.get("codex"), "Codex builder not configured")
+        codex_review = preflight(self.runtime.reviewers.get("codex"), "Codex reviewer not configured")
+        claude_review = preflight(self.runtime.reviewers.get("claude"), "Claude reviewer not configured")
+        codex.update({
+            "reviewer_available": bool(codex_review["available"]),
+            "reviewer_reason": codex_review["reason"],
+            "reviewer_model": codex_review["model"],
+            "reviewer_executable": codex_review["executable"],
+            "reviewer_last_error": codex_review["last_error"],
+        })
+        claude_review.update({"reviewer_available": bool(claude_review["available"])})
+        return {"glm": glm, "codex": codex, "claude": claude_review,
+                "workspace_lock": {"active_count": len(self._active_workspaces)}}
 
     @staticmethod
     def command(text):
@@ -154,9 +191,9 @@ class LocalAPIServer:
             raise ValueError("test command must not use a shell")
         return argv
 
-    def _start(self, project, workspace, mission, paths, full, target, builder_name, reviewer_names):
+    def _start(self, project, workspace, mission, paths, full, target, builder_name, reviewer_names, review_policy):
         profile = ProjectProfile(project_id=project, display_name=project, repository_root=str(workspace), allowed_write_paths=paths, forbidden_paths=[], approval_required=True)
-        run = self.runtime.start(project_id=project, workspace=workspace, mission=mission, targeted_tests=[target] if target else [], full_tests=[full], profile=profile, builder_name=builder_name, reviewer_names=reviewer_names)
+        run = self.runtime.start(project_id=project, workspace=workspace, mission=mission, targeted_tests=[target] if target else [], full_tests=[full], profile=profile, builder_name=builder_name, reviewer_names=reviewer_names, review_policy=review_policy)
         self.drive(run)
         return {"run_id": run, "status": "queued"}
 
@@ -173,40 +210,61 @@ class LocalAPIServer:
     def _quick_configuration(self, data):
         builder = str(data.get("builder_name", "glm"))
         mode = str(data.get("review_mode", "codex"))
-        if builder not in {"glm", "codex", "claude"} or mode not in {"codex", "claude", "codex_claude"}:
+
+        # Map review modes to reviewer names and policy
+        review_mapping = {
+            "none": ([], "none"),
+            "codex": (["codex"], "codex"),
+            "claude": (["claude"], "claude"),
+            "codex_and_claude": (["codex", "claude"], "codex_and_claude"),
+            "codex_claude": (["codex", "claude"], "codex_and_claude"),
+        }
+
+        if builder not in {"glm", "codex"} or mode not in review_mapping:
             raise ValueError("unknown builder or review mode")
-        if builder == "claude" or "claude" in mode:
-            capability = claude_capability()
-            detail = capability["reason"] or "the Claude reviewer adapter is not configured"
-            raise ValueError("Claude mode cannot run yet: " + detail + ". Choose GLM or Codex with Codex review.")
+
         capabilities = self.capabilities()
+
+        # Check builder availability
         if not capabilities[builder]["available"]:
-            raise ValueError("Selected builder is unavailable")
-        if not capabilities["codex"]["available"]:
-            raise ValueError("Codex review is unavailable")
+            raise ValueError(f"Selected builder is unavailable: {capabilities[builder]['reason']}")
+
+        # Check reviewer availability (skip for no-review)
+        reviewer_names, review_policy = review_mapping[mode]
+        for name in reviewer_names:
+            reviewer_available = capabilities[name].get("reviewer_available", capabilities[name]["available"])
+            if not reviewer_available:
+                prefix = "Claude mode cannot run yet" if name == "claude" else "Selected reviewer is unavailable"
+                raise ValueError(f"{prefix}: {capabilities[name]['reason']}")
+
+        # Check builder configuration
         if builder not in self.runtime.builders:
             raise ValueError("Selected builder is not configured: " + builder)
-        reviewers = ["codex"] if mode == "codex" else []
-        if not reviewers or any(name not in self.runtime.reviewers for name in reviewers):
+
+        # Check reviewer configuration (skip for no-review)
+        if reviewer_names and any(name not in self.runtime.reviewers for name in reviewer_names):
             raise ValueError("Selected reviewer is not configured")
-        return builder, reviewers
+
+        # Detect self-review
+        is_self_review = builder == "codex" and "codex" in reviewer_names
+        return builder, reviewer_names, review_policy, is_self_review
 
     def quick_launch(self, data):
         mission = str(data.get("mission", "")).strip()
         if not mission:
             raise ValueError("mission cannot be empty")
-        builder_name, reviewer_names = self._quick_configuration(data)
+        builder_name, reviewer_names, review_policy, is_self_review = self._quick_configuration(data)
         root = self.quick_sandbox()
         contract = "Work only in src/ and tests/. Do not install packages, commit, push, access external paths, or modify the sandbox policy. Run the tests.\n\nUser task:\n" + mission
-        return self._start("quick-sandbox", root, contract, ["src/", "tests/"], ["python3", "-m", "pytest", "-q"], [], builder_name, reviewer_names)
+        return self._start("quick-sandbox", root, contract, ["*"], ["python3", "-m", "pytest", "-q"], [], builder_name, reviewer_names, review_policy)
 
     def launch(self, data):
         root = Path(data["workspace"]).expanduser().resolve()
         paths = [str(path).strip() for path in data.get("allowed_paths", []) if str(path).strip()]
         if not paths:
             raise ValueError("at least one allowed write path is required")
-        builder_name = str(data.get("builder_name") or next(iter(self.runtime.builders)))
-        return self._start(str(data.get("project_id") or root.name), root, str(data["mission"]), paths, self.command(str(data["full_test_command"])), self.command(str(data["targeted_test_command"])) if str(data.get("targeted_test_command", "")).strip() else [], builder_name, ["codex"] if bool(data.get("codex_review", True)) else [])
+        builder_name, reviewer_names, review_policy, _ = self._quick_configuration(data)
+        return self._start(str(data.get("project_id") or root.name), root, str(data["mission"]), paths, self.command(str(data["full_test_command"])), self.command(str(data["targeted_test_command"])) if str(data.get("targeted_test_command", "")).strip() else [], builder_name, reviewer_names, review_policy)
 
     def drive(self, run_id):
         run = self.runtime.get(run_id)

@@ -44,7 +44,7 @@ def sandbox(tmp_path: Path):
 
 def runtime(tmp_path, builder, reviewer=None):
     adapter = SandboxBuilder(builder)
-    return RunRuntime(tmp_path / "state", builder=adapter, builders={"glm": adapter, "codex": adapter}, reviewer=reviewer or AcceptedReviewer(), profiles=LocalProfileAdapter())
+    return RunRuntime(tmp_path / "state", builder=adapter, builders={"glm": adapter, "codex": adapter}, reviewer=reviewer or AcceptedReviewer(), profiles=LocalProfileAdapter(), allow_test_adapters=True)
 
 
 def test_nominal_run_evidence_and_approval(tmp_path):

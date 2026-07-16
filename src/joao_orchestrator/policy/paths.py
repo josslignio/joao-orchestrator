@@ -28,6 +28,8 @@ def _matches_rule(path_str: str, rule: str) -> bool:
     norm = _norm(path_str)
     rule_norm = _norm(rule)
     name = norm.rsplit("/", 1)[-1]
+    if rule_norm in {"*", "**"}:
+        return True
     if rule_norm.startswith("*."):
         return name.endswith(rule_norm[1:])
     if rule_norm.endswith("/"):
