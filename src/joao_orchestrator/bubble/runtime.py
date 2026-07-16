@@ -55,6 +55,22 @@ def parse_review_verdict(text: str, marker: str) -> str:
     return matches[-1].upper() if matches else ""
 
 
+def extract_agent_finding(jsonl: str, marker: str) -> str:
+    messages: list[str] = []
+    for line in jsonl.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        item = event.get("item", {})
+        if item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+            messages.append(item["text"])
+    for message in reversed(messages):
+        if marker in message:
+            return message[-4000:]
+    return messages[-1][-4000:] if messages else ""
+
+
 def git_status_paths(workspace: Path) -> list[str]:
     result = subprocess.run(
         ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
@@ -309,7 +325,8 @@ class CodexCLIReviewer(ReviewerAdapter):
     def review_stage(self, run, run_dir, stage: str):
         start_time = now()
         workspace = Path(run["workspace"])
-        output = run_dir / f"codex-{stage}-review.jsonl"
+        repair_suffix = f"-repair-{run.get('corrections_used')}" if run.get("corrections_used") else ""
+        output = run_dir / f"codex-{stage}-review{repair_suffix}.jsonl"
         found = resolve_executable(self.executable, fallback=Path("~/.local/bin/codex"))
         if not found:
             return {"ok": False, "decision": "block", "stage": stage, "provider": self.provider, "model": self.model, "real_or_mock": "real", "reason": f"Codex executable not found at {self.executable}", "timestamp_start": start_time, "timestamp_end": now(), "returncode": -1, "last_error": "Executable not found"}
@@ -343,6 +360,7 @@ class CodexCLIReviewer(ReviewerAdapter):
         atomic_write_text(output, proc.stdout)
         text = proc.stdout + "\n" + proc.stderr
         verdict = parse_review_verdict(text, "JOAO_REVIEW")
+        finding = extract_agent_finding(proc.stdout, "JOAO_REVIEW")
         decision = {"ACCEPT": "pass", "P1": "p1", "BLOCK": "block"}.get(verdict, "block")
         after_paths = git_status_paths(workspace)
         reviewer_drift = sorted(set(after_paths) ^ set(before_paths))
@@ -353,6 +371,7 @@ class CodexCLIReviewer(ReviewerAdapter):
         return {
             "ok": proc.returncode == 0 and verdict == "ACCEPT" and not reviewer_drift,
             "decision": decision, "stage": stage, "verdict": verdict or "MISSING",
+            "finding": finding,
             "returncode": proc.returncode, "output": str(output),
             "output_sha256": digest(output), "stderr": proc.stderr[-4000:],
             "proof": {"verdict": verdict, "reviewed_diff_sha256": run.get("final_diff_sha256")},
@@ -786,7 +805,7 @@ class RunRuntime:
         if not decisions <= {"pass", "p1", "block"}:
             decisions.add("block")
         ok = all(item.get("ok") for item in reviews)
-        decision = "block" if "block" in decisions or not ok else "p1" if "p1" in decisions else "pass"
+        decision = "block" if "block" in decisions else "p1" if "p1" in decisions else "pass" if ok else "block"
         proofs = [item.get("proof", {}) for item in reviews]
         verified = stage == "final" and all(
             isinstance(proof, dict) and proof.get("verdict") == "ACCEPT"
@@ -800,7 +819,19 @@ class RunRuntime:
                   "review_semantics": run.get("review_semantics"),
                   "reviews": reviews, "proof": {"verdict": "ACCEPT" if verified else "MISSING", "reviewed_diff_sha256": run.get("final_diff_sha256") if verified else None}, "is_self_review": run.get("is_self_review", False), "no_review": run.get("review_policy") == "none"}
         atomic_write_json(folder / f"{stage}-review-evidence.json", review)
+        if run.get("corrections_used"):
+            atomic_write_json(folder / f"{stage}-review-evidence-repair-{run['corrections_used']}.json", review)
         return review
+
+    def _request_repair(self, run: dict[str, Any], review: dict[str, Any], stage: str) -> None:
+        findings = [
+            {"reviewer": item.get("reviewer"), "provider": item.get("provider"),
+             "decision": item.get("decision"), "finding": item.get("finding") or item.get("reason")}
+            for item in review.get("reviews", []) if item.get("decision") == "p1"
+        ]
+        run["repair_request"] = {"stage": stage, "findings": findings,
+                                 "final_diff_sha256": run.get("final_diff_sha256")}
+        self._write(run)
 
     def run_once(self, run_id: str) -> dict[str, Any]:
         with self._run_lock(run_id):
@@ -812,6 +843,11 @@ class RunRuntime:
             run["resume_skip_builder"] = False; self._write(run)
             return self._execute(run, False, building=True, skip_builder=True)
         if run["status"] == "correcting":
+            if run["corrections_used"] >= run["max_corrections"]:
+                self._transition(run, RunStatus.NEEDS_APPROVAL, "correction budget exhausted")
+                return run
+            run["corrections_used"] += 1
+            self._write(run)
             self._transition(run, RunStatus.BUILDING, "correction build")
             return self._execute(run, True, building=True)
         if run["status"] in {"failed", "blocked"}: return self.retry(run_id)
@@ -850,18 +886,29 @@ class RunRuntime:
                 with FileLock(folder / "builder", timeout=.01):
                     before = self._paths(workspace)
                     try:
-                        builder = self.builders[run["builder_name"]].build(run["mission"], workspace, folder, profile.allowed_write_paths, correction)
+                        builder_mission = run["mission"]
+                        if correction:
+                            builder_mission += (
+                                "\n\nJOAO BOUNDED REPAIR — address only this verified P1 and rerun tests:\n"
+                                + json.dumps(run.get("repair_request", {}), indent=2, sort_keys=True)
+                            )
+                        builder = self.builders[run["builder_name"]].build(builder_mission, workspace, folder, profile.allowed_write_paths, correction)
                     except Exception as exc:
                         builder = {"ok": False, "provider": self.builders[run["builder_name"]].provider, "reason": f"builder exception: {type(exc).__name__}: {exc}"}
             except LockAcquireError:
                 self._transition(run, RunStatus.BLOCKED, "second builder refused"); self._finalize(run); return run
-            after = self._paths(workspace); changed = sorted(set(after) - set(before)); violations = detect_path_violations(changed, profile)
+            after = self._paths(workspace); changed = after; violations = detect_path_violations(changed, profile)
             atomic_write_json(folder / "changed-paths.json", {"before": before, "after": after, "changed_by_builder": changed, "violations": violations})
             builder.setdefault("selected_builder", run["builder_name"])
             builder.setdefault("selected_provider", run["builder_provider"])
             builder.setdefault("selected_model", run["builder_model"])
             builder.setdefault("review_policy", run["review_policy"])
-            atomic_write_json(folder / "builder-evidence.json", builder)
+            evidence_path = folder / "builder-evidence.json"
+            if correction and evidence_path.exists() and not (folder / "builder-initial-evidence.json").exists():
+                atomic_write_json(folder / "builder-initial-evidence.json", json.loads(evidence_path.read_text()))
+            atomic_write_json(evidence_path, builder)
+            if correction:
+                atomic_write_json(folder / f"builder-repair-{run['corrections_used']}-evidence.json", builder)
         if self._apply_control(run):
             return run
         evidence_missing = []
@@ -883,6 +930,7 @@ class RunRuntime:
         if self._apply_control(run):
             return run
         if build_review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]:
+            self._request_repair(run, build_review, "build")
             self._transition(run, RunStatus.CORRECTING, "Codex build review P1; one repair permitted"); return run
         if not build_review.get("ok"):
             self._transition(run, RunStatus.BLOCKED, "Codex build review blocked"); self._finalize(run); return run
@@ -896,6 +944,7 @@ class RunRuntime:
         if self._apply_control(run):
             return run
         if test_review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]:
+            self._request_repair(run, test_review, "test")
             self._transition(run, RunStatus.CORRECTING, "test review P1; one repair permitted"); return run
         if not test_review.get("ok") or test_review.get("decision") == "block":
             self._transition(run, RunStatus.BLOCKED, "test review blocked"); self._finalize(run); return run
@@ -914,6 +963,7 @@ class RunRuntime:
                 run["review_verified"] = bool(review.get("ok") and proof.get("verdict") == "ACCEPT" and proof.get("reviewed_diff_sha256") == run["final_diff_sha256"])
             self._write(run)
             if review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]:
+                self._request_repair(run, review, "final")
                 self._transition(run, RunStatus.CORRECTING, "P1; one repair permitted"); return run
             if not review.get("ok") or review.get("decision") == "block":
                 self._transition(run, RunStatus.BLOCKED, "review blocked"); self._finalize(run); return run

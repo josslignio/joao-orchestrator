@@ -173,7 +173,6 @@ def execute_row(api: LocalAPIServer, state_root: Path, builder: str, review: str
     restored = runtime(state_root).get(run_id)
     row["restart_restored"] = restored["status"] == final["status"]
     row["final_diff_sha256"] = final.get("final_diff_sha256")
-    row["manifest_sha256"] = sha256(folder / "manifest.json") if (folder / "manifest.json").exists() else None
     row["scenario_status"] = "VERIFIED" if (
         final["status"] == "needs_approval" and row["real_provider_verified"]
         and row["tests"] == "PASS" and row["restart_restored"]
@@ -183,6 +182,7 @@ def execute_row(api: LocalAPIServer, state_root: Path, builder: str, review: str
     stopped = request(api, f"runs/{run_id}/stop", {})
     row["post_control_state"] = stopped["status"]
     row["stop"] = "VERIFIED" if stopped["status"] == "stopped" else "FAILED"
+    row["manifest_sha256"] = sha256(folder / "manifest.json") if (folder / "manifest.json").exists() else None
     return row
 
 
@@ -207,19 +207,41 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--state-root", type=Path)
     parser.add_argument("--timeout", type=int, default=2400)
+    parser.add_argument("--only", action="append", default=[], metavar="BUILDER:REVIEW")
+    parser.add_argument("--base-report", type=Path)
     args = parser.parse_args()
     state_root = (args.state_root or Path("~/.local/share/joao/acceptance").expanduser() / ("provider-routing-" + utc_stamp())).resolve()
     state_root.mkdir(parents=True, exist_ok=False)
     api = LocalAPIServer(runtime(state_root))
     api.serve_in_thread()
     try:
-        report = {
-            "schema_version": 1, "generated_at": datetime.now(timezone.utc).isoformat(),
-            "state_root": str(state_root), "mission_sha256": hashlib.sha256(MISSION.encode()).hexdigest(),
-            "preflight": api.capabilities(), "rows": [],
-        }
-        for builder, review in MATRIX:
+        if args.base_report:
+            report = json.loads(args.base_report.resolve().read_text())
+            report.setdefault("source_reports", []).append(str(args.base_report.resolve()))
+            report["generated_at"] = datetime.now(timezone.utc).isoformat()
+            report["state_root"] = str(state_root)
+            report["preflight"] = api.capabilities()
+        else:
+            report = {
+                "schema_version": 1, "generated_at": datetime.now(timezone.utc).isoformat(),
+                "state_root": str(state_root), "mission_sha256": hashlib.sha256(MISSION.encode()).hexdigest(),
+                "preflight": api.capabilities(), "rows": [], "source_reports": [],
+            }
+        selected = MATRIX
+        if args.only:
+            requested = {tuple(value.split(":", 1)) for value in args.only}
+            unknown = requested - set(MATRIX)
+            if unknown:
+                parser.error(f"unknown --only selections: {sorted(unknown)}")
+            selected = [item for item in MATRIX if item in requested]
+        for builder, review in selected:
+            report["rows"] = [
+                row for row in report["rows"]
+                if (row["builder"], row["review_mode"]) != (builder, review)
+            ]
             report["rows"].append(execute_row(api, state_root, builder, review, args.timeout))
+            order = {item: index for index, item in enumerate(MATRIX)}
+            report["rows"].sort(key=lambda row: order[(row["builder"], row["review_mode"])])
             (state_root / "matrix-report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
         (state_root / "matrix-report.md").write_text(markdown(report))
         sums = [
@@ -228,7 +250,8 @@ def main() -> int:
         ]
         (state_root / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n")
         print(json.dumps({"state_root": str(state_root), "rows": report["rows"]}, indent=2))
-        return 0 if all(row["scenario_status"] in {"VERIFIED", "PREFLIGHT_REFUSED"} for row in report["rows"]) else 1
+        complete = {(row["builder"], row["review_mode"]) for row in report["rows"]} == set(MATRIX)
+        return 0 if complete and all(row["scenario_status"] in {"VERIFIED", "PREFLIGHT_REFUSED"} for row in report["rows"]) else 1
     finally:
         api.close()
 

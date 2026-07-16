@@ -217,6 +217,40 @@ def test_stacked_review_requires_both_reviewers(tmp_path):
     assert value.run_once(run_id)["status"] == "blocked"
 
 
+def test_single_p1_triggers_one_bounded_repair_with_exact_finding(tmp_path):
+    root = git_workspace(tmp_path)
+
+    class P1AtFirstTest(FixtureReviewer):
+        def __init__(self):
+            super().__init__("codex-fixture")
+            self.test_calls = 0
+
+        def review_stage(self, run, run_dir, stage):
+            if stage == "test":
+                self.test_calls += 1
+                self.decision = "p1" if self.test_calls == 1 else "pass"
+            else:
+                self.decision = "pass"
+            result = super().review_stage(run, run_dir, stage)
+            if stage == "test" and self.test_calls == 1:
+                result["finding"] = "P1: verify persisted done and deleted state"
+            return result
+
+    builder = FixtureBuilder()
+    reviewer = P1AtFirstTest()
+    value = runtime(tmp_path, builder=builder, codex=reviewer)
+    run_id = start(value, root, reviewers=["codex"], policy="codex")
+    assert value.run_once(run_id)["status"] == "correcting"
+    first = value.get(run_id)
+    assert first["repair_request"]["stage"] == "test"
+    assert "persisted done" in first["repair_request"]["findings"][0]["finding"]
+    assert value.run_once(run_id)["status"] == "needs_approval"
+    assert builder.calls == 2
+    folder = tmp_path / "state" / "runs" / run_id
+    assert (folder / "builder-initial-evidence.json").is_file()
+    assert (folder / "builder-repair-1-evidence.json").is_file()
+
+
 def test_codex_self_review_is_labelled_not_independent(tmp_path):
     root = git_workspace(tmp_path)
     value = runtime(tmp_path)
