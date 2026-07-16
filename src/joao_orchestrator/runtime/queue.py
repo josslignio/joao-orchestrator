@@ -1346,6 +1346,7 @@ def _run_task_pipeline(meta: Any, profile: Any, task_store: Any,
             "RUNNING", reason="scheduler: provider running")
 
         # Provider dispatch.
+        # Fail-closed: non-fake engine without concrete adapter fails closed.
         if engine == "fake":
             from ..providers.fake_provider import FakeProvider
             from ..providers.base import ProviderRequest
@@ -1364,15 +1365,16 @@ def _run_task_pipeline(meta: Any, profile: Any, task_store: Any,
             )
             result = provider.invoke(req)
         else:
-            # Manual or other engine — no actual dispatch, just mark OK.
-            result = type("R", (), {"ok": True, "error": ""})()
+            # Manual or other engine — no concrete adapter available.
+            # Fail-closed: never create a synthetic result with ok=True.
+            return {"ok": False, "error": f"no concrete adapter for engine: {engine}"}
 
         if not result.ok:
-            return {"ok": False, "error": getattr(result, "error", "dispatch failed")}
+            return {"ok": False, "error": getattr(result, "error", "provider dispatch failed")}
 
         # Capture worktree state.
         capture = capture_worktree_state(
-            wt_path, provider_ok=True, provider_result={"engine": engine})
+            wt_path, provider_ok=result.ok, provider_result={"engine": engine})
         task_store.write_artifact_json(
             meta.project_id, meta.task_id,
             "changed_files.json", {"changed_files": capture.changed_files,
@@ -1415,12 +1417,19 @@ def _run_task_pipeline(meta: Any, profile: Any, task_store: Any,
                 all_ok = False
 
         # Write validation.json artifact (required by convergence).
+        # Record real return code and ok value for each command.
         from ..domain.models import ValidationRun
         vrun = ValidationRun(
             task_id=meta.task_id,
             ok=all_ok,
-            commands=[{"command": " ".join(c.args or []), "ok": True}
-                      for c in selected],
+            commands=[
+                {
+                    "command": " ".join(c.args or []),
+                    "ok": r.returncode == 0,
+                    "returncode": r.returncode,
+                }
+                for c, r in zip(selected, cmd_results)
+            ],
             violations=[str(r) for r in cmd_results if r.returncode != 0],
             started_at=now_iso(),
             finished_at=now_iso(),
@@ -1440,6 +1449,7 @@ def _run_task_pipeline(meta: Any, profile: Any, task_store: Any,
             "VALIDATED", reason="scheduler: validated")
 
         # Write review_packet.md (required by convergence).
+        # Use REVIEW_NOT_RUN until real independent evidence exists.
         changed_block = "\n".join(
             f"- `{p}`" for p in capture.changed_files
         ) if capture.changed_files else "_(no tracked changes)_"
@@ -1449,7 +1459,7 @@ def _run_task_pipeline(meta: Any, profile: Any, task_store: Any,
             f"- **Project:** `{meta.project_id}`\n"
             f"- **Generated:** {now_iso()}\n\n"
             f"## Changed Files\n{changed_block}\n\n"
-            f"## Verdict\nPASSED\n\n"
+            f"## Verdict\nREVIEW_NOT_RUN\n\n"
             "---\nEvidence only. No automatic commit, push, or merge.\n"
         )
         task_store.write_artifact_text(

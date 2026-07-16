@@ -217,9 +217,11 @@ def validate_review_json(
             return (f"finding[{i}] path outside allowed/changed files: "
                     f"{fpath!r}"), None
 
-    # Validate patch hash.
+    # Validate patch hash: mandatory field for fail-closed behavior.
     reviewed_hash = review.get("reviewed_patch_sha256", "")
-    if reviewed_hash and reviewed_hash != patch_sha256:
+    if not reviewed_hash:
+        return "missing required field: reviewed_patch_sha256", None
+    if reviewed_hash != patch_sha256:
         return "patch hash mismatch", None
 
     return None, ReviewResult.from_dict(review)
@@ -577,9 +579,6 @@ def run_convergence(
             final_state="FAILED",
             reviewer_calls=1)
 
-    # Now overwrite the hash with the canonical value for downstream use.
-    review_result.reviewed_patch_sha256 = patch_sha256
-
     # ---- Stage 7: Handle verdict ----
     if parsed.verdict == ReviewVerdict.PASS.value:
         # PASS: no fixer invocation.
@@ -810,9 +809,6 @@ def run_convergence(
             reviewer_calls=2,
             fixer_calls=1)
 
-    # Overwrite hash after validation.
-    final_review_result.reviewed_patch_sha256 = new_patch_sha
-
     store.write_artifact_json(task.project_id, task.task_id,
                               "final_review_result.json",
                               final_review_result.to_dict())
@@ -934,7 +930,11 @@ def _invoke_reviewer(
     context: dict, worktree_path: Path,
     profile: ProjectProfile,
 ) -> ReviewResult:
-    """Invoke a reviewer. Uses fake executable for tests, real for production."""
+    """Invoke a reviewer. Uses fake executable for tests, real for production.
+    
+    Fail-closed behavior: an unavailable or unimplemented real reviewer returns
+    BLOCKED/ERROR, never PASS. Fake behavior remains available only when explicitly
+    configured for tests."""
     provider = routing.get("selected_provider", "")
     exe = config.review_executable
     if exe:
@@ -963,10 +963,11 @@ def _invoke_reviewer(
             finished_at=config.now(),
         )
     # Real provider (codex-subscription, opencode-zai) not implemented here.
+    # Fail-closed: unavailable real reviewer returns BLOCKED/ERROR, never PASS.
     return ReviewResult(
-        verdict="PASS",
-        reason_code="no_reviewer_available",
-        summary=f"No reviewer implementation for {provider}",
+        verdict="BLOCKED",
+        reason_code="no_reviewer_implementation",
+        summary=f"No reviewer implementation for {provider} — reviewer unavailable or unimplemented",
         started_at=config.now(),
         finished_at=config.now(),
     )
@@ -977,7 +978,10 @@ def _invoke_fixer(
     fix_request: dict, worktree_path: Path,
     profile: ProjectProfile,
 ) -> Tuple[str, int, str]:
-    """Invoke a fixer. Returns (stdout, returncode, stderr)."""
+    """Invoke a fixer. Returns (stdout, returncode, stderr).
+    
+    Fail-closed behavior: an unavailable or unimplemented real fixer returns
+    non-zero failure, never a synthetic success."""
     exe = config.fix_executable
     if exe:
         return _run_fake_fixer(
@@ -987,7 +991,9 @@ def _invoke_fixer(
     provider = routing.get("selected_provider", "")
     if provider == "fake":
         return ("", 0, "")
-    return ("", 0, "")
+    # Real provider (codex-subscription, opencode-zai) not implemented here.
+    # Fail-closed: unavailable real fixer returns non-zero failure, never success.
+    return ("Fixer unavailable or unimplemented", 1, "")
 
 
 def _capture_changed_files(worktree_path: Path) -> List[str]:
