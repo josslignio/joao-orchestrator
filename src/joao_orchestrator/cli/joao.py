@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import webbrowser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]  # repo root (src/joao_orchestrator/cli/joao.py -> root)
@@ -25,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("version", help="print the product version + identity")
     ui = sub.add_parser("ui", help="start the local-only JOAO bubble")
     ui.add_argument("--state-root", default="~/.local/share/joao")
+    ui.add_argument("--no-open", action="store_true", help="do not open the local browser automatically")
 
     args = parser.parse_args(argv)
     if args.cmd == "autonomy":
@@ -39,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
         from joao_orchestrator.bubble.runtime import CodexCLIReviewer, GLMBuilder, RunRuntime
         server = LocalAPIServer(RunRuntime(Path(args.state_root).expanduser(), builder=GLMBuilder(), reviewer=CodexCLIReviewer()))
         print(server.url)
+        if not args.no_open:
+            webbrowser.open(server.url, new=2)
         try: server.server.serve_forever()
         except KeyboardInterrupt: server.close()
         return 0
