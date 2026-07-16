@@ -621,7 +621,7 @@ class ClaudeCLIReviewer(ReviewerAdapter):
             "concrete repair line. End with exactly CLAUDE_REVIEW: ACCEPT, "
             "CLAUDE_REVIEW: P1, or CLAUDE_REVIEW: BLOCK.\n\n" + run["mission"]
         )
-        argv = [found, "-p", prompt, "--max-turns", "8", "--output-format", "json",
+        argv = [found, "-p", prompt, "--max-turns", "24", "--output-format", "json",
                 "--permission-mode", "plan", "--tools", "Read,Grep,Glob"]
         workspace = Path(run["workspace"])
         before_paths = git_status_paths(workspace)
