@@ -6,6 +6,16 @@ Run the canonical CLI with the ui argument. It listens only on the loopback
 interface and prints the URL. No scheduler, cloud service, product repository
 or product runtime is started.
 
+The browser opens a JOAO Command Center. Write the prompt in the Mission
+field, select the local Git worktree, list the write paths that the mission may
+change, and provide an explicit full-test command. Clicking Lancer avec GLM
+creates a persistent mission and dispatches the configured GLM builder.
+
+Codex is run in read-only mode at the plan, build and final gates. A final
+human approval remains required. Claude is shown only as an optional secondary
+review capability; it is unavailable until a real local Claude CLI is
+installed and authenticated.
+
 ## States and controls
 
 The persisted states are pending, planning, ready, building, testing,

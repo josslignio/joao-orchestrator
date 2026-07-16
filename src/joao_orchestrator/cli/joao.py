@@ -36,8 +36,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "ui":
         from joao_orchestrator.bubble.api import LocalAPIServer
-        from joao_orchestrator.bubble.runtime import CodexEvidenceReviewer, GLMBuilder, RunRuntime
-        server = LocalAPIServer(RunRuntime(Path(args.state_root).expanduser(), builder=GLMBuilder(), reviewer=CodexEvidenceReviewer()))
+        from joao_orchestrator.bubble.runtime import CodexCLIReviewer, GLMBuilder, RunRuntime
+        server = LocalAPIServer(RunRuntime(Path(args.state_root).expanduser(), builder=GLMBuilder(), reviewer=CodexCLIReviewer()))
         print(server.url)
         try: server.server.serve_forever()
         except KeyboardInterrupt: server.close()

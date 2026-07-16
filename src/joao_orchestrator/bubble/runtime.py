@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 import secrets
+import shutil
 import subprocess
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
@@ -155,6 +158,64 @@ class CodexEvidenceReviewer(ReviewerAdapter):
         return {"ok": data.get("verdict") == "ACCEPT", "decision": data.get("decision", "pass"), "proof": data}
 
 
+class CodexCLIReviewer(ReviewerAdapter):
+    """Run a real local Codex review, fail-closed on an ambiguous result."""
+    provider = "codex-subscription"; model = "local-codex-review"
+
+    def __init__(self, executable: str = "codex", timeout: int = 900):
+        self.executable = executable
+        self.timeout = timeout
+
+    def available(self) -> bool:
+        return bool(shutil.which(self.executable) and Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().exists())
+
+    def review_stage(self, run, run_dir, stage: str):
+        workspace = Path(run["workspace"])
+        output = run_dir / f"codex-{stage}-review.jsonl"
+        prompt = (
+            "You are the independent JOAO reviewer. Work read-only. Review the "
+            f"{stage} gate for this bounded mission:\\n\\n{run['mission']}\\n\\n"
+            "Inspect only the current worktree, task evidence and git diff. Do not "
+            "edit, commit, push, install packages or call external services. At the "
+            "end, print exactly one final line: JOAO_REVIEW: ACCEPT, JOAO_REVIEW: P1, "
+            "or JOAO_REVIEW: BLOCK. A P1 must name the concrete repair."
+        )
+        argv = [self.executable, "exec", "--json", "--sandbox", "read-only",
+                "-C", str(workspace), prompt]
+        try:
+            proc = subprocess.run(argv, cwd=str(workspace), shell=False, capture_output=True,
+                                  text=True, timeout=self.timeout)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {"ok": False, "decision": "block", "stage": stage,
+                    "reason": f"Codex reviewer unavailable: {exc}"}
+        atomic_write_text(output, proc.stdout)
+        text = proc.stdout + "\\n" + proc.stderr
+        match = re.findall(r"JOAO_REVIEW:\\s*(ACCEPT|P1|BLOCK)", text, flags=re.I)
+        verdict = match[-1].upper() if match else ""
+        decision = {"ACCEPT": "pass", "P1": "p1", "BLOCK": "block"}.get(verdict, "block")
+        return {
+            "ok": proc.returncode == 0 and verdict == "ACCEPT",
+            "decision": decision, "stage": stage, "verdict": verdict or "MISSING",
+            "returncode": proc.returncode, "output": str(output),
+            "output_sha256": digest(output), "stderr": proc.stderr[-4000:],
+            "proof": {"verdict": verdict, "reviewed_diff_sha256": run.get("final_diff_sha256")},
+        }
+
+    def review(self, run, run_dir):
+        return self.review_stage(run, run_dir, "final")
+
+
+def claude_capability() -> dict[str, Any]:
+    """Report only a real local Claude CLI; never pretend it is connected."""
+    executable = shutil.which("claude")
+    return {
+        "available": bool(executable),
+        "provider": "claude-cli",
+        "mode": "optional_secondary_review",
+        "reason": "" if executable else "Claude CLI is not installed or not on PATH",
+    }
+
+
 class RunRuntime:
     """Persistent CP2 state machine, evidence writer and bounded repair loop."""
     def __init__(self, state_root: Path, *, builder: BuilderAdapter, reviewer: ReviewerAdapter | None = None, tests: TestRunnerAdapter | None = None, memory: MemoryAdapter | None = None, profiles: ProjectProfileAdapter | None = None):
@@ -184,6 +245,8 @@ class RunRuntime:
     def start(self, *, project_id: str, workspace: Path, mission: str, targeted_tests: list[list[str]], full_tests: list[list[str]], profile: ProjectProfile | None = None) -> str:
         workspace = Path(workspace).resolve()
         if not workspace.is_dir() or not (workspace / ".git").exists(): raise RuntimeStateError("workspace must be a local Git worktree")
+        if not mission.strip(): raise RuntimeStateError("mission cannot be empty")
+        if not full_tests: raise RuntimeStateError("at least one explicit full-test command is required")
         profile = profile or self.profiles.load(project_id, workspace)
         if Path(profile.repository_root).resolve() != workspace: raise RuntimeStateError("profile workspace mismatch")
         baseline_violations = detect_path_violations(self._paths(workspace), profile)
@@ -223,6 +286,19 @@ class RunRuntime:
         folder = self._dir(run["run_id"]); atomic_write_json(folder / "final-status.json", {"status": run["status"], "last_checkpoint": run.get("last_checkpoint")})
         files = sorted(path for path in folder.rglob("*") if path.is_file() and path.name != "manifest.json")
         atomic_write_json(folder / "manifest.json", {"schema_version": 1, "run_id": run["run_id"], "files": [{"path": str(path.relative_to(folder)), "sha256": digest(path), "bytes": path.stat().st_size} for path in files]})
+    def _review_gate(self, run: dict[str, Any], stage: str) -> dict[str, Any]:
+        folder = self._dir(run["run_id"])
+        if hasattr(self.reviewer, "review_stage"):
+            review = self.reviewer.review_stage(run, folder, stage)
+        elif stage == "final":
+            review = self.reviewer.review(run, folder)
+        else:
+            review = {"ok": True, "decision": "pass", "stage": stage, "skipped": "legacy reviewer"}
+        atomic_write_json(folder / f"{stage}-review-evidence.json", review)
+        self._event(run, "review_completed", stage=stage, provider=self.reviewer.provider,
+                    decision=review.get("decision", "block"))
+        return review
+
     def run_once(self, run_id: str) -> dict[str, Any]:
         run = self._read(run_id)
         if run["status"] == "paused" or run["status"] == "needs_approval": return run
@@ -231,6 +307,9 @@ class RunRuntime:
             return self._execute(run, True, building=True)
         if run["status"] in {"failed", "blocked"}: return self.retry(run_id)
         if run["status"] != "ready": raise RuntimeStateError("run cannot execute from " + run["status"])
+        plan_review = self._review_gate(run, "plan")
+        if not plan_review.get("ok"):
+            self._transition(run, RunStatus.BLOCKED, "Codex plan review blocked"); self._finalize(run); return run
         return self._execute(run, False)
     def retry(self, run_id: str) -> dict[str, Any]:
         run = self._read(run_id)
@@ -255,11 +334,16 @@ class RunRuntime:
             self._transition(run, RunStatus.BLOCKED, "builder failed or outside scope"); self._finalize(run); return run
         patch = subprocess.run(["git", "diff", "--binary", "--no-ext-diff", "--no-textconv"], cwd=str(workspace), shell=False, capture_output=True, check=True).stdout
         atomic_write_text(folder / "final-diff.patch", patch.decode(errors="replace")); run["final_diff_sha256"] = digest(folder / "final-diff.patch"); run["tasks"][1]["status"] = "completed"; self._write(run)
+        build_review = self._review_gate(run, "build")
+        if build_review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]:
+            self._transition(run, RunStatus.CORRECTING, "Codex build review P1; one repair permitted"); return run
+        if not build_review.get("ok"):
+            self._transition(run, RunStatus.BLOCKED, "Codex build review blocked"); self._finalize(run); return run
         self._transition(run, RunStatus.TESTING, "targeted and full tests")
         results = [self.tests.run(argv, workspace, profile.command_timeout_seconds) for argv in run["targeted_tests"] + run["full_tests"]]; atomic_write_json(folder / "test-results.json", {"results": results, "all_passed": all(item["ok"] for item in results)})
         if not all(item["ok"] for item in results): self._transition(run, RunStatus.FAILED, "tests failed"); self._finalize(run); return run
         run["tasks"][2]["status"] = "completed"; self._transition(run, RunStatus.REVIEWING, "independent review")
-        review = self.reviewer.review(run, folder); atomic_write_json(folder / "review-evidence.json", review)
+        review = self._review_gate(run, "final"); atomic_write_json(folder / "review-evidence.json", review)
         proof = review.get("proof", {})
         run["review_verified"] = bool(review.get("ok") and proof.get("verdict") == "ACCEPT" and proof.get("reviewed_diff_sha256") == run["final_diff_sha256"])
         self._write(run)
