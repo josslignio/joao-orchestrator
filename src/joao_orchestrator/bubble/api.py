@@ -72,13 +72,6 @@ class LocalAPIServer:
     def drive(self,run_id):
         run=self.runtime.get(run_id)
         workspace=str(Path(run["workspace"]).resolve())
-        with self._dispatch_lock:
-            prior=self._active_workspaces.get(workspace)
-            if prior and prior != run_id and self.workers.get(prior) and self.workers[prior].is_alive():
-                raise RuntimeStateError("another JOAO builder is active for this worktree")
-            existing=self.workers.get(run_id)
-            if existing and existing.is_alive():
-                raise RuntimeStateError("this run is already being dispatched")
         def worker():
             try:
                 while True:
@@ -92,7 +85,7 @@ class LocalAPIServer:
         thread=threading.Thread(target=worker,name="joao-"+run_id,daemon=True)
         with self._dispatch_lock:
             prior=self._active_workspaces.get(workspace)
-            if prior and prior != run_id and self.workers.get(prior) and self.workers[prior].is_alive():
+            if prior and self.workers.get(prior) and self.workers[prior].is_alive():
                 raise RuntimeStateError("another JOAO builder is active for this worktree")
             self.workers[run_id]=thread;self._active_workspaces[workspace]=run_id
         thread.start();return {"run_id":run_id,"status":"queued"}

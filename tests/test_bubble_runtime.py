@@ -10,6 +10,7 @@ import pytest
 
 from joao_orchestrator.bubble.api import LocalAPIServer
 from joao_orchestrator.bubble.runtime import LocalProfileAdapter, RunRuntime, RuntimeStateError, SandboxBuilder
+from joao_orchestrator.domain.models import ProjectProfile
 
 
 class AcceptedReviewer:
@@ -122,4 +123,31 @@ def test_console_rejects_missing_token(tmp_path):
     with pytest.raises(urllib.error.HTTPError) as error:
         urllib.request.urlopen(request, timeout=10)
     assert error.value.code == 401
+    api.close()
+
+
+def test_console_refuses_duplicate_dispatch_for_same_worktree(tmp_path):
+    work = sandbox(tmp_path)
+    started = __import__("threading").Event()
+    release = __import__("threading").Event()
+    def build(_, workspace, __):
+        started.set()
+        assert release.wait(5)
+        (workspace / "module.py").write_text("VALUE = 2\n")
+        return {"ok": True}
+    api = LocalAPIServer(runtime(tmp_path, build, AcceptedReviewer()))
+    api.serve_in_thread()
+    run = api.runtime.start(
+        project_id="fixture", workspace=work, mission="Fix value",
+        targeted_tests=[], full_tests=[[sys.executable, "test_module.py"]],
+        profile=ProjectProfile(project_id="fixture", display_name="fixture",
+                               repository_root=str(work), allowed_write_paths=["module.py"],
+                               forbidden_paths=[]),
+    )
+    api.drive(run)
+    assert started.wait(5)
+    with pytest.raises(RuntimeStateError, match="another JOAO builder"):
+        api.drive(run)
+    release.set()
+    api.workers[run].join(timeout=5)
     api.close()
