@@ -27,7 +27,7 @@ def main() -> int:
         "LSMinimumSystemVersion": "12.0",
         "NSHighResolutionCapable": True,
     }
-    launcher = "#!/bin/zsh\\n" + f"exec /usr/bin/env python3 {REPO / 'src/joao_orchestrator/cli/joao.py'} ui\\n"
+    launcher = "#!/bin/zsh\n" + f"exec /usr/bin/env python3 {REPO / 'src/joao_orchestrator/cli/joao.py'} ui\n"
     write(contents / "Info.plist", plistlib.dumps(info))
     write(contents / "MacOS" / "JOAO Command Center", launcher.encode("utf-8"), 0o755)
     print(APP)
