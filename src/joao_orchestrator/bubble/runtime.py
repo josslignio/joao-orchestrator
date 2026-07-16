@@ -51,6 +51,93 @@ def resolve_executable(configured: str | Path, *, fallback: Path | None = None) 
     return None
 
 
+def resolve_claude_executable(configured: str | Path = "claude") -> str | None:
+    """Resolve Claude for both Terminal and minimal-PATH macOS app launches."""
+    configured_path = Path(configured).expanduser()
+    candidates: list[str | Path] = [configured]
+    if not configured_path.is_absolute():
+        candidates.append(shutil.which("claude") or "")
+    candidates.extend([
+        Path("~/.local/bin/claude").expanduser(),
+        Path("/opt/homebrew/bin/claude"),
+        Path("/usr/local/bin/claude"),
+    ])
+    seen: set[str] = set()
+    for value in candidates:
+        if not value:
+            continue
+        text = str(value)
+        if text in seen:
+            continue
+        seen.add(text)
+        path = Path(text).expanduser()
+        if path.is_absolute() and path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+        if not path.is_absolute() and (found := shutil.which(text)):
+            return found
+    return None
+
+
+def probe_claude_cli(executable: str | Path, model: str) -> dict[str, Any]:
+    """Perform the bounded subscription-backed Claude CLI proof required by JOAO."""
+    started = now()
+    found = resolve_claude_executable(executable)
+    base = {
+        "provider": "anthropic-claude-code-subscription", "model": model,
+        "requested_model": model, "actual_model": None, "real_or_mock": "real",
+        "mode": "subscription_cli", "executable": found or str(executable),
+        "timestamp_start": started,
+    }
+    if not found:
+        return {**base, "available": False, "config_status": "not_configured",
+                "auth_status": "unknown", "returncode": -1,
+                "timestamp_end": now(), "last_error": "Executable not found",
+                "reason": "Claude Code CLI is not installed or visible to the macOS Bubble"}
+    try:
+        version_result = subprocess.run([found, "--version"], shell=False,
+                                        capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {**base, "available": False, "config_status": "error",
+                "auth_status": "unknown", "returncode": -1,
+                "timestamp_end": now(), "last_error": str(exc),
+                "reason": "Claude Code version preflight failed"}
+    version = (version_result.stdout or version_result.stderr).strip()[:200]
+    if version_result.returncode != 0:
+        return {**base, "available": False, "version": version,
+                "config_status": "error", "auth_status": "unknown",
+                "returncode": version_result.returncode, "timestamp_end": now(),
+                "last_error": version or "version command failed",
+                "reason": "Claude Code version preflight failed"}
+    prompt = "Reply with exactly: CLAUDE_JOAO_OK"
+    argv = [found, "-p", prompt, "--max-turns", "1", "--output-format", "json"]
+    try:
+        result = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=90)
+        payload = json.loads(result.stdout) if result.stdout.strip() else {}
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+        return {**base, "available": False, "version": version,
+                "config_status": "configured", "auth_status": "error",
+                "adapter_command": argv, "returncode": -1,
+                "timestamp_end": now(), "last_error": str(exc),
+                "reason": "Claude Code bounded authentication preflight could not be verified"}
+    model_usage = payload.get("modelUsage") if isinstance(payload, dict) else None
+    actual_model = payload.get("model") if isinstance(payload, dict) else None
+    if not actual_model and isinstance(model_usage, dict) and model_usage:
+        actual_model = next(iter(model_usage))
+    response = payload.get("result") if isinstance(payload, dict) else None
+    available = (
+        result.returncode == 0 and payload.get("is_error") is not True
+        and response == "CLAUDE_JOAO_OK"
+    )
+    error = None if available else str(response or result.stderr or "bounded preflight reply mismatch")[-500:]
+    return {**base, "available": available, "version": version,
+            "actual_model": actual_model, "config_status": "configured",
+            "auth_status": "logged_in" if available else "not_logged_in",
+            "adapter_command": argv, "returncode": result.returncode,
+            "timestamp_end": now(), "last_error": error,
+            "reason": ("Claude Code CLI is available and authenticated through its subscription"
+                       if available else "Claude Code CLI is installed but its bounded subscription preflight failed")}
+
+
 def parse_review_verdict(text: str, marker: str) -> str:
     matches = re.findall(rf"{re.escape(marker)}:\s*(ACCEPT|P1|BLOCK)", text, flags=re.I)
     return matches[-1].upper() if matches else ""
@@ -105,8 +192,8 @@ class RunStatus(str, Enum):
 NEXT = {
     RunStatus.PENDING: {RunStatus.PLANNING, RunStatus.STOPPED},
     RunStatus.PLANNING: {RunStatus.READY, RunStatus.FAILED, RunStatus.STOPPED},
-    RunStatus.READY: {RunStatus.BUILDING, RunStatus.BLOCKED, RunStatus.PAUSED, RunStatus.STOPPED},
-    RunStatus.BUILDING: {RunStatus.TESTING, RunStatus.CORRECTING, RunStatus.BLOCKED, RunStatus.FAILED, RunStatus.PAUSED, RunStatus.STOPPED},
+    RunStatus.READY: {RunStatus.BUILDING, RunStatus.NEEDS_APPROVAL, RunStatus.BLOCKED, RunStatus.PAUSED, RunStatus.STOPPED},
+    RunStatus.BUILDING: {RunStatus.TESTING, RunStatus.NEEDS_APPROVAL, RunStatus.CORRECTING, RunStatus.BLOCKED, RunStatus.FAILED, RunStatus.PAUSED, RunStatus.STOPPED},
     RunStatus.TESTING: {RunStatus.REVIEWING, RunStatus.CORRECTING, RunStatus.FAILED, RunStatus.BLOCKED, RunStatus.PAUSED, RunStatus.STOPPED},
     RunStatus.REVIEWING: {RunStatus.NEEDS_APPROVAL, RunStatus.CORRECTING, RunStatus.BLOCKED, RunStatus.FAILED, RunStatus.PAUSED, RunStatus.STOPPED},
     RunStatus.CORRECTING: {RunStatus.BUILDING, RunStatus.NEEDS_APPROVAL, RunStatus.BLOCKED, RunStatus.FAILED, RunStatus.STOPPED},
@@ -286,6 +373,86 @@ class CodexBuilder(BuilderAdapter):
         return {"ok": proc.returncode == 0, "provider": self.provider, "model": self.model, "executable": found, "adapter_command": argv[:-1], "real_or_mock": "real", "returncode": proc.returncode, "stdout": proc.stdout[-4000:], "stderr": proc.stderr[-4000:], "output": str(events), "output_sha256": digest(events), "last_message": str(output), "last_message_sha256": digest(output) if output.exists() else None, "timestamp_start": start_time, "timestamp_end": now(), "evidence_paths": [str(events), str(output), str(task)]}
 
 
+class ClaudeBuilder(BuilderAdapter):
+    """Use one bounded Claude Code subscription process as the selected builder."""
+
+    provider = "anthropic-claude-code-subscription"
+    model = "claude-cli-configured-default"
+
+    def __init__(self, executable: str = "claude", timeout: int = 900,
+                 model: str = "claude-cli-configured-default"):
+        self.executable = executable
+        self.timeout = timeout
+        self.model = model
+        self._preflight_cache: dict[str, Any] | None = None
+
+    def preflight(self) -> dict[str, Any]:
+        if self._preflight_cache is None:
+            self._preflight_cache = probe_claude_cli(self.executable, self.model)
+        return dict(self._preflight_cache)
+
+    def build(self, mission, workspace, run_dir, allowed, correction):
+        started = now()
+        capability = self.preflight()
+        found = capability.get("executable")
+        task = run_dir / ("claude-correction-task.md" if correction else "claude-builder-task.md")
+        output = run_dir / ("claude-correction.json" if correction else "claude-builder.json")
+        atomic_write_text(task, mission)
+        if not capability.get("available") or not found:
+            atomic_write_json(output, {"preflight": capability})
+            return {
+                "ok": False, "provider": self.provider, "model": self.model,
+                "actual_model": capability.get("actual_model"), "executable": found,
+                "real_or_mock": "real", "reason": capability.get("reason"),
+                "last_error": capability.get("last_error"), "returncode": -1,
+                "timestamp_start": started, "timestamp_end": now(),
+                "evidence_paths": [str(output), str(task)],
+            }
+        prompt = (
+            "Act as JOAO's bounded builder. Work only in the current disposable Git "
+            "workspace. You may use only Read, Edit, Write, Glob and Grep; shell, network, "
+            "package installation, commit, push and deployment are forbidden. Modify only "
+            f"these allowed paths: {', '.join(allowed)}. Implement the mission fully. "
+            "JOAO will execute the tests after you finish.\n\n" + mission
+        )
+        argv = [
+            found, "-p", prompt, "--max-turns", "12", "--output-format", "json",
+            "--permission-mode", "acceptEdits", "--tools", "Read,Edit,Write,Glob,Grep",
+        ]
+        try:
+            result = subprocess.run(argv, cwd=str(workspace), shell=False,
+                                    capture_output=True, text=True, timeout=self.timeout)
+            payload = json.loads(result.stdout) if result.stdout.strip() else {}
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            atomic_write_json(output, {"error": str(exc)})
+            return {
+                "ok": False, "provider": self.provider, "model": self.model,
+                "actual_model": capability.get("actual_model"), "executable": found,
+                "adapter_command": argv[:-9] + argv[-8:], "real_or_mock": "real",
+                "reason": f"Claude builder failed: {exc}", "last_error": str(exc),
+                "returncode": -1, "timestamp_start": started, "timestamp_end": now(),
+                "evidence_paths": [str(output), str(task)],
+            }
+        atomic_write_text(output, result.stdout)
+        model_usage = payload.get("modelUsage") if isinstance(payload, dict) else None
+        actual_model = payload.get("model") if isinstance(payload, dict) else None
+        if not actual_model and isinstance(model_usage, dict) and model_usage:
+            actual_model = next(iter(model_usage))
+        provider_error = payload.get("is_error") is True
+        return {
+            "ok": result.returncode == 0 and not provider_error,
+            "provider": self.provider, "model": self.model,
+            "actual_model": actual_model or capability.get("actual_model"),
+            "executable": found, "adapter_command": argv[:2] + argv[3:],
+            "real_or_mock": "real", "returncode": result.returncode,
+            "stderr": result.stderr[-4000:],
+            "last_error": str(payload.get("result"))[-500:] if provider_error else None,
+            "output": str(output), "output_sha256": digest(output),
+            "timestamp_start": started, "timestamp_end": now(),
+            "evidence_paths": [str(output), str(task)],
+        }
+
+
 class CodexEvidenceReviewer(ReviewerAdapter):
     provider = "codex"; model = "independent-exact-sha"
     def preflight(self):
@@ -398,58 +565,45 @@ class CodexCLIReviewer(ReviewerAdapter):
 class ClaudeCLIReviewer(ReviewerAdapter):
     """Optional real Claude CLI reviewer; absence is an explicit preflight refusal."""
 
-    provider = "anthropic-claude-cli"; model = "claude-cli-configured-default"
+    provider = "anthropic-claude-code-subscription"; model = "claude-cli-configured-default"
 
     def __init__(self, executable: str = "claude", timeout: int = 900):
         self.executable = executable
         self.timeout = timeout
+        self._preflight_cache: dict[str, Any] | None = None
 
     def preflight(self) -> dict[str, Any]:
-        found = resolve_executable(self.executable, fallback=Path("~/.local/bin/claude"))
-        base = {
-            "provider": self.provider, "model": self.model,
-            "real_or_mock": "real", "mode": "optional_secondary_review",
-            "executable": found,
-        }
-        if not found:
-            return {**base, "available": False, "config_status": "not_configured",
-                    "auth_status": "unknown", "last_error": "Executable not found",
-                    "reason": "Claude CLI is not installed or not available to JOAO"}
-        try:
-            result = subprocess.run([found, "--version"], shell=False, capture_output=True,
-                                    text=True, timeout=3)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return {**base, "available": False, "config_status": "error",
-                    "auth_status": "unknown", "last_error": str(exc),
-                    "reason": f"Claude CLI preflight failed: {exc}"}
-        if result.returncode != 0:
-            error = (result.stderr or result.stdout)[-500:]
-            return {**base, "available": False, "config_status": "error",
-                    "auth_status": "unknown", "last_error": error,
-                    "reason": "Claude CLI version check failed"}
-        return {**base, "available": True, "config_status": "configured",
-                "auth_status": "cli_available", "last_error": None,
-                "reason": "Claude CLI is available; authentication is verified on invocation"}
+        if self._preflight_cache is None:
+            self._preflight_cache = probe_claude_cli(self.executable, self.model)
+            self._preflight_cache["mode"] = "read_only_review"
+        return dict(self._preflight_cache)
 
     def review_stage(self, run, run_dir, stage: str) -> dict[str, Any]:
         started = now()
-        found = resolve_executable(self.executable, fallback=Path("~/.local/bin/claude"))
+        capability = self.preflight()
+        found = capability.get("executable")
         output = run_dir / f"claude-{stage}-review.json"
-        if not found:
+        if not capability.get("available") or not found:
             return {"ok": False, "decision": "block", "stage": stage,
                     "provider": self.provider, "model": self.model,
                     "real_or_mock": "real", "returncode": -1,
                     "timestamp_start": started, "timestamp_end": now(),
-                    "reason": "Claude CLI is unavailable", "last_error": "Executable not found"}
+                    "reason": capability.get("reason", "Claude CLI is unavailable"),
+                    "last_error": capability.get("last_error")}
         prompt = (
             "You are a read-only JOAO reviewer. Review the " + stage + " gate for the mission below. "
             f"Inspect the current Git diff and local evidence in {run_dir}. Do not edit files, install packages, "
-            "commit, push, or use the network. End with exactly CLAUDE_REVIEW: ACCEPT, "
+            "commit, push, or use the network. For P1 or BLOCK, print CLAUDE_FINDING: followed by one "
+            "concrete repair line. End with exactly CLAUDE_REVIEW: ACCEPT, "
             "CLAUDE_REVIEW: P1, or CLAUDE_REVIEW: BLOCK.\n\n" + run["mission"]
         )
-        argv = [found, "--print", "--output-format", "json", prompt]
+        argv = [found, "-p", prompt, "--max-turns", "8", "--output-format", "json",
+                "--permission-mode", "plan", "--tools", "Read,Grep,Glob"]
+        workspace = Path(run["workspace"])
+        before_paths = git_status_paths(workspace)
+        before_fingerprint = git_worktree_fingerprint(workspace)
         try:
-            result = subprocess.run(argv, cwd=run["workspace"], shell=False,
+            result = subprocess.run(argv, cwd=workspace, shell=False,
                                     capture_output=True, text=True, timeout=self.timeout)
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"ok": False, "decision": "block", "stage": stage,
@@ -459,15 +613,37 @@ class ClaudeCLIReviewer(ReviewerAdapter):
                     "reason": f"Claude reviewer failed: {exc}", "last_error": str(exc)}
         atomic_write_text(output, result.stdout)
         text = result.stdout + "\n" + result.stderr
+        try:
+            response = json.loads(result.stdout)
+            if isinstance(response, dict) and isinstance(response.get("result"), str):
+                text = response["result"] + "\n" + result.stderr
+        except json.JSONDecodeError:
+            pass
         verdict = parse_review_verdict(text, "CLAUDE_REVIEW") or "MISSING"
         decision = {"ACCEPT": "pass", "P1": "p1", "BLOCK": "block"}.get(verdict, "block")
+        finding_match = re.findall(r"CLAUDE_FINDING:\s*(.+)", text, flags=re.I)
+        finding = finding_match[-1].strip()[-4000:] if finding_match else ""
+        malformed_finding = verdict in {"P1", "BLOCK"} and len(finding) < 12
+        if malformed_finding:
+            decision = "block"
+        after_paths = git_status_paths(workspace)
+        reviewer_drift = sorted(set(after_paths) ^ set(before_paths))
+        if git_worktree_fingerprint(workspace) != before_fingerprint and not reviewer_drift:
+            reviewer_drift = ["<content changed in existing worktree path>"]
+        if reviewer_drift:
+            verdict, decision = "BLOCK", "block"
         return {
-            "ok": result.returncode == 0 and verdict == "ACCEPT", "decision": decision,
-            "stage": stage, "verdict": verdict, "returncode": result.returncode,
-            "provider": self.provider, "model": self.model, "executable": found,
+            "ok": result.returncode == 0 and verdict == "ACCEPT" and not reviewer_drift,
+            "decision": decision,
+            "stage": stage, "verdict": verdict, "finding": finding,
+            "malformed_finding": malformed_finding, "returncode": result.returncode,
+            "provider": self.provider, "model": self.model,
+            "actual_model": capability.get("actual_model"), "executable": found,
             "real_or_mock": "real", "timestamp_start": started, "timestamp_end": now(),
             "output": str(output), "output_sha256": digest(output),
             "proof": {"verdict": verdict, "reviewed_diff_sha256": run.get("final_diff_sha256")},
+            "adapter_command": argv[:2] + argv[3:],
+            "reviewer_workspace_drift": reviewer_drift,
             "stderr": result.stderr[-4000:], "evidence_paths": [str(output)],
         }
 
@@ -577,11 +753,12 @@ class RunRuntime:
             if not self.allow_test_adapters and preflight.get("real_or_mock") != "real":
                 raise RuntimeStateError(f"Mock reviewer adapter {name} is not allowed in production Bubble")
 
-        is_self_review = builder_name == "codex" and "codex" in reviewer_names
-        review_semantics = "self-review" if is_self_review else (
+        is_self_review = builder_name in reviewer_names
+        review_semantics = "stacked-with-self-review" if is_self_review and len(reviewer_names) > 1 else (
+            "self-review" if is_self_review else (
             "stacked-independent" if len(reviewer_names) > 1 else
             "independent" if reviewer_names else "none"
-        )
+        ))
 
         if Path(profile.repository_root).resolve() != workspace: raise RuntimeStateError("profile workspace mismatch")
         baseline_violations = detect_path_violations(self._paths(workspace), profile)
@@ -848,7 +1025,10 @@ class RunRuntime:
         if not decisions <= {"pass", "p1", "block"}:
             decisions.add("block")
         ok = all(item.get("ok") for item in reviews)
-        decision = "block" if "block" in decisions else "p1" if "p1" in decisions else "pass" if ok else "block"
+        disagreement = len(decisions) > 1
+        decision = ("disagreement" if disagreement else
+                    "block" if "block" in decisions else
+                    "p1" if "p1" in decisions else "pass" if ok else "block")
         proofs = [item.get("proof", {}) for item in reviews]
         verified = stage == "final" and all(
             isinstance(proof, dict) and proof.get("verdict") == "ACCEPT"
@@ -860,6 +1040,7 @@ class RunRuntime:
                   "model": "+".join(run.get("reviewer_models", [])) or None,
                   "review_policy": run.get("review_policy"),
                   "review_semantics": run.get("review_semantics"),
+                  "reviewer_disagreement": disagreement,
                   "reviews": reviews, "proof": {"verdict": "ACCEPT" if verified else "MISSING", "reviewed_diff_sha256": run.get("final_diff_sha256") if verified else None}, "is_self_review": run.get("is_self_review", False), "no_review": run.get("review_policy") == "none"}
         atomic_write_json(folder / f"{stage}-review-evidence.json", review)
         if run.get("corrections_used"):
@@ -897,6 +1078,9 @@ class RunRuntime:
         if run["status"] != "ready": raise RuntimeStateError("run cannot execute from " + run["status"])
         if not run.get("plan_review_completed"):
             plan_review = self._review_gate(run, "plan")
+            if plan_review.get("decision") == "disagreement":
+                self._transition(run, RunStatus.NEEDS_APPROVAL, "reviewer disagreement at plan gate")
+                self._finalize(run); return run
             if not plan_review.get("ok"):
                 self._transition(run, RunStatus.BLOCKED, "Codex plan review blocked"); self._finalize(run); return run
             run["plan_review_completed"] = True
@@ -919,8 +1103,8 @@ class RunRuntime:
         workspace, folder = Path(run["workspace"]), self._dir(run["run_id"])
         profile = ProjectProfile(**{key: value for key, value in run["profile"].items() if key in ProjectProfile.__dataclass_fields__})
         if not building: self._transition(run, RunStatus.BUILDING, "builder dispatch")
-        if run["builder_name"] == "codex" and not run.get("isolated_workspace"):
-            self._transition(run, RunStatus.BLOCKED, "Codex builder requires an isolated workspace"); self._finalize(run); return run
+        if run["builder_name"] in {"codex", "claude"} and not run.get("isolated_workspace"):
+            self._transition(run, RunStatus.BLOCKED, f"{run['builder_name'].title()} builder requires an isolated workspace"); self._finalize(run); return run
         if skip_builder:
             builder_path, changed_path = folder / "builder-evidence.json", folder / "changed-paths.json"
             if not builder_path.exists() or not changed_path.exists():
@@ -978,6 +1162,9 @@ class RunRuntime:
         if build_review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]:
             self._request_repair(run, build_review, "build")
             self._transition(run, RunStatus.CORRECTING, "Codex build review P1; one repair permitted"); return run
+        if build_review.get("decision") == "disagreement":
+            self._transition(run, RunStatus.NEEDS_APPROVAL, "reviewer disagreement at build gate")
+            self._finalize(run); return run
         if not build_review.get("ok"):
             self._transition(run, RunStatus.BLOCKED, "Codex build review blocked"); self._finalize(run); return run
         self._transition(run, RunStatus.TESTING, "targeted and full tests")
@@ -1005,6 +1192,9 @@ class RunRuntime:
         if test_review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]:
             self._request_repair(run, test_review, "test")
             self._transition(run, RunStatus.CORRECTING, "test review P1; one repair permitted"); return run
+        if test_review.get("decision") == "disagreement":
+            self._transition(run, RunStatus.NEEDS_APPROVAL, "reviewer disagreement at test gate")
+            self._finalize(run); return run
         if not test_review.get("ok") or test_review.get("decision") == "block":
             self._transition(run, RunStatus.BLOCKED, "test review blocked"); self._finalize(run); return run
         self._event(run, "test_review_passed")
@@ -1024,6 +1214,9 @@ class RunRuntime:
             if review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]:
                 self._request_repair(run, review, "final")
                 self._transition(run, RunStatus.CORRECTING, "P1; one repair permitted"); return run
+            if review.get("decision") == "disagreement":
+                self._transition(run, RunStatus.NEEDS_APPROVAL, "reviewer disagreement at final gate")
+                self._finalize(run); return run
             if not review.get("ok") or review.get("decision") == "block":
                 self._transition(run, RunStatus.BLOCKED, "review blocked"); self._finalize(run); return run
             run["tasks"][3]["status"] = "completed"; self._transition(run, RunStatus.NEEDS_APPROVAL, "review completed; human decision"); self._finalize(run); return run

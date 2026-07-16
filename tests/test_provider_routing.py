@@ -9,12 +9,14 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from joao_orchestrator.bubble.api import LocalAPIServer
 from joao_orchestrator.bubble.runtime import (
     BuilderAdapter,
+    ClaudeBuilder,
     ClaudeCLIReviewer,
     CodexBuilder,
     CodexCLIReviewer,
@@ -123,7 +125,7 @@ def runtime(path: Path, *, builder=None, codex=None, claude=None, production=Fal
     claude = claude or FixtureReviewer("claude-fixture")
     return RunRuntime(
         path / "state", builder=builder,
-        builders={"glm": builder, "codex": builder},
+        builders={"glm": builder, "codex": builder, "claude": builder},
         reviewer=codex, reviewers={"codex": codex, "claude": claude},
         allow_test_adapters=not production,
     )
@@ -149,9 +151,13 @@ def start(value: RunRuntime, root: Path, *, builder="glm", reviewers=None, polic
         ("codex", "codex", ["codex"], "codex", True),
         ("codex", "claude", ["claude"], "claude", False),
         ("codex", "codex_and_claude", ["codex", "claude"], "codex_and_claude", True),
+        ("claude", "none", [], "none", False),
+        ("claude", "codex", ["codex"], "codex", False),
+        ("claude", "claude", ["claude"], "claude", True),
+        ("claude", "codex_and_claude", ["codex", "claude"], "codex_and_claude", True),
     ],
 )
-def test_all_eight_ui_selections_route_exactly(tmp_path, builder, mode, expected_reviewers, policy, self_review):
+def test_all_twelve_ui_selections_route_exactly(tmp_path, builder, mode, expected_reviewers, policy, self_review):
     api = LocalAPIServer(runtime(tmp_path))
     try:
         selected_builder, reviewers, selected_policy, selected_self_review = api._quick_configuration(
@@ -168,21 +174,71 @@ def test_unavailable_claude_is_disabled_and_refused_before_sandbox(tmp_path):
     builder = FixtureBuilder()
     value = RunRuntime(
         tmp_path / "state", builder=builder,
-        builders={"glm": builder, "codex": builder},
+        builders={"glm": builder, "codex": builder, "claude": builder},
         reviewers={"codex": FixtureReviewer("codex-fixture"), "claude": ClaudeCLIReviewer(executable="/missing/claude")},
         allow_test_adapters=False,
     )
     api = LocalAPIServer(value)
     try:
         capabilities = api.capabilities()
-        assert capabilities["claude"]["available"] is False
-        assert capabilities["claude"]["config_status"] == "not_configured"
-        assert capabilities["claude"]["last_error"]
-        with pytest.raises(ValueError, match="Claude mode cannot run yet"):
+        assert capabilities["claude"]["reviewer_available"] is False
+        assert capabilities["claude"]["config_status"] in {"not_configured", "configured"}
+        assert capabilities["claude"]["reviewer_last_error"]
+        with pytest.raises(ValueError, match="Selected Claude reviewer is unavailable"):
             api.quick_launch({"mission": "test", "builder_name": "glm", "review_mode": "claude"})
         assert not (tmp_path / "state" / "sandboxes").exists()
     finally:
         api.close()
+
+
+def test_installed_but_unauthenticated_claude_is_unavailable(monkeypatch):
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[-1] == "--version":
+            return SimpleNamespace(returncode=0, stdout="2.1.211", stderr="")
+        return SimpleNamespace(
+            returncode=1,
+            stdout=json.dumps({"is_error": True, "result": "Not logged in"}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(
+        "joao_orchestrator.bubble.runtime.resolve_executable",
+        lambda executable, fallback: "/mock/claude",
+    )
+    monkeypatch.setattr("joao_orchestrator.bubble.runtime.subprocess.run", fake_run)
+    capability = ClaudeCLIReviewer().preflight()
+    assert capability["available"] is False
+    assert capability["auth_status"] == "not_logged_in"
+    assert calls[-1][-4:] == ["--max-turns", "1", "--output-format", "json"]
+
+
+def test_claude_builder_and_reviewer_use_real_bounded_cli_preflight(monkeypatch):
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if argv[-1] == "--version":
+            return SimpleNamespace(returncode=0, stdout="2.1.211", stderr="")
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"is_error": False, "result": "CLAUDE_JOAO_OK", "model": "claude-test"}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(
+        "joao_orchestrator.bubble.runtime.resolve_claude_executable",
+        lambda executable: "/mock/claude",
+    )
+    monkeypatch.setattr("joao_orchestrator.bubble.runtime.subprocess.run", fake_run)
+    for adapter in (ClaudeBuilder(), ClaudeCLIReviewer()):
+        capability = adapter.preflight()
+        assert capability["available"] is True
+        assert capability["actual_model"] == "claude-test"
+        assert capability["real_or_mock"] == "real"
+    assert sum(any("CLAUDE_JOAO_OK" in item for item in call) for call in calls) == 2
 
 
 def test_quick_sandbox_rejects_unsafe_requested_paths(tmp_path):
@@ -233,7 +289,9 @@ def test_stacked_review_requires_both_reviewers(tmp_path):
     root = git_workspace(tmp_path)
     value = runtime(tmp_path, claude=FixtureReviewer("claude-fixture", decision="block"))
     run_id = start(value, root, reviewers=["codex", "claude"], policy="codex_and_claude")
-    assert value.run_once(run_id)["status"] == "blocked"
+    state = value.run_once(run_id)
+    assert state["status"] == "needs_approval"
+    assert state["review_verified"] is False
 
 
 def test_single_p1_triggers_one_bounded_repair_with_exact_finding(tmp_path):

@@ -153,7 +153,7 @@ def test_quick_console_selects_one_builder_and_codex_review(tmp_path):
 
 def test_quick_console_refuses_unconfigured_claude(tmp_path):
     api = LocalAPIServer(runtime(tmp_path, lambda *_: {"ok": True}, AcceptedReviewer()))
-    with pytest.raises(ValueError, match="Claude mode cannot run yet"):
+    with pytest.raises(ValueError, match="Selected Claude reviewer is unavailable"):
         api.quick_launch({"mission": "Test", "builder_name": "glm", "review_mode": "claude"})
     api.close()
 

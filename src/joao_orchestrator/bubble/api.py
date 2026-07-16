@@ -33,13 +33,14 @@ label.no-review{color:#f85149;background:#3d1514;padding:4px 8px;border-radius:4
 label.self-review{color:#d29922;background:#4d3800;padding:4px 8px;border-radius:4px;font-weight:700}
 </style>
 <main class="app"><div class="top"><div class="title">JOAO</div><div id="capabilities" class="muted">Chargement…</div></div>
-<div class="sub">Écris comme ici. JOAO pilote GLM, applique seulement les options que tu choisis, et conserve les preuves.</div>
+<div class="sub">Écris comme ici. JOAO pilote le moteur choisi, applique seulement tes options, et conserve les preuves.</div>
 <section id="chat" class="chat"><div class="empty">Écris une première tâche pour tester JOAO dans son sandbox isolée.</div></section>
 <section class="composer"><div class="muted">Disposable workspace</div><select id="workspace" style="width:100%;box-sizing:border-box;margin:8px 0;border:1px solid #30363d;border-radius:8px;background:#161b22;color:#e6edf3;padding:10px;font:inherit"><option value="quick-sandbox">Quick Sandbox (auto-generated)</option></select>
 <textarea id="prompt" autofocus placeholder="Ex. Ajoute une fonction qui normalise un titre et les tests associés."></textarea>
 <div class="muted">Moteur de construction — un seul à la fois</div><div class="modes">
 <label class="mode"><input type="radio" name="builder" value="glm" checked> GLM</label>
-<label class="mode"><input type="radio" name="builder" value="codex"> Codex</label></div>
+<label class="mode"><input type="radio" name="builder" value="codex"> Codex</label>
+<label class="mode"><input type="radio" name="builder" value="claude"> Claude</label></div>
 <div class="muted">Review indépendante à chaque gate (plan, diff, validation complète, livraison)</div><div class="modes">
 <label class="mode"><input type="radio" name="review" value="none"> No Review</label>
 <label class="mode"><input type="radio" name="review" value="codex" checked> Codex</label>
@@ -61,8 +62,8 @@ async function openDiff(){if(active){try{const v=await req('/runs/'+active+'/fin
 async function poll(){if(!active)return;try{show(await req('/runs/'+active))}catch(_){}}
 function enableChoice(name,value,enabled){const input=document.querySelector('input[name="'+name+'"][value="'+value+'"]');input.disabled=!enabled;input.closest('.mode').style.opacity=enabled?'1':'.45'}
 function ensureChoice(name){const current=document.querySelector('input[name="'+name+'"]:checked');if(!current||current.disabled){const fallback=document.querySelector('input[name="'+name+'"]:not(:disabled)');if(fallback)fallback.checked=true}}
-function updateSafetySummary(caps){const summary=[];if(caps.glm.available)summary.push('GLM: ready ('+caps.glm.executable+')');else summary.push('GLM: unavailable ('+caps.glm.reason+')');if(caps.codex.available)summary.push('Codex: ready ('+caps.codex.executable+')');else summary.push('Codex: unavailable ('+caps.codex.reason+')');summary.push('Claude: '+caps.claude.reason);const isSelfReview=selected('builder')==='codex'&&selected('review').includes('codex');const noReview=selected('review')==='none';if(isSelfReview)summary.push('WARNING: Self-review (Codex builder + Codex reviewer)');if(noReview)summary.push('WARNING: No-review policy - changes will NOT be independently reviewed');el('safety-summary').textContent=summary.join(' | ');el('safety-summary').style.display='block';el('safety-summary').style.color=(isSelfReview||noReview)?'#f85149':'#8b949e';}
-async function caps(){const v=await req('/capabilities');enableChoice('builder','glm',v.glm.available);enableChoice('builder','codex',v.codex.available);enableChoice('review','codex',v.codex.reviewer_available);enableChoice('review','claude',v.claude.reviewer_available);enableChoice('review','codex_and_claude',v.codex.reviewer_available&&v.claude.reviewer_available);ensureChoice('builder');ensureChoice('review');updateSafetySummary(v);el('capabilities').textContent='GLM '+(v.glm.available?'prêt':'indisponible')+' · Codex '+(v.codex.available?'prêt':'indisponible')+' · Claude '+(v.claude.available?'optionnel':'non configuré');validateSelection()}
+function updateSafetySummary(caps){const summary=[];for(const name of ['glm','codex','claude']){const cap=caps[name];summary.push(name.toUpperCase()+': '+(cap.available?'ready ('+cap.executable+')':'unavailable ('+cap.reason+')'))}const builder=selected('builder'),review=selected('review');const isSelfReview=(builder==='codex'&&review.includes('codex'))||(builder==='claude'&&review.includes('claude'));const noReview=review==='none';if(isSelfReview)summary.push('WARNING: Self-review ('+builder+' builds and reviews)');if(noReview)summary.push('WARNING: No-review policy - changes will NOT be independently reviewed');el('safety-summary').textContent=summary.join(' | ');el('safety-summary').style.display='block';el('safety-summary').style.color=(isSelfReview||noReview)?'#f85149':'#8b949e';}
+async function caps(){const v=await req('/capabilities');enableChoice('builder','glm',v.glm.available);enableChoice('builder','codex',v.codex.available);enableChoice('builder','claude',v.claude.available);enableChoice('review','codex',v.codex.reviewer_available);enableChoice('review','claude',v.claude.reviewer_available);enableChoice('review','codex_and_claude',v.codex.reviewer_available&&v.claude.reviewer_available);ensureChoice('builder');ensureChoice('review');updateSafetySummary(v);el('capabilities').textContent='GLM '+(v.glm.available?'prêt':'indisponible')+' · Codex '+(v.codex.available?'prêt':'indisponible')+' · Claude '+(v.claude.available?'prêt':'indisponible');validateSelection()}
 function validateSelection(){const builder=selected('builder');const review=selected('review');const capsPromise=req('/capabilities');capsPromise.then(v=>{let valid=el('workspace').value==='quick-sandbox'&&el('prompt').value.trim().length>0&&v[builder].available;if(review==='codex'&&!v.codex.reviewer_available)valid=false;if(review==='claude'&&!v.claude.reviewer_available)valid=false;if(review==='codex_and_claude'&&!(v.codex.reviewer_available&&v.claude.reviewer_available))valid=false;el('start-btn').disabled=!valid;updateSafetySummary(v)}).catch(()=>{el('start-btn').disabled=true})}
 document.querySelectorAll('input[name="builder"],input[name="review"]').forEach(i=>i.addEventListener('change',validateSelection));
 el('prompt').addEventListener('input',validateSelection);el('workspace').addEventListener('change',validateSelection);
@@ -170,6 +171,7 @@ class LocalAPIServer:
 
         glm = preflight(self.runtime.builders.get("glm"), "GLM builder not configured")
         codex = preflight(self.runtime.builders.get("codex"), "Codex builder not configured")
+        claude = preflight(self.runtime.builders.get("claude"), "Claude builder not configured")
         codex_review = preflight(self.runtime.reviewers.get("codex"), "Codex reviewer not configured")
         claude_review = preflight(self.runtime.reviewers.get("claude"), "Claude reviewer not configured")
         codex.update({
@@ -179,8 +181,14 @@ class LocalAPIServer:
             "reviewer_executable": codex_review["executable"],
             "reviewer_last_error": codex_review["last_error"],
         })
-        claude_review.update({"reviewer_available": bool(claude_review["available"])})
-        return {"glm": glm, "codex": codex, "claude": claude_review,
+        claude.update({
+            "reviewer_available": bool(claude_review["available"]),
+            "reviewer_reason": claude_review["reason"],
+            "reviewer_model": claude_review["model"],
+            "reviewer_executable": claude_review["executable"],
+            "reviewer_last_error": claude_review["last_error"],
+        })
+        return {"glm": glm, "codex": codex, "claude": claude,
                 "workspace_lock": {"active_count": len(self._active_workspaces)}}
 
     @staticmethod
@@ -226,7 +234,7 @@ class LocalAPIServer:
             "codex_claude": (["codex", "claude"], "codex_and_claude"),
         }
 
-        if builder not in {"glm", "codex"} or mode not in review_mapping:
+        if builder not in {"glm", "codex", "claude"} or mode not in review_mapping:
             raise ValueError("unknown builder or review mode")
 
         capabilities = self.capabilities()
@@ -240,7 +248,7 @@ class LocalAPIServer:
         for name in reviewer_names:
             reviewer_available = capabilities[name].get("reviewer_available", capabilities[name]["available"])
             if not reviewer_available:
-                prefix = "Claude mode cannot run yet" if name == "claude" else "Selected reviewer is unavailable"
+                prefix = "Selected Claude reviewer is unavailable" if name == "claude" else "Selected reviewer is unavailable"
                 raise ValueError(f"{prefix}: {capabilities[name]['reason']}")
 
         # Check builder configuration
@@ -252,7 +260,7 @@ class LocalAPIServer:
             raise ValueError("Selected reviewer is not configured")
 
         # Detect self-review
-        is_self_review = builder == "codex" and "codex" in reviewer_names
+        is_self_review = builder in reviewer_names
         return builder, reviewer_names, review_policy, is_self_review
 
     def quick_launch(self, data):

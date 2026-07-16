@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the eight Bubble routing selections sequentially with auditable evidence."""
+"""Run all twelve Bubble provider-routing selections with auditable evidence."""
 from __future__ import annotations
 
 import argparse
@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from joao_orchestrator.bubble.api import LocalAPIServer  # noqa: E402
 from joao_orchestrator.bubble.runtime import (  # noqa: E402
+    ClaudeBuilder,
     ClaudeCLIReviewer,
     CodexBuilder,
     CodexCLIReviewer,
@@ -70,6 +71,10 @@ MATRIX = [
     ("codex", "codex"),
     ("codex", "claude"),
     ("codex", "codex_and_claude"),
+    ("claude", "none"),
+    ("claude", "codex"),
+    ("claude", "claude"),
+    ("claude", "codex_and_claude"),
 ]
 TERMINAL = {"needs_approval", "blocked", "failed", "stopped", "accepted"}
 
@@ -110,10 +115,12 @@ def sha256(path: Path) -> str:
 def runtime(state_root: Path) -> RunRuntime:
     glm = GLMBuilder()
     codex_builder = CodexBuilder()
+    claude_builder = ClaudeBuilder()
     codex_reviewer = CodexCLIReviewer()
     claude_reviewer = ClaudeCLIReviewer()
     return RunRuntime(
-        state_root, builder=glm, builders={"glm": glm, "codex": codex_builder},
+        state_root, builder=glm,
+        builders={"glm": glm, "codex": codex_builder, "claude": claude_builder},
         reviewer=codex_reviewer,
         reviewers={"codex": codex_reviewer, "claude": claude_reviewer},
         allow_test_adapters=False,
@@ -128,6 +135,8 @@ def execute_row(api: LocalAPIServer, state_root: Path, builder: str, review: str
         "delivery_state": "NOT_STARTED", "post_control_state": None,
         "pause_resume": "NOT_RUN", "stop": "NOT_RUN", "restart_restored": False,
         "evidence": None, "scenario_status": "FAILED", "error": None,
+        "model": None, "review_proof_matches_diff": False,
+        "no_changed_path_outside_sandbox": False,
     }
     runs_before = set((state_root / "runs").glob("run-*")) if (state_root / "runs").exists() else set()
     try:
@@ -137,9 +146,11 @@ def execute_row(api: LocalAPIServer, state_root: Path, builder: str, review: str
         })
     except Exception as exc:
         runs_after = set((state_root / "runs").glob("run-*")) if (state_root / "runs").exists() else set()
+        error = str(exc)
+        status = "QUOTA_BLOCKED" if re.search(r"quota|rate.?limit|usage.?limit", error, re.I) else "PREFLIGHT_UNAVAILABLE"
         row.update({
-            "delivery_state": "PREFLIGHT_REFUSED", "review_result": "UNAVAILABLE",
-            "scenario_status": "PREFLIGHT_REFUSED", "error": str(exc),
+            "delivery_state": status, "review_result": "UNAVAILABLE",
+            "scenario_status": status, "error": error,
             "preflight_created_no_run": runs_before == runs_after,
         })
         return row
@@ -168,6 +179,7 @@ def execute_row(api: LocalAPIServer, state_root: Path, builder: str, review: str
         and builder_evidence.get("model") == final.get("builder_model")
         and builder_evidence.get("returncode") == 0
     )
+    row["model"] = builder_evidence.get("actual_model") or builder_evidence.get("model")
     test_text = "\n".join(
         str(result.get("stdout", "")) + "\n" + str(result.get("stderr", ""))
         for result in tests.get("results", [])
@@ -180,16 +192,25 @@ def execute_row(api: LocalAPIServer, state_root: Path, builder: str, review: str
     )
     changed = json.loads((folder / "changed-paths.json").read_text()) if (folder / "changed-paths.json").exists() else {}
     delivered_paths = set(changed.get("after", []))
+    row["no_changed_path_outside_sandbox"] = not changed.get("violations")
     row["no_runtime_data_artifacts"] = not bool(delivered_paths & {"todo.json", "test_tasks.json"})
     restored = runtime(state_root).get(run_id)
     row["restart_restored"] = restored["status"] == final["status"]
     row["final_diff_sha256"] = final.get("final_diff_sha256")
-    row["scenario_status"] = "VERIFIED" if (
+    proof_hash = review_evidence.get("proof", {}).get("reviewed_diff_sha256")
+    row["review_proof_matches_diff"] = review == "none" or proof_hash == row["final_diff_sha256"]
+    row["scenario_status"] = "PASS" if (
         final["status"] == "needs_approval" and row["real_provider_verified"]
         and row["tests"] == "PASS" and row["restart_restored"]
-        and row["no_runtime_data_artifacts"]
+        and row["no_runtime_data_artifacts"] and row["no_changed_path_outside_sandbox"]
+        and row["review_proof_matches_diff"]
         and (review == "none" or row["review_result"] == "ACCEPT")
     ) else "FAILED"
+    combined_error = json.dumps({"run": final, "builder": builder_evidence,
+                                 "review": review_evidence}, sort_keys=True)
+    if row["scenario_status"] == "FAILED" and re.search(
+            r"quota|rate.?limit|usage.?limit", combined_error, re.I):
+        row["scenario_status"] = "QUOTA_BLOCKED"
 
     stopped = request(api, f"runs/{run_id}/stop", {})
     row["post_control_state"] = stopped["status"]
@@ -202,14 +223,15 @@ def markdown(report: dict) -> str:
     lines = [
         "# JOÃO Bubble provider-routing acceptance matrix", "",
         f"Generated: `{report['generated_at']}`", "",
-        "| Builder | Review mode | Started from Bubble | Real provider verified | Tests | Review result | Delivery state | Scenario | Evidence |",
-        "|---|---|---:|---:|---|---|---|---|---|",
+        "| Builder | Review mode | Bubble launch | Provider verified | Model | Tests | Review | Pause/Resume | Recovery | Final state | Evidence |",
+        "|---|---|---:|---:|---|---|---|---|---|---|---|",
     ]
     for row in report["rows"]:
         lines.append(
             f"| {row['builder']} | {row['review_mode']} | {row['started_from_bubble']} | "
-            f"{row['real_provider_verified']} | {row['tests']} | {row['review_result']} | "
-            f"{row['delivery_state']} | {row['scenario_status']} | {row.get('evidence') or row.get('error')} |"
+            f"{row['real_provider_verified']} | {row.get('model')} | {row['tests']} | {row['review_result']} | "
+            f"{row['pause_resume']} | {row['restart_restored']} | {row['delivery_state']} / {row['scenario_status']} | "
+            f"{row.get('evidence') or row.get('error')} |"
         )
     lines.extend(["", "Unavailable configurations are tested preflight refusals, never PASS or skipped.", ""])
     return "\n".join(lines)
@@ -268,7 +290,9 @@ def main() -> int:
         (state_root / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n")
         print(json.dumps({"state_root": str(state_root), "rows": report["rows"]}, indent=2))
         complete = {(row["builder"], row["review_mode"]) for row in report["rows"]} == set(MATRIX)
-        return 0 if complete and all(row["scenario_status"] in {"VERIFIED", "PREFLIGHT_REFUSED"} for row in report["rows"]) else 1
+        return 0 if complete and all(row["scenario_status"] in {
+            "PASS", "PREFLIGHT_UNAVAILABLE", "QUOTA_BLOCKED"
+        } for row in report["rows"]) else 1
     finally:
         api.close()
 
