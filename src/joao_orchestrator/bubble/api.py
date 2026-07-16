@@ -260,7 +260,8 @@ class LocalAPIServer:
             "push, access external paths, or modify the sandbox policy. Run the tests.\n\n"
             "User task:\n" + mission
         )
-        return self._start("quick-sandbox", root, contract, ["*"], ["python3", "-m", "pytest", "-q"], [], builder_name, reviewer_names, review_policy)
+        allowed = ["todo.py", "test_todo.py", "src/", "tests/"]
+        return self._start("quick-sandbox", root, contract, allowed, ["python3", "-m", "pytest", "-q"], [], builder_name, reviewer_names, review_policy)
 
     def launch(self, data):
         root = Path(data["workspace"]).expanduser().resolve()

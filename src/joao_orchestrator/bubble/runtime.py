@@ -50,6 +50,33 @@ def resolve_executable(configured: str | Path, *, fallback: Path | None = None) 
     return None
 
 
+def parse_review_verdict(text: str, marker: str) -> str:
+    matches = re.findall(rf"{re.escape(marker)}:\s*(ACCEPT|P1|BLOCK)", text, flags=re.I)
+    return matches[-1].upper() if matches else ""
+
+
+def git_status_paths(workspace: Path) -> list[str]:
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=str(workspace), shell=False, capture_output=True, text=True, check=True,
+    )
+    return sorted({item[3:].replace("\\", "/") for item in result.stdout.split("\0") if item})
+
+
+def git_worktree_fingerprint(workspace: Path) -> str:
+    value = hashlib.sha256()
+    for relative in git_status_paths(workspace):
+        value.update(relative.encode(errors="surrogateescape"))
+        path = workspace / relative
+        if path.is_file():
+            value.update(digest(path).encode())
+        elif path.is_symlink():
+            value.update(os.readlink(path).encode(errors="surrogateescape"))
+        else:
+            value.update(b"<missing-or-directory>")
+    return value.hexdigest()
+
+
 class RunStatus(str, Enum):
     PENDING = "pending"; PLANNING = "planning"; READY = "ready"
     BUILDING = "building"; TESTING = "testing"; REVIEWING = "reviewing"
@@ -187,7 +214,7 @@ class GLMBuilder(BuilderAdapter):
             proc = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=900)
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"ok": False, "provider": self.provider, "model": self.model, "executable": found, "real_or_mock": "real", "reason": f"GLM execution failed: {exc}", "timestamp_start": start_time, "timestamp_end": now(), "returncode": -1, "last_error": str(exc)}
-        return {"ok": proc.returncode == 0, "provider": self.provider, "model": self.model, "executable": found, "adapter_command": argv[:-1] if allowed else argv, "real_or_mock": "real", "returncode": proc.returncode, "stdout": proc.stdout[-4000:], "stderr": proc.stderr[-4000:], "output": str(output), "output_sha256": digest(output) if output.exists() else None, "timestamp_start": start_time, "timestamp_end": now(), "evidence_paths": [str(output), str(task)]}
+        return {"ok": proc.returncode == 0, "provider": self.provider, "model": self.model, "executable": found, "adapter_command": argv, "real_or_mock": "real", "returncode": proc.returncode, "stdout": proc.stdout[-4000:], "stderr": proc.stderr[-4000:], "output": str(output), "output_sha256": digest(output) if output.exists() else None, "timestamp_start": start_time, "timestamp_end": now(), "evidence_paths": [str(output), str(task)]}
 
 
 class CodexBuilder(BuilderAdapter):
@@ -230,7 +257,7 @@ class CodexBuilder(BuilderAdapter):
             "Implement the following task and run the explicitly requested tests.\n\n"
             f"{mission}"
         )
-        argv = [found, "exec", "--json", "--ephemeral", "--model", self.model,
+        argv = [found, "exec", "--json", "--ephemeral", "--ignore-user-config", "--model", self.model,
                 "--sandbox", "workspace-write", "-C", str(workspace),
                 "--output-last-message", str(output), prompt]
         try:
@@ -292,32 +319,46 @@ class CodexCLIReviewer(ReviewerAdapter):
             f"The immutable local evidence directory is {run_dir}. "
             "Inspect only the current worktree, that evidence directory, and git diff. Do not "
             "edit, commit, push, install packages or call external services. At the "
+            "plan gate, assess only whether the bounded plan and safety contract are sound; do not "
+            "require implementation or run tests. At the build gate, inspect the produced diff. "
+            "At the test gate, inspect or rerun the recorded tests. At the final gate, recheck the "
+            "complete diff, tests, scope, and evidence. "
             "end, print exactly one final line: JOAO_REVIEW: ACCEPT, JOAO_REVIEW: P1, "
             "or JOAO_REVIEW: BLOCK. A P1 must name the concrete repair."
         )
-        argv = [found, "exec", "--json", "--ephemeral", "--model", self.model,
-                "--sandbox", "read-only", "-C", str(workspace), prompt]
+        argv = [found, "exec", "--json", "--ephemeral", "--ignore-user-config", "--model", self.model,
+                "--sandbox", "workspace-write", "-C", str(workspace), prompt]
+        before_paths = git_status_paths(workspace)
+        before_fingerprint = git_worktree_fingerprint(workspace)
+        env = dict(os.environ)
+        env.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTEST_ADDOPTS": "-p no:cacheprovider"})
         try:
             proc = subprocess.run(argv, cwd=str(workspace), shell=False, capture_output=True,
-                                  text=True, timeout=self.timeout)
+                                  text=True, timeout=self.timeout, env=env)
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"ok": False, "decision": "block", "stage": stage,
                     "provider": self.provider, "model": self.model, "real_or_mock": "real",
                     "reason": f"Codex reviewer unavailable: {exc}",
                     "timestamp_start": start_time, "timestamp_end": now(), "returncode": -1, "last_error": str(exc)}
         atomic_write_text(output, proc.stdout)
-        text = proc.stdout + "\\n" + proc.stderr
-        match = re.findall(r"JOAO_REVIEW:\\s*(ACCEPT|P1|BLOCK)", text, flags=re.I)
-        verdict = match[-1].upper() if match else ""
+        text = proc.stdout + "\n" + proc.stderr
+        verdict = parse_review_verdict(text, "JOAO_REVIEW")
         decision = {"ACCEPT": "pass", "P1": "p1", "BLOCK": "block"}.get(verdict, "block")
+        after_paths = git_status_paths(workspace)
+        reviewer_drift = sorted(set(after_paths) ^ set(before_paths))
+        if git_worktree_fingerprint(workspace) != before_fingerprint and not reviewer_drift:
+            reviewer_drift = ["<content changed in existing worktree path>"]
+        if reviewer_drift:
+            verdict, decision = "BLOCK", "block"
         return {
-            "ok": proc.returncode == 0 and verdict == "ACCEPT",
+            "ok": proc.returncode == 0 and verdict == "ACCEPT" and not reviewer_drift,
             "decision": decision, "stage": stage, "verdict": verdict or "MISSING",
             "returncode": proc.returncode, "output": str(output),
             "output_sha256": digest(output), "stderr": proc.stderr[-4000:],
             "proof": {"verdict": verdict, "reviewed_diff_sha256": run.get("final_diff_sha256")},
             "provider": self.provider, "model": self.model, "executable": found, "real_or_mock": "real",
             "adapter_command": argv[:-1],
+            "reviewer_workspace_drift": reviewer_drift,
             "timestamp_start": start_time, "timestamp_end": now(), "evidence_paths": [str(output)],
         }
 
@@ -389,8 +430,7 @@ class ClaudeCLIReviewer(ReviewerAdapter):
                     "reason": f"Claude reviewer failed: {exc}", "last_error": str(exc)}
         atomic_write_text(output, result.stdout)
         text = result.stdout + "\n" + result.stderr
-        matches = re.findall(r"CLAUDE_REVIEW:\s*(ACCEPT|P1|BLOCK)", text, flags=re.I)
-        verdict = matches[-1].upper() if matches else "MISSING"
+        verdict = parse_review_verdict(text, "CLAUDE_REVIEW") or "MISSING"
         decision = {"ACCEPT": "pass", "P1": "p1", "BLOCK": "block"}.get(verdict, "block")
         return {
             "ok": result.returncode == 0 and verdict == "ACCEPT", "decision": decision,
@@ -669,8 +709,7 @@ class RunRuntime:
         self._write(run)
         self._transition(run, RunStatus.PAUSED, reason)
     def _paths(self, workspace: Path) -> list[str]:
-        raw = subprocess.run(["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd=str(workspace), shell=False, capture_output=True, text=True, check=True).stdout
-        return sorted({item[3:].replace("\\\\", "/") for item in raw.split("\0") if item})
+        return git_status_paths(workspace)
     def _git_diff(self, workspace: Path) -> bytes:
         tracked = subprocess.run(
             ["git", "diff", "--binary", "--no-ext-diff", "--no-textconv"],

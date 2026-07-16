@@ -21,6 +21,7 @@ from joao_orchestrator.bubble.runtime import (
     RunRuntime,
     RuntimeStateError,
     SandboxBuilder,
+    parse_review_verdict,
 )
 from joao_orchestrator.domain.models import ProjectProfile
 
@@ -294,6 +295,7 @@ def test_http_bubble_start_passes_selectors_to_runtime(tmp_path):
         assert run["review_policy"] == "none"
         assert "Work only inside this disposable Git sandbox." in run["mission"]
         assert "Work only in src/ and tests/." not in run["mission"]
+        assert run["profile"]["allowed_write_paths"] == ["todo.py", "test_todo.py", "src/", "tests/"]
         assert run["status"] == "needs_approval"
         assert run["evidence_directory"]
         assert run["progress"]["total"] == 4
@@ -332,6 +334,12 @@ def test_codex_preflight_resolves_mac_app_minimal_path():
     assert builder.preflight()["available"] is True
     assert reviewer.preflight()["available"] is True
     assert builder.preflight()["model"] == "gpt-5.6-terra"
+
+
+def test_reviewer_verdict_parser_reads_jsonl_agent_messages():
+    text = '{"type":"agent_message","text":"JOAO_REVIEW: ACCEPT"}'
+    assert parse_review_verdict(text, "JOAO_REVIEW") == "ACCEPT"
+    assert parse_review_verdict("CLAUDE_REVIEW: P1", "CLAUDE_REVIEW") == "P1"
 
 
 def test_run_state_is_restored_from_disk(tmp_path):
