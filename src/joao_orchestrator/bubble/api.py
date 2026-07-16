@@ -260,7 +260,7 @@ class LocalAPIServer:
         if not mission:
             raise ValueError("mission cannot be empty")
         builder_name, reviewer_names, review_policy, is_self_review = self._quick_configuration(data)
-        default_quick_paths = ["todo.py", "test_todo.py", "src/", "tests/"]
+        default_quick_paths = ["todo.py", "test_todo.py", "todo.json", "test_tasks.json", "src/", "tests/"]
         safe_quick_paths = set(default_quick_paths)
         requested_paths = data.get("allowed_paths")
         allowed = [str(path) for path in requested_paths] if requested_paths is not None else default_quick_paths
@@ -272,7 +272,8 @@ class LocalAPIServer:
             "push, access external paths, or modify the sandbox policy. Use only Python's "
             "standard-library unittest framework for tests, and run the recorded test command. "
             "The term needs_approval names a JOAO runtime state: never create a file or directory "
-            "with that name.\n\n"
+            "with that name. The sandbox-local todo.json and test_tasks.json paths may be used "
+            "during validation, but remove test/runtime data before delivery.\n\n"
             "User task:\n" + mission
         )
         full_test = ["python3", "-m", "unittest", "discover", "-s", ".", "-p", "test*.py"]

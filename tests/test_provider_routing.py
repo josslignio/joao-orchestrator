@@ -406,7 +406,7 @@ def test_http_bubble_start_passes_selectors_to_runtime(tmp_path):
         assert "Work only inside this disposable Git sandbox." in run["mission"]
         assert "Work only in src/ and tests/." not in run["mission"]
         assert "never create a file or directory with that name" in run["mission"]
-        assert run["profile"]["allowed_write_paths"] == ["todo.py", "test_todo.py", "src/", "tests/"]
+        assert run["profile"]["allowed_write_paths"] == ["todo.py", "test_todo.py", "todo.json", "test_tasks.json", "src/", "tests/"]
         assert run["full_tests"] == [["python3", "-m", "unittest", "discover", "-s", ".", "-p", "test*.py"]]
         assert run["status"] == "needs_approval"
         assert run["evidence_directory"]
