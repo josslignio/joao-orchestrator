@@ -310,7 +310,7 @@ class SandboxBuilder(BuilderAdapter):
 
 class GLMBuilder(BuilderAdapter):
     provider = "zai-coding-plan"; model = "zai-coding-plan/glm-4.5-air"
-    def __init__(self, executable: Path = Path("~/.local/bin/joao-glm").expanduser()): self.executable = executable
+    def __init__(self, executable: Path = Path("~/.local/bin/joao-glm").expanduser(), timeout: int = 1200): self.executable = executable; self.timeout = timeout
     def preflight(self):
         found = resolve_executable(self.executable, fallback=Path("~/.local/bin/joao-glm"))
         if not found:
@@ -321,16 +321,24 @@ class GLMBuilder(BuilderAdapter):
         found = resolve_executable(self.executable, fallback=Path("~/.local/bin/joao-glm"))
         if not found:
             return {"ok": False, "provider": self.provider, "model": self.model, "reason": f"GLM executable not found at {self.executable}", "real_or_mock": "real", "timestamp_start": start_time, "timestamp_end": now(), "returncode": -1}
-        task = run_dir / ("correction.md" if correction else "builder-task.md"); atomic_write_text(task, mission)
+        bounded_mission = (
+            "Act as JOAO's bounded builder. Work only in this Git workspace and only "
+            f"in these paths: {', '.join(allowed)}. Do not create scratch, runner, or "
+            "verification files outside those paths; interpreter caches such as __pycache__ "
+            "are forbidden deliverables. Do not install packages, access the network, commit, "
+            "push, or change policy/configuration. Implement the following task and run the "
+            "explicitly requested tests.\n\n" + mission
+        )
+        task = run_dir / ("correction.md" if correction else "builder-task.md"); atomic_write_text(task, bounded_mission)
         output = run_dir / ("glm-correction.jsonl" if correction else "glm-builder.jsonl")
-        argv = [found, "--workspace", str(workspace), "--task-file", str(task), "--output", str(output), "--mode", "workspace-write", "--budget", "small"]
+        argv = [found, "--workspace", str(workspace), "--task-file", str(task), "--output", str(output), "--mode", "workspace-write", "--budget", "normal"]
         for item in allowed: argv.extend(["--allowed-path", item])
         if correction:
             for item in git_status_paths(workspace):
                 argv.extend(["--baseline-path", item])
         try:
             proc = subprocess.run(argv, shell=False, capture_output=True, text=True,
-                                  timeout=900, env=bounded_provider_env())
+                                  timeout=self.timeout, env=bounded_provider_env())
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"ok": False, "provider": self.provider, "model": self.model, "executable": found, "real_or_mock": "real", "reason": f"GLM execution failed: {exc}", "timestamp_start": start_time, "timestamp_end": now(), "returncode": -1, "last_error": str(exc)}
         return {"ok": proc.returncode == 0, "provider": self.provider, "model": self.model, "executable": found, "adapter_command": argv, "real_or_mock": "real", "returncode": proc.returncode, "stdout": proc.stdout[-4000:], "stderr": proc.stderr[-4000:], "output": str(output), "output_sha256": digest(output) if output.exists() else None, "timestamp_start": start_time, "timestamp_end": now(), "evidence_paths": [str(output), str(task)]}
