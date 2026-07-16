@@ -1,6 +1,7 @@
 """Local-only JOAO command console API and browser UI."""
 from __future__ import annotations
 import json
+import secrets
 import shlex
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,12 +15,15 @@ HTML = """<!doctype html><meta charset=utf-8><title>JOAO Command Center</title>
 <main><div class=shell><h1>JOAO Command Center</h1><div class=sub>Mission locale → GLM/ZCode → reviews Codex → validation humaine.</div>
 <form id=f><div class=grid><div><label>Projet</label><input id=p value=local-project required></div><div><label>Worktree Git cible</label><input id=w placeholder="/chemin/vers/repo-git" required></div><div class=wide><label>Ta mission</label><textarea id=m placeholder="Décris précisément ce que JOAO doit faire." required></textarea></div><div><label>Chemins modifiables (un par ligne)</label><textarea id=a style="min-height:80px" placeholder="src/&#10;tests/" required></textarea></div><div><label>Test complet obligatoire</label><input id=t value="python3 -m pytest -q" required><label style="margin-top:8px">Test ciblé optionnel</label><input id=q placeholder="python3 -m pytest -q tests/test_x.py"></div></div><p><button>Lancer avec GLM</button><span id=c class=note></span></p></form>
 <div class=card><span id=s class=status>Aucune mission active</span><div id=n class=note></div><p><button class=alt onclick="act('pause')">Pause</button><button class=alt onclick="act('resume')">Resume</button><button class=alt onclick="act('stop')">Stop</button><button class=alt onclick="act('retry')">Retry</button><button onclick="act('approve')">Approve</button><button class=alt onclick="act('reject')">Reject</button></p><pre id=d></pre></div></div></main>
-<script>let run=null;let x=id=>document.getElementById(id);let lines=id=>x(id).value.split('\\n').map(v=>v.trim()).filter(Boolean);async function j(u,o){let r=await fetch(u,o),v=await r.json();if(!r.ok)throw Error(v.error||'request failed');return v}async function caps(){let v=await j('/capabilities');x('c').textContent='GLM '+(v.glm.available?'connected':'unavailable')+' · Codex '+(v.codex.available?'connected':'unavailable')+' · Claude '+(v.claude.available?'optional connected':'optional unavailable')}async function refresh(){if(!run)return;try{let v=await j('/runs/'+run);x('s').textContent=v.status;x('s').className='status '+(['blocked','failed'].includes(v.status)?'bad':v.status==='accepted'?'ok':'warn');x('n').textContent=v.project_id+' · '+v.current_step;x('d').textContent=JSON.stringify(v,null,2)}catch(e){x('d').textContent=e.message}}async function act(a){if(!run)return;try{await j('/runs/'+run+'/'+a,{method:'POST'});refresh()}catch(e){x('d').textContent=e.message}}x('f').onsubmit=async e=>{e.preventDefault();try{let v={project_id:x('p').value,workspace:x('w').value,mission:x('m').value,allowed_paths:lines('a'),full_test_command:x('t').value,targeted_test_command:x('q').value};let z=await j('/missions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)});run=z.run_id;x('s').textContent='queued '+run;refresh()}catch(e){x('d').textContent=e.message}};setInterval(refresh,1200);caps()</script>"""
+<script>const TOKEN="__JOAO_TOKEN__";let run=null;let x=id=>document.getElementById(id);let lines=id=>x(id).value.split('\\n').map(v=>v.trim()).filter(Boolean);async function j(u,o={}){o.headers={...(o.headers||{}),'X-JOAO-Token':TOKEN};let r=await fetch(u,o),v=await r.json();if(!r.ok)throw Error(v.error||'request failed');return v}async function caps(){let v=await j('/capabilities');x('c').textContent='GLM '+(v.glm.available?'connected':'unavailable')+' · Codex '+(v.codex.available?'connected':'unavailable')+' · Claude '+(v.claude.available?'optional connected':'optional unavailable')}async function refresh(){if(!run)return;try{let v=await j('/runs/'+run);x('s').textContent=v.status;x('s').className='status '+(['blocked','failed'].includes(v.status)?'bad':v.status==='accepted'?'ok':'warn');x('n').textContent=v.project_id+' · '+v.current_step;x('d').textContent=JSON.stringify(v,null,2)}catch(e){x('d').textContent=e.message}}async function act(a){if(!run)return;try{await j('/runs/'+run+'/'+a,{method:'POST'});refresh()}catch(e){x('d').textContent=e.message}}x('f').onsubmit=async e=>{e.preventDefault();try{let v={project_id:x('p').value,workspace:x('w').value,mission:x('m').value,allowed_paths:lines('a'),full_test_command:x('t').value,targeted_test_command:x('q').value};let z=await j('/missions',{method:'POST',body:JSON.stringify(v)});run=z.run_id;x('s').textContent='queued '+run;refresh()}catch(e){x('d').textContent=e.message}};setInterval(refresh,1200);caps()</script>"""
 
 class LocalAPIServer:
     def __init__(self, runtime: RunRuntime, host="127.0.0.1", port=0):
         if host not in {"127.0.0.1","localhost","::1"}: raise ValueError("localhost only")
         self.runtime,self.workers=runtime,{}
+        self.token=secrets.token_urlsafe(32)
+        self._dispatch_lock=threading.RLock()
+        self._active_workspaces={}
         outer=self
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*_): pass
@@ -27,10 +31,12 @@ class LocalAPIServer:
                 raw=value.encode() if isinstance(value,str) else json.dumps(value).encode()
                 self.send_response(code);self.send_header("Content-Type",kind);self.send_header("Content-Length",str(len(raw)));self.end_headers();self.wfile.write(raw)
             def payload(self): return json.loads(self.rfile.read(int(self.headers.get("Content-Length","0"))).decode())
+            def authorized(self): return secrets.compare_digest(self.headers.get("X-JOAO-Token",""),outer.token)
             def do_GET(self):
                 path=urlparse(self.path).path;bits=path.strip("/").split("/")
                 try:
-                    if path=="/": return self.send(200,HTML,"text/html; charset=utf-8")
+                    if path=="/": return self.send(200,HTML.replace("__JOAO_TOKEN__",outer.token),"text/html; charset=utf-8")
+                    if not self.authorized(): return self.send(401,{"error":"missing or invalid local session token"})
                     if path=="/capabilities": return self.send(200,outer.capabilities())
                     if len(bits)==2 and bits[0]=="runs": return self.send(200,outer.runtime.get(bits[1]))
                     if len(bits)==3 and bits[2]=="events": return self.send(200,outer.runtime.events(bits[1]))
@@ -39,6 +45,7 @@ class LocalAPIServer:
             def do_POST(self):
                 bits=urlparse(self.path).path.strip("/").split("/")
                 try:
+                    if not self.authorized(): return self.send(401,{"error":"missing or invalid local session token"})
                     if self.path=="/missions":return self.send(202,outer.launch(self.payload()))
                     if len(bits)==3 and bits[0]=="runs" and bits[2] in {"pause","resume","stop","approve","reject"}:return self.send(200,getattr(outer.runtime,bits[2])(bits[1]))
                     if len(bits)==3 and bits[0]=="runs" and bits[2]=="retry":return self.send(202,outer.drive(bits[1]))
@@ -63,6 +70,15 @@ class LocalAPIServer:
         run=self.runtime.start(project_id=ident,workspace=root,mission=str(data["mission"]),targeted_tests=[self.command(target)] if target else [],full_tests=[self.command(str(data["full_test_command"]))],profile=profile)
         self.drive(run);return {"run_id":run,"status":"queued"}
     def drive(self,run_id):
+        run=self.runtime.get(run_id)
+        workspace=str(Path(run["workspace"]).resolve())
+        with self._dispatch_lock:
+            prior=self._active_workspaces.get(workspace)
+            if prior and prior != run_id and self.workers.get(prior) and self.workers[prior].is_alive():
+                raise RuntimeStateError("another JOAO builder is active for this worktree")
+            existing=self.workers.get(run_id)
+            if existing and existing.is_alive():
+                raise RuntimeStateError("this run is already being dispatched")
         def worker():
             try:
                 while True:
@@ -70,7 +86,16 @@ class LocalAPIServer:
                     if state["status"]!="correcting":break
             except Exception as exc:
                 run=self.runtime.get(run_id);self.runtime._event(run,"runtime_exception",error=f"{type(exc).__name__}: {exc}")
-        thread=threading.Thread(target=worker,name="joao-"+run_id,daemon=True);self.workers[run_id]=thread;thread.start();return {"run_id":run_id,"status":"queued"}
+            finally:
+                with self._dispatch_lock:
+                    if self._active_workspaces.get(workspace)==run_id:self._active_workspaces.pop(workspace,None)
+        thread=threading.Thread(target=worker,name="joao-"+run_id,daemon=True)
+        with self._dispatch_lock:
+            prior=self._active_workspaces.get(workspace)
+            if prior and prior != run_id and self.workers.get(prior) and self.workers[prior].is_alive():
+                raise RuntimeStateError("another JOAO builder is active for this worktree")
+            self.workers[run_id]=thread;self._active_workspaces[workspace]=run_id
+        thread.start();return {"run_id":run_id,"status":"queued"}
     @property
     def url(self):return f"http://127.0.0.1:{self.server.server_port}/"
     def serve_in_thread(self):

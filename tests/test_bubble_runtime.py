@@ -3,6 +3,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -101,7 +102,7 @@ def test_console_accepts_a_prompt_and_starts_a_run(tmp_path):
         "targeted_test_command": "",
     }).encode()
     request = urllib.request.Request(api.url + "missions", data=payload, method="POST",
-                                     headers={"Content-Type": "application/json"})
+                                     headers={"Content-Type": "application/json", "X-JOAO-Token": api.token})
     with urllib.request.urlopen(request, timeout=10) as response:
         run_id = json.loads(response.read())["run_id"]
     for _ in range(30):
@@ -110,4 +111,15 @@ def test_console_accepts_a_prompt_and_starts_a_run(tmp_path):
             break
         time.sleep(.1)
     assert api.runtime.get(run_id)["status"] == "needs_approval"
+    api.close()
+
+
+def test_console_rejects_missing_token(tmp_path):
+    api = LocalAPIServer(runtime(tmp_path, lambda *_: {"ok": True}))
+    api.serve_in_thread()
+    request = urllib.request.Request(api.url + "missions", data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json"})
+    with pytest.raises(urllib.error.HTTPError) as error:
+        urllib.request.urlopen(request, timeout=10)
+    assert error.value.code == 401
     api.close()
