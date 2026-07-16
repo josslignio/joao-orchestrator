@@ -24,6 +24,7 @@ from joao_orchestrator.bubble.runtime import (
     RunRuntime,
     RuntimeStateError,
     SandboxBuilder,
+    bounded_provider_env,
     parse_review_verdict,
 )
 from joao_orchestrator.domain.models import ProjectProfile
@@ -239,6 +240,12 @@ def test_claude_builder_and_reviewer_use_real_bounded_cli_preflight(monkeypatch)
         assert capability["actual_model"] == "claude-test"
         assert capability["real_or_mock"] == "real"
     assert sum(any("CLAUDE_JOAO_OK" in item for item in call) for call in calls) == 2
+
+
+def test_provider_environment_disables_python_and_pytest_cache_drift():
+    env = bounded_provider_env()
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert env["PYTEST_ADDOPTS"] == "-p no:cacheprovider"
 
 
 def test_quick_sandbox_rejects_unsafe_requested_paths(tmp_path):

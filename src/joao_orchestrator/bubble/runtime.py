@@ -25,6 +25,17 @@ def now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def bounded_provider_env() -> dict[str, str]:
+    """Prevent provider-invoked test tools from leaving interpreter/cache drift."""
+    env = dict(os.environ)
+    env.update({
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTEST_ADDOPTS": "-p no:cacheprovider",
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+    })
+    return env
+
+
 def digest(path: Path) -> str:
     value = hashlib.sha256()
     with path.open("rb") as handle:
@@ -315,7 +326,8 @@ class GLMBuilder(BuilderAdapter):
         argv = [found, "--workspace", str(workspace), "--task-file", str(task), "--output", str(output), "--mode", "workspace-write", "--budget", "small"]
         for item in allowed: argv.extend(["--allowed-path", item])
         try:
-            proc = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=900)
+            proc = subprocess.run(argv, shell=False, capture_output=True, text=True,
+                                  timeout=900, env=bounded_provider_env())
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"ok": False, "provider": self.provider, "model": self.model, "executable": found, "real_or_mock": "real", "reason": f"GLM execution failed: {exc}", "timestamp_start": start_time, "timestamp_end": now(), "returncode": -1, "last_error": str(exc)}
         return {"ok": proc.returncode == 0, "provider": self.provider, "model": self.model, "executable": found, "adapter_command": argv, "real_or_mock": "real", "returncode": proc.returncode, "stdout": proc.stdout[-4000:], "stderr": proc.stderr[-4000:], "output": str(output), "output_sha256": digest(output) if output.exists() else None, "timestamp_start": start_time, "timestamp_end": now(), "evidence_paths": [str(output), str(task)]}
@@ -365,7 +377,8 @@ class CodexBuilder(BuilderAdapter):
                 "--sandbox", "workspace-write", "-C", str(workspace),
                 "--output-last-message", str(output), prompt]
         try:
-            proc = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=self.timeout)
+            proc = subprocess.run(argv, shell=False, capture_output=True, text=True,
+                                  timeout=self.timeout, env=bounded_provider_env())
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"ok": False, "provider": self.provider, "model": self.model, "executable": found, "real_or_mock": "real", "reason": f"Codex builder unavailable: {exc}", "timestamp_start": start_time, "timestamp_end": now(), "returncode": -1, "last_error": str(exc)}
         events = run_dir / ("codex-correction.jsonl" if correction else "codex-builder.jsonl")
@@ -421,7 +434,8 @@ class ClaudeBuilder(BuilderAdapter):
         ]
         try:
             result = subprocess.run(argv, cwd=str(workspace), shell=False,
-                                    capture_output=True, text=True, timeout=self.timeout)
+                                    capture_output=True, text=True, timeout=self.timeout,
+                                    env=bounded_provider_env())
             payload = json.loads(result.stdout) if result.stdout.strip() else {}
         except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
             atomic_write_json(output, {"error": str(exc)})
@@ -519,8 +533,7 @@ class CodexCLIReviewer(ReviewerAdapter):
                 "--sandbox", "workspace-write", "-C", str(workspace), prompt]
         before_paths = git_status_paths(workspace)
         before_fingerprint = git_worktree_fingerprint(workspace)
-        env = dict(os.environ)
-        env.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTEST_ADDOPTS": "-p no:cacheprovider"})
+        env = bounded_provider_env()
         try:
             proc = subprocess.run(argv, cwd=str(workspace), shell=False, capture_output=True,
                                   text=True, timeout=self.timeout, env=env)
@@ -604,7 +617,8 @@ class ClaudeCLIReviewer(ReviewerAdapter):
         before_fingerprint = git_worktree_fingerprint(workspace)
         try:
             result = subprocess.run(argv, cwd=workspace, shell=False,
-                                    capture_output=True, text=True, timeout=self.timeout)
+                                    capture_output=True, text=True, timeout=self.timeout,
+                                    env=bounded_provider_env())
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"ok": False, "decision": "block", "stage": stage,
                     "provider": self.provider, "model": self.model,
