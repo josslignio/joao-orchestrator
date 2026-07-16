@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from joao_orchestrator.bubble.api import LocalAPIServer
-from joao_orchestrator.bubble.runtime import LocalProfileAdapter, RunRuntime, SandboxBuilder
+from joao_orchestrator.bubble.runtime import LocalProfileAdapter, RunRuntime, RuntimeStateError, SandboxBuilder
+
+
+class AcceptedReviewer:
+    provider = "codex"; model = "fixture-independent"
+    def review(self, run, _):
+        return {"ok": True, "decision": "pass", "proof": {"verdict": "ACCEPT", "reviewed_diff_sha256": run["final_diff_sha256"]}}
 
 
 def sandbox(tmp_path: Path):
@@ -22,8 +28,8 @@ def sandbox(tmp_path: Path):
     return workspace
 
 
-def runtime(tmp_path, builder):
-    return RunRuntime(tmp_path / "state", builder=SandboxBuilder(builder), profiles=LocalProfileAdapter())
+def runtime(tmp_path, builder, reviewer=None):
+    return RunRuntime(tmp_path / "state", builder=SandboxBuilder(builder), reviewer=reviewer, profiles=LocalProfileAdapter())
 
 
 def test_nominal_run_evidence_and_approval(tmp_path):
@@ -31,7 +37,7 @@ def test_nominal_run_evidence_and_approval(tmp_path):
     def build(_, workspace, __):
         (workspace / "module.py").write_text("VALUE = 2\n")
         return {"ok": True}
-    value = runtime(tmp_path, build)
+    value = runtime(tmp_path, build, AcceptedReviewer())
     run = value.start(project_id="fixture", workspace=work, mission="fix", targeted_tests=[[sys.executable, "test_module.py"]], full_tests=[[sys.executable, "test_module.py"]])
     assert value.run_once(run)["status"] == "needs_approval"
     assert value.approve(run)["status"] == "accepted"
@@ -51,6 +57,20 @@ def test_out_of_scope_or_failed_test_blocks(tmp_path):
     assert value.run_once(run)["status"] == "blocked"
     evidence = json.loads((tmp_path / "state" / "runs" / run / "changed-paths.json").read_text())
     assert evidence["violations"]
+
+
+def test_dirty_secret_and_unreviewed_approval_are_refused(tmp_path):
+    work = sandbox(tmp_path)
+    (work / ".env").write_text("secret=not-read\n")
+    value = runtime(tmp_path, lambda *_: {"ok": True})
+    with pytest.raises(RuntimeStateError, match="out-of-scope drift"):
+        value.start(project_id="fixture", workspace=work, mission="unsafe", targeted_tests=[], full_tests=[])
+    (work / ".env").unlink()
+    run = value.start(project_id="fixture", workspace=work, mission="review", targeted_tests=[], full_tests=[])
+    state = value.run_once(run)
+    assert state["status"] == "needs_approval"
+    with pytest.raises(RuntimeStateError, match="independent review proof"):
+        value.approve(run)
 
 
 def test_pause_resume_and_local_api(tmp_path):

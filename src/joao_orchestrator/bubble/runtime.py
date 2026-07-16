@@ -186,6 +186,9 @@ class RunRuntime:
         if not workspace.is_dir() or not (workspace / ".git").exists(): raise RuntimeStateError("workspace must be a local Git worktree")
         profile = profile or self.profiles.load(project_id, workspace)
         if Path(profile.repository_root).resolve() != workspace: raise RuntimeStateError("profile workspace mismatch")
+        baseline_violations = detect_path_violations(self._paths(workspace), profile)
+        if baseline_violations:
+            raise RuntimeStateError("workspace has forbidden or out-of-scope drift: " + "; ".join(baseline_violations))
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"; folder = self._dir(run_id); folder.mkdir(parents=True)
         tasks = [{"id": "plan", "status": "pending"}, {"id": "build", "status": "pending", "depends_on": ["plan"]}, {"id": "test", "status": "pending", "depends_on": ["build"]}, {"id": "review", "status": "pending", "depends_on": ["test"]}]
         run = {"schema_version": 1, "run_id": run_id, "project_id": project_id, "workspace": str(workspace), "mission": mission, "status": "pending", "created_at": now(), "updated_at": now(), "current_step": "created", "profile": profile.to_dict(), "targeted_tests": targeted_tests, "full_tests": full_tests, "corrections_used": 0, "max_corrections": 1, "tasks": tasks}
@@ -207,7 +210,11 @@ class RunRuntime:
     def stop(self, run_id: str) -> dict[str, Any]:
         run = self._read(run_id); self._transition(run, RunStatus.STOPPED, "user stop"); self._finalize(run); return run
     def approve(self, run_id: str) -> dict[str, Any]:
-        run = self._read(run_id); self._transition(run, RunStatus.ACCEPTED, "human approval"); self._finalize(run); return run
+        run = self._read(run_id)
+        if not run.get("review_verified"):
+            self._event(run, "approval_refused", reason="independent review proof is absent or mismatched")
+            raise RuntimeStateError("cannot approve without matching independent review proof")
+        self._transition(run, RunStatus.ACCEPTED, "human approval"); self._finalize(run); return run
     def reject(self, run_id: str) -> dict[str, Any]: return self.stop(run_id)
     def _paths(self, workspace: Path) -> list[str]:
         raw = subprocess.run(["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd=str(workspace), shell=False, capture_output=True, text=True, check=True).stdout
@@ -253,6 +260,9 @@ class RunRuntime:
         if not all(item["ok"] for item in results): self._transition(run, RunStatus.FAILED, "tests failed"); self._finalize(run); return run
         run["tasks"][2]["status"] = "completed"; self._transition(run, RunStatus.REVIEWING, "independent review")
         review = self.reviewer.review(run, folder); atomic_write_json(folder / "review-evidence.json", review)
+        proof = review.get("proof", {})
+        run["review_verified"] = bool(review.get("ok") and proof.get("verdict") == "ACCEPT" and proof.get("reviewed_diff_sha256") == run["final_diff_sha256"])
+        self._write(run)
         if review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]: self._transition(run, RunStatus.CORRECTING, "P1; one repair permitted"); return run
         if not review.get("ok") or review.get("decision") == "block": self._transition(run, RunStatus.BLOCKED, "review blocked"); self._finalize(run); return run
         run["tasks"][3]["status"] = "completed"; self._transition(run, RunStatus.NEEDS_APPROVAL, "review completed; human decision"); self._finalize(run); return run
