@@ -1418,13 +1418,14 @@ def _run_task_pipeline(meta: Any, profile: Any, task_store: Any,
 
         # Write validation.json artifact (required by convergence).
         # Record real return code and ok value for each command.
+        import os
         from ..domain.models import ValidationRun
         vrun = ValidationRun(
             task_id=meta.task_id,
             ok=all_ok,
             commands=[
                 {
-                    "command": " ".join(c.args or []),
+                    "command": " ".join([os.path.basename(c.executable)] + list(c.args or [])),
                     "ok": r.returncode == 0,
                     "returncode": r.returncode,
                 }

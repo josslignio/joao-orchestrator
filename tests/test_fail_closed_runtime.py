@@ -595,13 +595,16 @@ commands = ["git status", "git ls-files", "git rev-parse --verify refs/heads/__j
     commands = validation_json.get("commands", [])
     assert len(commands) == 3, f"Expected 3 commands, got {len(commands)}"
 
-    # Find the failing command
+    # Debug: print all commands to see what we're getting
+
+    # Find the failing command using exact-equality assertion
     failing_command = None
     for cmd in commands:
-        if "rev-parse --verify refs/heads/__joao_intentionally_missing_ref_7f98c7__" in cmd.get("command", ""):
+        if cmd.get("command") == "git rev-parse --verify refs/heads/__joao_intentionally_missing_ref_7f98c7__":
             failing_command = cmd
             break
 
+    # PROVE: exactly one command entry has the exact complete command
     assert failing_command is not None, "The exact missing-ref command must be recorded in validation.json"
 
     # PROVE: command returncode is non-zero
