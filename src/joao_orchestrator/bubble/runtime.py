@@ -575,6 +575,7 @@ class CodexCLIReviewer(ReviewerAdapter):
             "malformed_finding": malformed_finding,
             "returncode": proc.returncode, "output": str(output),
             "output_sha256": digest(output), "stderr": proc.stderr[-4000:],
+            "stdout_tail": proc.stdout[-2000:],
             "proof": {"verdict": verdict, "reviewed_diff_sha256": run.get("final_diff_sha256")},
             "provider": self.provider, "model": self.model, "executable": found, "real_or_mock": "real",
             "adapter_command": argv[:-1],

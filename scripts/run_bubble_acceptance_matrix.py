@@ -206,8 +206,15 @@ def execute_row(api: LocalAPIServer, state_root: Path, builder: str, review: str
         and row["review_proof_matches_diff"]
         and (review == "none" or row["review_result"] == "ACCEPT")
     ) else "FAILED"
+    stage_reviews = []
+    for path in sorted(folder.glob("*review-evidence*.json")):
+        try:
+            stage_reviews.append(json.loads(path.read_text()))
+        except (OSError, json.JSONDecodeError):
+            pass
     combined_error = json.dumps({"run": final, "builder": builder_evidence,
-                                 "review": review_evidence}, sort_keys=True)
+                                 "review": review_evidence,
+                                 "stage_reviews": stage_reviews}, sort_keys=True)
     if row["scenario_status"] == "FAILED" and re.search(
             r"quota|rate.?limit|usage.?limit", combined_error, re.I):
         row["scenario_status"] = "QUOTA_BLOCKED"
