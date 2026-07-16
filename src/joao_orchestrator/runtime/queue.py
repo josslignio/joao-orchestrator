@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -1417,15 +1418,22 @@ def _run_task_pipeline(meta: Any, profile: Any, task_store: Any,
                 all_ok = False
 
         # Write validation.json artifact (required by convergence).
-        # Record real return code and ok value for each command.
-        import os
+        # Evidence is an exact, inspectable record of the declared command,
+        # including its resolved executable and every permitted extra argument.
+        # The executor may add safety-only Git process options, but they are not
+        # part of the validation profile command being attested here.
         from ..domain.models import ValidationRun
         vrun = ValidationRun(
             task_id=meta.task_id,
             ok=all_ok,
             commands=[
                 {
-                    "command": " ".join([os.path.basename(c.executable)] + list(c.args or [])),
+                    "argv": [c.executable, *list(c.args or []),
+                             *list(c.args_extra or [])],
+                    "command": shlex.join(
+                        [c.executable, *list(c.args or []),
+                         *list(c.args_extra or [])]
+                    ),
                     "ok": r.returncode == 0,
                     "returncode": r.returncode,
                 }

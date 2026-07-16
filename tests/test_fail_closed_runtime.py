@@ -11,6 +11,7 @@ These tests exercise real runtime paths without mocking core behavior.
 """
 
 import json
+import shutil
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 import pytest
@@ -543,8 +544,9 @@ def test_queue_pipeline_validation_json_records_real_return_codes(tmp_path):
     task_store = MockTaskStore()
     budget_store = MockBudgetStore()
 
-    # Create validation.toml with passing commands AND one failing command
-    # The failing command uses a ref that cannot exist: git rev-parse --verify refs/heads/__joao_intentionally_missing_ref_7f98c7__
+    # Create validation.toml with passing commands AND one real failing Git
+    # command. The hostile ref is supplied through args_extra so the regression
+    # proves that evidence does not silently drop permitted trailing arguments.
     validation_dir = repo_path / ".agent"
     validation_dir.mkdir(exist_ok=True)
     validation_toml = validation_dir / "validation.toml"
@@ -561,7 +563,9 @@ timeout = 30
 
 [[commands]]
 executable = "git"
-args = ["rev-parse", "--verify", "refs/heads/__joao_intentionally_missing_ref_7f98c7__"]
+args = ["rev-parse", "--verify"]
+extra_args_allowed = ["refs/heads/__joao_intentionally_missing_ref_7f98c7__"]
+args_extra = ["refs/heads/__joao_intentionally_missing_ref_7f98c7__"]
 timeout = 30
 
 [profiles.default]
@@ -591,21 +595,21 @@ commands = ["git status", "git ls-files", "git rev-parse --verify refs/heads/__j
     # PROVE: validation overall ok is false
     assert validation_json["ok"] is False, "Overall validation ok must be false when any command fails"
 
-    # PROVE: the exact missing-ref command is recorded
+    # PROVE: exactly one evidence entry contains the complete, resolved argv.
     commands = validation_json.get("commands", [])
     assert len(commands) == 3, f"Expected 3 commands, got {len(commands)}"
-
-    # Debug: print all commands to see what we're getting
-
-    # Find the failing command using exact-equality assertion
-    failing_command = None
-    for cmd in commands:
-        if cmd.get("command") == "git rev-parse --verify refs/heads/__joao_intentionally_missing_ref_7f98c7__":
-            failing_command = cmd
-            break
-
-    # PROVE: exactly one command entry has the exact complete command
-    assert failing_command is not None, "The exact missing-ref command must be recorded in validation.json"
+    import shlex
+    hostile_argv = [
+        str(shutil.which("git")), "rev-parse", "--verify",
+        "refs/heads/__joao_intentionally_missing_ref_7f98c7__",
+    ]
+    matches = [cmd for cmd in commands if cmd.get("argv") == hostile_argv]
+    assert len(matches) == 1, (
+        "validation.json must contain exactly one complete hostile argv entry; "
+        f"got {matches}"
+    )
+    failing_command = matches[0]
+    assert failing_command["command"] == shlex.join(hostile_argv)
 
     # PROVE: command returncode is non-zero
     assert failing_command["returncode"] != 0, f"Failing command must have non-zero returncode, got: {failing_command['returncode']}"
