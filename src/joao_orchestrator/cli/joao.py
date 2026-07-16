@@ -23,6 +23,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("autonomy", help="print the current autonomy classification")
     sub.add_parser("version", help="print the product version + identity")
+    ui = sub.add_parser("ui", help="start the local-only JOAO bubble")
+    ui.add_argument("--state-root", default="~/.local/share/joao")
 
     args = parser.parse_args(argv)
     if args.cmd == "autonomy":
@@ -31,6 +33,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "version":
         print("JOÃO.AI joao-orchestrator (canonical); technical_id=joao")
+        return 0
+    if args.cmd == "ui":
+        from joao_orchestrator.bubble.api import LocalAPIServer
+        from joao_orchestrator.bubble.runtime import CodexEvidenceReviewer, GLMBuilder, RunRuntime
+        server = LocalAPIServer(RunRuntime(Path(args.state_root).expanduser(), builder=GLMBuilder(), reviewer=CodexEvidenceReviewer()))
+        print(server.url)
+        try: server.server.serve_forever()
+        except KeyboardInterrupt: server.close()
         return 0
     parser.print_help()
     return 0
