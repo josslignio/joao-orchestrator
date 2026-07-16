@@ -595,7 +595,7 @@ class RunRuntime:
             reviewer_providers.append(getattr(reviewer_instance, 'provider', 'unknown'))
             reviewer_models.append(getattr(reviewer_instance, 'model', 'unknown'))
 
-        run = {"schema_version": 1, "run_id": run_id, "project_id": project_id, "workspace": str(workspace), "mission": mission, "status": "pending", "created_at": now(), "updated_at": now(), "current_step": "created", "profile": profile.to_dict(), "targeted_tests": targeted_tests, "full_tests": full_tests, "builder_name": builder_name, "builder_provider": builder_provider, "builder_model": builder_model, "builder_preflight": builder_preflight, "reviewer_names": reviewer_names, "reviewer_providers": reviewer_providers, "reviewer_models": reviewer_models, "reviewer_preflights": reviewer_preflights, "review_policy": review_policy, "review_semantics": review_semantics, "isolated_workspace": isolated_workspace, "codex_review": "codex" in reviewer_names, "corrections_used": 0, "max_corrections": 1, "tasks": tasks, "is_self_review": is_self_review, "no_review_label": review_policy == "none", "review_verified": False}
+        run = {"schema_version": 1, "run_id": run_id, "project_id": project_id, "workspace": str(workspace), "mission": mission, "status": "pending", "created_at": now(), "updated_at": now(), "current_step": "created", "profile": profile.to_dict(), "targeted_tests": targeted_tests, "full_tests": full_tests, "builder_name": builder_name, "builder_provider": builder_provider, "builder_model": builder_model, "builder_preflight": builder_preflight, "reviewer_names": reviewer_names, "reviewer_providers": reviewer_providers, "reviewer_models": reviewer_models, "reviewer_preflights": reviewer_preflights, "review_policy": review_policy, "review_semantics": review_semantics, "isolated_workspace": isolated_workspace, "codex_review": "codex" in reviewer_names, "corrections_used": 0, "max_corrections": 1, "tasks": tasks, "is_self_review": is_self_review, "no_review_label": review_policy == "none", "review_verified": False, "plan_review_completed": False}
         atomic_write_text(folder / "mission.md", mission + "\n"); atomic_write_json(folder / "project-profile.json", profile.to_dict())
         atomic_write_json(folder / "task-graph.json", {"tasks": tasks})
         plan_data = {
@@ -883,9 +883,12 @@ class RunRuntime:
             return self._execute(run, True, building=True)
         if run["status"] in {"failed", "blocked"}: return self.retry(run_id)
         if run["status"] != "ready": raise RuntimeStateError("run cannot execute from " + run["status"])
-        plan_review = self._review_gate(run, "plan")
-        if not plan_review.get("ok"):
-            self._transition(run, RunStatus.BLOCKED, "Codex plan review blocked"); self._finalize(run); return run
+        if not run.get("plan_review_completed"):
+            plan_review = self._review_gate(run, "plan")
+            if not plan_review.get("ok"):
+                self._transition(run, RunStatus.BLOCKED, "Codex plan review blocked"); self._finalize(run); return run
+            run["plan_review_completed"] = True
+            self._write(run)
         if self._apply_control(run):
             return run
         return self._execute(run, False)

@@ -201,8 +201,14 @@ class LocalAPIServer:
         root = self.runtime.root / "sandboxes" / ("quick-" + secrets.token_hex(5))
         (root / "src").mkdir(parents=True)
         (root / "tests").mkdir()
+        (root / "tests" / "__init__.py").write_text("")
         (root / "src" / "task.py").write_text('"""Safe JOAO quick-task sandbox."""\n\ndef identity(value):\n    return value\n')
-        (root / "tests" / "test_smoke.py").write_text("from src.task import identity\n\ndef test_identity():\n    assert identity('joao') == 'joao'\n")
+        (root / "tests" / "test_smoke.py").write_text(
+            "import unittest\n\nfrom src.task import identity\n\n"
+            "class SmokeTest(unittest.TestCase):\n"
+            "    def test_identity(self):\n"
+            "        self.assertEqual(identity('joao'), 'joao')\n"
+        )
         for argv in (["git", "init", "-q"], ["git", "config", "user.email", "joao-sandbox@example.invalid"], ["git", "config", "user.name", "JOAO Sandbox"], ["git", "add", "."], ["git", "commit", "-qm", "sandbox baseline"]):
             subprocess.run(argv, cwd=str(root), check=True)
         return root
@@ -257,11 +263,13 @@ class LocalAPIServer:
         root = self.quick_sandbox()
         contract = (
             "Work only inside this disposable Git sandbox. Do not install packages, commit, "
-            "push, access external paths, or modify the sandbox policy. Run the tests.\n\n"
+            "push, access external paths, or modify the sandbox policy. Use only Python's "
+            "standard-library unittest framework for tests, and run the recorded test command.\n\n"
             "User task:\n" + mission
         )
         allowed = ["todo.py", "test_todo.py", "src/", "tests/"]
-        return self._start("quick-sandbox", root, contract, allowed, ["python3", "-m", "pytest", "-q"], [], builder_name, reviewer_names, review_policy)
+        full_test = ["python3", "-m", "unittest", "discover", "-s", ".", "-p", "test*.py"]
+        return self._start("quick-sandbox", root, contract, allowed, full_test, [], builder_name, reviewer_names, review_policy)
 
     def launch(self, data):
         root = Path(data["workspace"]).expanduser().resolve()

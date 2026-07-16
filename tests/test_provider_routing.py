@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -256,6 +257,34 @@ def test_single_p1_triggers_one_bounded_repair_with_exact_finding(tmp_path):
     assert (folder / "builder-repair-1-evidence.json").is_file()
 
 
+def test_pause_after_plan_review_does_not_repeat_the_review(tmp_path):
+    root = git_workspace(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+
+    class SlowPlanReviewer(FixtureReviewer):
+        def review_stage(self, run, run_dir, stage):
+            if stage == "plan" and not entered.is_set():
+                entered.set()
+                assert release.wait(5)
+            return super().review_stage(run, run_dir, stage)
+
+    reviewer = SlowPlanReviewer("codex-fixture")
+    value = runtime(tmp_path, codex=reviewer)
+    run_id = start(value, root, reviewers=["codex"], policy="codex")
+    worker = threading.Thread(target=value.run_once, args=(run_id,))
+    worker.start()
+    assert entered.wait(5)
+    assert value.pause(run_id)["control_request"] == "pause"
+    release.set()
+    worker.join(5)
+    assert value.get(run_id)["status"] == "paused"
+    assert value.get(run_id)["plan_review_completed"] is True
+    assert value.resume(run_id)["status"] == "ready"
+    assert value.run_once(run_id)["status"] == "needs_approval"
+    assert reviewer.calls.count("plan") == 1
+
+
 def test_codex_self_review_is_labelled_not_independent(tmp_path):
     root = git_workspace(tmp_path)
     value = runtime(tmp_path)
@@ -335,6 +364,7 @@ def test_http_bubble_start_passes_selectors_to_runtime(tmp_path):
         assert "Work only inside this disposable Git sandbox." in run["mission"]
         assert "Work only in src/ and tests/." not in run["mission"]
         assert run["profile"]["allowed_write_paths"] == ["todo.py", "test_todo.py", "src/", "tests/"]
+        assert run["full_tests"] == [["python3", "-m", "unittest", "discover", "-s", ".", "-p", "test*.py"]]
         assert run["status"] == "needs_approval"
         assert run["evidence_directory"]
         assert run["progress"]["total"] == 4

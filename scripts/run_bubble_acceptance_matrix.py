@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -166,7 +167,13 @@ def execute_row(api: LocalAPIServer, state_root: Path, builder: str, review: str
         and builder_evidence.get("model") == final.get("builder_model")
         and builder_evidence.get("returncode") == 0
     )
-    row["tests"] = "PASS" if tests.get("all_passed") else "FAIL"
+    test_text = "\n".join(
+        str(result.get("stdout", "")) + "\n" + str(result.get("stderr", ""))
+        for result in tests.get("results", [])
+    )
+    test_counts = [int(value) for value in re.findall(r"Ran\s+(\d+)\s+tests?", test_text)]
+    row["test_count"] = max(test_counts, default=0)
+    row["tests"] = "PASS" if tests.get("all_passed") and row["test_count"] >= 7 else "FAIL"
     row["review_result"] = (
         "NONE_HUMAN_GATE" if review == "none" else review_evidence.get("proof", {}).get("verdict", "MISSING")
     )
