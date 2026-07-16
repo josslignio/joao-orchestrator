@@ -87,8 +87,8 @@ class LocalAPIServer:
             prior=self._active_workspaces.get(workspace)
             if prior and self.workers.get(prior) and self.workers[prior].is_alive():
                 raise RuntimeStateError("another JOAO builder is active for this worktree")
-            self.workers[run_id]=thread;self._active_workspaces[workspace]=run_id
-        thread.start();return {"run_id":run_id,"status":"queued"}
+            self.workers[run_id]=thread;self._active_workspaces[workspace]=run_id;thread.start()
+        return {"run_id":run_id,"status":"queued"}
     @property
     def url(self):return f"http://127.0.0.1:{self.server.server_port}/"
     def serve_in_thread(self):
