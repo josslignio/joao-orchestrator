@@ -132,6 +132,44 @@ def test_capabilities_expose_the_last_codex_quota_block(tmp_path):
         api.close()
 
 
+def test_retry_with_exhausted_budget_is_refused_with_guidance(tmp_path):
+    api = LocalAPIServer(runtime(tmp_path, codex=QuotaBlockedReviewer()))
+    api.serve_in_thread()
+    try:
+        run_id = blocked_quota_run(api)
+        run = api.runtime._read(run_id)
+        run["corrections_used"] = run["max_corrections"]
+        api.runtime._write(run)
+        result = http(api, f"runs/{run_id}/retry", {})
+        assert result["accepted"] is False
+        assert "budget de réparation épuisé" in result["reason"]
+        assert "Reject" in result["reason"]
+    finally:
+        api.close()
+
+
+def test_quota_warning_never_fires_from_non_codex_evidence(tmp_path):
+    class QuotaWordingClaudeReviewer(FixtureReviewer):
+        def __init__(self):
+            super().__init__("claude-fixture", decision="block")
+
+        def review_stage(self, run, run_dir, stage):
+            result = super().review_stage(run, run_dir, stage)
+            result["reason"] = QUOTA_MESSAGE  # quota-sounding text from a NON-codex reviewer
+            return result
+
+    api = LocalAPIServer(runtime(tmp_path, claude=QuotaWordingClaudeReviewer()))
+    api.serve_in_thread()
+    try:
+        launched = http(api, "quick-missions", {"mission": "mission au sujet des rate limits",
+                                                "builder_name": "glm", "review_mode": "claude"})
+        api.workers[launched["run_id"]].join(timeout=20)
+        assert api.runtime.get(launched["run_id"])["status"] == "blocked"
+        assert http(api, "capabilities")["codex"]["quota_warning"] is None
+    finally:
+        api.close()
+
+
 def test_ui_page_ships_contextual_controls_and_collapsed_json(tmp_path):
     api = LocalAPIServer(runtime(tmp_path))
     api.serve_in_thread()
@@ -142,6 +180,8 @@ def test_ui_page_ships_contextual_controls_and_collapsed_json(tmp_path):
         # restored runs list + contextual action map + explicit feedback wiring
         assert "req('/runs')" in page
         assert "const ACTIONS=" in page and 'blocked:["retry","reject"]' in page
+        assert 'correcting:["stop"]' in page  # the correction loop stays controllable
+        assert "&quot;" in page  # esc() hardens attribute interpolation
         assert "refusée" in page and "acceptée" in page
         # collapsed evidence JSON and block-cause box
         assert "<details><summary>" in page and "block_cause" in page
