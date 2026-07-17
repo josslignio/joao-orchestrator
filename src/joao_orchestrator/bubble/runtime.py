@@ -881,6 +881,24 @@ class RunRuntime:
                 run["current_step"] = f"{request} requested; applying at the next safe checkpoint"
         return run
     def events(self, run_id: str) -> list[dict[str, Any]]: return self._events(self._read(run_id)).read()
+    def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Persisted run summaries, newest first, for UI restoration."""
+        folder = self.root / "runs"
+        if not folder.is_dir():
+            return []
+        summaries: list[dict[str, Any]] = []
+        for path in folder.glob("run-*/run.json"):
+            try:
+                run = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            summaries.append({key: run.get(key) for key in (
+                "run_id", "status", "created_at", "updated_at", "current_step",
+                "builder_name", "builder_provider", "builder_model",
+                "reviewer_names", "review_policy", "review_semantics",
+                "is_self_review", "no_review_label")})
+        summaries.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+        return summaries[:limit]
     def get_evidence_metadata(self, run_id: str) -> dict[str, Any]:
         """Safely read evidence metadata for a run."""
         run = self._read(run_id)
