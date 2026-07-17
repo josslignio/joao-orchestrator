@@ -15,7 +15,7 @@ from .runtime import RunRuntime, RuntimeStateError
 
 
 HTML = """<!doctype html>
-<meta charset="utf-8"><title>JOAO</title>
+<meta charset="utf-8"><title>JOÃO.AI</title>
 <style>
 :root{color-scheme:dark}body{margin:0;background:#0d1117;color:#e6edf3;font:14px system-ui}
 .app{max-width:940px;margin:auto;padding:14px 20px}
@@ -51,7 +51,7 @@ pre{white-space:pre-wrap;max-height:220px;overflow:auto;color:#c9d1d9;font-size:
 #runs{max-height:58vh;overflow-y:auto}
 </style>
 <main class="app">
-<div class="top"><div class="title">JOAO</div><div id="capabilities" class="muted">Chargement…</div></div>
+<div class="top"><div class="title">JOÃO.AI</div><div id="capabilities" class="muted">Chargement…</div></div>
 <section class="form">
 <textarea id="prompt" autofocus placeholder="Ex. Ajoute une fonction qui normalise un titre et les tests associés."></textarea>
 <div class="muted">Moteur — un seul à la fois</div><div class="modes">
