@@ -52,7 +52,7 @@ def main() -> int:
         "#!/bin/zsh\n"
         "export PATH=\"$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\"\n"
         f"mkdir -p {shlex.quote(str(log.parent))}\n"
-        f"exec {shlex.quote(sys.executable)} {shlex.quote(str(cli))} ui "
+        f"exec {shlex.quote(sys.executable)} -u {shlex.quote(str(cli))} ui "
         f">>{shlex.quote(str(log))} 2>&1\n"
     )
     write(contents / "Info.plist", plistlib.dumps(info))
