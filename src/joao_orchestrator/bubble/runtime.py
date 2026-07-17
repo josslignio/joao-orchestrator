@@ -1042,12 +1042,157 @@ class RunRuntime:
                     run[field] = {"error": f"cannot read {filename}"}
         if run["status"] in {"blocked", "failed"}:
             run.update(self.explain_block(run_id))
+        try:
+            updated = datetime.fromisoformat(run["updated_at"].replace("Z", "+00:00"))
+            active = run["status"] not in {"accepted", "stopped", "blocked", "failed"}
+            run["step_elapsed_seconds"] = (
+                max(0, int((datetime.now(timezone.utc) - updated).total_seconds())) if active else 0)
+        except (KeyError, ValueError):
+            run["step_elapsed_seconds"] = 0
+        run["mission_display"] = self.user_mission(run.get("mission"))
+        run["narration"] = self.narrate(run)
+        if run["status"] not in {"accepted", "stopped", "blocked", "failed"}:
+            run["eta"] = self.estimate_eta(run.get("builder_name"), run.get("review_policy"),
+                                           len(run["mission_display"]))
         with self._control_lock:
             if request := self._control_requests.get(run_id):
                 run["control_request"] = request
                 run["current_step"] = f"{request} requested; applying at the next safe checkpoint"
         return run
     def events(self, run_id: str) -> list[dict[str, Any]]: return self._events(self._read(run_id)).read()
+    PROVIDER_LABELS = {"glm": "GLM", "codex": "Codex", "claude": "Claude"}
+    @staticmethod
+    def user_mission(mission: str) -> str:
+        """The human's own words, without the quick-sandbox contract preamble."""
+        return (mission or "").split("User task:\n", 1)[-1].strip()
+    def _gate_position(self, run: dict[str, Any]) -> str:
+        completed = sum(item.get("status") == "completed" for item in run.get("tasks", []))
+        return f"gate {min(completed + 1, len(run.get('tasks', [])) or 4)}/{len(run.get('tasks', [])) or 4}"
+    def narrate(self, run: dict[str, Any]) -> str:
+        """F3/F6 — one human-language sentence describing what is happening now."""
+        builder = self.PROVIDER_LABELS.get(run.get("builder_name"), run.get("builder_name") or "?")
+        reviewers = [self.PROVIDER_LABELS.get(name, name) for name in run.get("reviewer_names") or []]
+        reviewer = " + ".join(reviewers) if reviewers else None
+        gate = self._gate_position(run)
+        diff_note = ""
+        try:
+            manifest = json.loads((self._dir(run["run_id"]) / "deliverables-manifest.json").read_text())
+            count = len(manifest.get("files", []))
+            if count:
+                diff_note = f" ({count} fichier{'s' if count > 1 else ''})"
+        except (OSError, json.JSONDecodeError, KeyError):
+            pass
+        status = run.get("status")
+        step = str(run.get("current_step") or "")
+        if status in {"pending", "planning"}:
+            return "JOÃO prépare le plan borné de la mission…"
+        if status == "ready":
+            return (f"{reviewer} review le plan — gate 1/4" if reviewer
+                    else "Plan prêt — démarrage du build…")
+        if status == "building":
+            if run.get("corrections_used"):
+                return f"{builder} corrige le code après la review — re-build en cours…"
+            return f"{builder} écrit le code…"
+        if status == "testing":
+            return "Tests en cours…"
+        if status == "reviewing":
+            return (f"{reviewer} relit le diff{diff_note} produit par {builder} — {gate}"
+                    if reviewer else f"Vérification finale du diff{diff_note} — {gate}")
+        if status == "correcting":
+            return f"Correction demandée par la review — {builder} va reprendre le diff…"
+        if status == "needs_approval":
+            verdict = ""
+            review = run.get("review_findings") or {}
+            if isinstance(review, dict) and review.get("reviews"):
+                verdicts = [f"{item.get('reviewer')}: {(item.get('proof') or {}).get('verdict') or item.get('decision', '?')}"
+                            for item in review["reviews"]]
+                verdict = " · review " + ", ".join(verdicts)
+            elif run.get("review_policy") == "none":
+                verdict = " · sans review (approbation humaine seule)"
+            return f"Résultat prêt{diff_note}{verdict} — à toi de décider."
+        if status == "accepted":
+            return "Accepté — résultat conservé dans l'évidence."
+        if status == "stopped":
+            return "Arrêté — run archivé."
+        if status in {"blocked", "failed"}:
+            return "Bloqué — " + (run.get("block_cause") or step or "cause inconnue")
+        if status == "paused":
+            return "En pause (reprise interne possible)."
+        return step or status
+    def estimate_eta(self, builder_name: str, review_policy: str, mission_length: int) -> dict[str, Any]:
+        """Rough ETA from past terminal runs of the same config and mission size."""
+        bucket = "small" if mission_length < 200 else "medium" if mission_length < 600 else "large"
+        durations: list[int] = []
+        folder = self.root / "runs"
+        if folder.is_dir():
+            for path in folder.glob("run-*/run.json"):
+                try:
+                    past = json.loads(path.read_text())
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if past.get("builder_name") != builder_name: continue
+                if past.get("review_policy") != review_policy: continue
+                if past.get("status") not in {"needs_approval", "accepted"}: continue
+                length = len(self.user_mission(past.get("mission")))
+                past_bucket = "small" if length < 200 else "medium" if length < 600 else "large"
+                if past_bucket != bucket: continue
+                try:
+                    created = datetime.fromisoformat(past["created_at"].replace("Z", "+00:00"))
+                    updated = datetime.fromisoformat(past["updated_at"].replace("Z", "+00:00"))
+                except (KeyError, ValueError):
+                    continue
+                seconds = int((updated - created).total_seconds())
+                if seconds > 0:
+                    durations.append(seconds)
+        if not durations:
+            return {"eta_seconds": None, "based_on_runs": 0, "bucket": bucket}
+        durations.sort()
+        return {"eta_seconds": durations[len(durations) // 2],
+                "based_on_runs": len(durations), "bucket": bucket}
+    STEP_LABELS = {
+        "planning": "Plan borné", "ready": "Plan validé", "building": "Écriture du code",
+        "testing": "Tests", "reviewing": "Review du diff", "correcting": "Correction demandée",
+        "needs_approval": "En attente de ta décision", "accepted": "Accepté",
+        "stopped": "Arrêté", "blocked": "Bloqué", "failed": "Échec des tests", "paused": "Pause",
+    }
+    def get_timeline(self, run_id: str) -> list[dict[str, Any]]:
+        """F9 — 'Ce qui s'est passé': readable steps with durations, from events.jsonl."""
+        events = self.events(run_id)
+        run = self._read(run_id)
+        steps: list[dict[str, Any]] = []
+        def seconds_between(start: str | None, end: str | None) -> int | None:
+            if not start or not end:
+                return None
+            try:
+                a = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                b = datetime.fromisoformat(end.replace("Z", "+00:00"))
+                return max(0, int((b - a).total_seconds()))
+            except ValueError:
+                return None
+        for event in events:
+            kind = event.get("kind")
+            at = event.get("at")
+            if kind == "state_changed":
+                to_status = event.get("to_status", "")
+                label = self.STEP_LABELS.get(to_status, to_status)
+                if to_status == "building" and event.get("reason") == "correction build":
+                    label = "Re-build après correction"
+                if steps and steps[-1].get("duration_seconds") is None:
+                    steps[-1]["duration_seconds"] = seconds_between(steps[-1]["at"], at)
+                steps.append({"at": at, "label": label, "status": to_status,
+                              "duration_seconds": None})
+            elif kind == "review_completed":
+                decision = str(event.get("decision", "")).upper()
+                reviewer = self.PROVIDER_LABELS.get(event.get("reviewer"), event.get("reviewer"))
+                steps.append({"at": at, "label": f"Review {event.get('stage')} par {reviewer}: "
+                              + ("ACCEPT" if decision == "PASS" else decision),
+                              "status": "review", "duration_seconds": None})
+            elif kind == "human_approval":
+                steps.append({"at": at, "label": "Approbation humaine", "status": "human",
+                              "duration_seconds": None})
+        if steps and steps[-1].get("duration_seconds") is None:
+            steps[-1]["duration_seconds"] = seconds_between(steps[-1]["at"], run.get("updated_at"))
+        return steps
     def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
         """Persisted run summaries, newest first, for UI restoration."""
         folder = self.root / "runs"
@@ -1059,11 +1204,13 @@ class RunRuntime:
                 run = json.loads(path.read_text())
             except (OSError, json.JSONDecodeError):
                 continue
-            summaries.append({key: run.get(key) for key in (
+            summary = {key: run.get(key) for key in (
                 "run_id", "status", "created_at", "updated_at", "current_step",
                 "builder_name", "builder_provider", "builder_model",
                 "reviewer_names", "review_policy", "review_semantics",
-                "is_self_review", "no_review_label")})
+                "is_self_review", "no_review_label")}
+            summary["mission_excerpt"] = self.user_mission(run.get("mission"))[:240]
+            summaries.append(summary)
         summaries.sort(key=lambda item: item.get("created_at") or "", reverse=True)
         return summaries[:limit]
     QUOTA_RE = re.compile(r"quota|rate.?limit|usage.?limit", re.I)

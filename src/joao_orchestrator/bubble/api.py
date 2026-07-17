@@ -279,6 +279,8 @@ class LocalAPIServer:
                         return self.send(200, outer.runtime.get(bits[1]))
                     if len(bits) == 3 and bits[0] == "runs" and bits[2] == "events":
                         return self.send(200, outer.runtime.events(bits[1]))
+                    if len(bits) == 3 and bits[0] == "runs" and bits[2] == "timeline":
+                        return self.send(200, {"steps": outer.runtime.get_timeline(bits[1])})
                     if len(bits) == 3 and bits[0] == "runs" and bits[2] == "evidence-metadata":
                         return self.send(200, outer.runtime.get_evidence_metadata(bits[1]))
                     if len(bits) == 3 and bits[0] == "runs" and bits[2] == "final-diff":
