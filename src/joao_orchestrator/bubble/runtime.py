@@ -766,27 +766,41 @@ class GLMCLIReviewer(ReviewerAdapter):
             "gate, recheck the complete diff, tests, and scope. A P1 or BLOCK requires a concrete "
             "correctness or safety defect, not a speculative enhancement or a preference. "
             "For P1 or BLOCK, print GLM_FINDING: followed by one concrete repair line. "
+            "You need no tool at the plan gate — answer directly from the mission and the inline "
+            "evidence; keep tool use minimal at every gate, and ALWAYS finish by printing the final "
+            "verdict line. "
             "End with exactly GLM_REVIEW: ACCEPT, GLM_REVIEW: P1, or GLM_REVIEW: BLOCK.\n\nMISSION:\n"
             + run["mission"] + "\n\nGATE EVIDENCE:" + evidence_inline
         )
         atomic_write_text(task, prompt)
-        argv = [found, "--workspace", str(workspace), "--task-file", str(task),
-                "--output", str(output), "--mode", "read-only", "--budget", "normal"]
         before_paths = git_status_paths(workspace)
         before_fingerprint = git_worktree_fingerprint(workspace)
-        try:
-            proc = subprocess.run(argv, shell=False, capture_output=True, text=True,
-                                  timeout=self.timeout, env=bounded_provider_env())
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return {"ok": False, "decision": "block", "stage": stage,
-                    "provider": self.provider, "model": self.model, "real_or_mock": "real",
-                    "returncode": -1, "timestamp_start": started, "timestamp_end": now(),
-                    "reason": f"GLM reviewer failed: {exc}", "last_error": str(exc)}
-        review_text = ""
-        if output.is_file():
-            review_text = extract_opencode_text(output.read_text(errors="replace"))
-        text = review_text or (proc.stdout + "\n" + proc.stderr)
-        verdict = parse_review_verdict(text, "GLM_REVIEW") or "MISSING"
+        # A weak model sometimes wanders and never prints its verdict; one
+        # bounded retry is permitted for that exact case, both attempts kept.
+        attempts = 0
+        first_attempt_verdict = None
+        while True:
+            attempts += 1
+            attempt_output = output if attempts == 1 else output.with_name(output.stem + "-retry.jsonl")
+            argv = [found, "--workspace", str(workspace), "--task-file", str(task),
+                    "--output", str(attempt_output), "--mode", "read-only", "--budget", "normal"]
+            try:
+                proc = subprocess.run(argv, shell=False, capture_output=True, text=True,
+                                      timeout=self.timeout, env=bounded_provider_env())
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                return {"ok": False, "decision": "block", "stage": stage,
+                        "provider": self.provider, "model": self.model, "real_or_mock": "real",
+                        "returncode": -1, "timestamp_start": started, "timestamp_end": now(),
+                        "reason": f"GLM reviewer failed: {exc}", "last_error": str(exc)}
+            review_text = ""
+            if attempt_output.is_file():
+                review_text = extract_opencode_text(attempt_output.read_text(errors="replace"))
+            text = review_text or (proc.stdout + "\n" + proc.stderr)
+            verdict = parse_review_verdict(text, "GLM_REVIEW") or "MISSING"
+            if verdict != "MISSING" or attempts >= 2:
+                output = attempt_output
+                break
+            first_attempt_verdict = "MISSING"
         decision = {"ACCEPT": "pass", "P1": "p1", "BLOCK": "block"}.get(verdict, "block")
         finding_match = re.findall(r"GLM_FINDING:\s*(.+)", text, flags=re.I)
         finding = finding_match[-1].strip()[-4000:] if finding_match else ""
@@ -807,6 +821,7 @@ class GLMCLIReviewer(ReviewerAdapter):
             "real_or_mock": "real", "timestamp_start": started, "timestamp_end": now(),
             "output": str(output), "output_sha256": digest(output) if output.is_file() else None,
             "stdout_tail": proc.stdout[-2000:], "stderr": proc.stderr[-4000:],
+            "attempts": attempts, "first_attempt_verdict": first_attempt_verdict,
             "proof": {"verdict": verdict, "reviewed_diff_sha256": run.get("final_diff_sha256")},
             "adapter_command": argv, "reviewer_workspace_drift": reviewer_drift,
             "evidence_paths": [str(output), str(task)],

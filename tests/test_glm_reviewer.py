@@ -118,12 +118,42 @@ def test_glm_review_task_carries_the_gate_evidence_inline(tmp_path):
     assert "DIFF-SENTINELLE" in final_task
 
 
-def test_glm_reviewer_blocks_on_missing_verdict(tmp_path):
+def test_glm_reviewer_blocks_on_missing_verdict_after_one_bounded_retry(tmp_path):
     root = git_workspace(tmp_path)
     run_dir = tmp_path / "run"; run_dir.mkdir()
     reviewer = GLMCLIReviewer(executable=stub_glm(tmp_path, ["no verdict here"]))
     result = reviewer.review_stage(fake_run(root), run_dir, "final")
     assert result["ok"] is False and result["verdict"] == "MISSING"
+    assert result["attempts"] == 2
+    assert result["first_attempt_verdict"] == "MISSING"
+    assert (run_dir / "glm-final-review.jsonl").is_file()
+    assert (run_dir / "glm-final-review-retry.jsonl").is_file()
+
+
+def test_glm_reviewer_recovers_when_only_the_first_attempt_wanders(tmp_path):
+    root = git_workspace(tmp_path)
+    run_dir = tmp_path / "run"; run_dir.mkdir()
+    marker = tmp_path / "second-call"
+    stub = tmp_path / "stateful-joao-glm"
+    stub.write_text(
+        "#!/usr/bin/env python3\n"
+        "import argparse, json, pathlib\n"
+        "p = argparse.ArgumentParser()\n"
+        "for flag in ('--workspace','--task-file','--output','--mode','--budget'):\n"
+        "    p.add_argument(flag)\n"
+        "a, _ = p.parse_known_args()\n"
+        f"marker = pathlib.Path({str(marker)!r})\n"
+        "text = 'GLM_REVIEW: ACCEPT' if marker.exists() else 'wandering with tools...'\n"
+        "marker.write_text('seen')\n"
+        "event = json.dumps({'type': 'text', 'part': {'type': 'text', 'text': text}})\n"
+        "open(a.output, 'w').write(event + '\\n')\n"
+        "print('{\"ok\": true}')\n"
+    )
+    stub.chmod(0o755)
+    reviewer = GLMCLIReviewer(executable=stub)
+    result = reviewer.review_stage(fake_run(root), run_dir, "plan")
+    assert result["ok"] is True and result["verdict"] == "ACCEPT"
+    assert result["attempts"] == 2 and result["first_attempt_verdict"] == "MISSING"
 
 
 def test_runtime_accepts_glm_review_policies(tmp_path):
