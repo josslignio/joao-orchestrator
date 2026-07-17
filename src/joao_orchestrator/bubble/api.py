@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from ..domain.models import ProjectProfile
-from .runtime import RunRuntime, RuntimeStateError
+from .runtime import CODE_INTENT_RE, RunRuntime, RuntimeStateError, mission_allowed_paths
 
 
 def safe_disposition_filename(name: str) -> str:
@@ -667,24 +667,46 @@ class LocalAPIServer:
         if not mission:
             raise ValueError("mission cannot be empty")
         builder_name, reviewer_names, review_policy, is_self_review = self._quick_configuration(data)
-        default_quick_paths = ["todo.py", "test_todo.py", "todo.json", "test_tasks.json",
-                               "todo.json.tmp", "test_tasks.json.tmp", "src/", "tests/"]
-        safe_quick_paths = set(default_quick_paths)
+        # A5b/V13-F14: allowed paths are a PERMISSIVE SUPERSET — the files the
+        # mission actually names, unioned with the conventional quick base — so a
+        # legitimately-named file (roman.py) is always in scope and the plan
+        # gate never blocks for a stale static todo profile. Confined to safe
+        # relative paths inside the disposable sandbox.
+        quick_base = {"todo.py", "test_todo.py", "todo.json", "test_tasks.json",
+                      "todo.json.tmp", "test_tasks.json.tmp", "src/", "tests/"}
+        derived = set(mission_allowed_paths(mission)) | quick_base
+        # A3: a text/no-code request must still deliver a real file (.md).
+        text_intent = not CODE_INTENT_RE.search(mission)
+        if text_intent and not any(p.endswith(".md") for p in derived):
+            derived.add("output.md")
         requested_paths = data.get("allowed_paths")
-        allowed = [str(path) for path in requested_paths] if requested_paths is not None else default_quick_paths
-        if not allowed or len(set(allowed)) != len(allowed) or any(path not in safe_quick_paths for path in allowed):
-            raise ValueError("quick sandbox allowed_paths must be a non-empty subset of the safe quick paths")
+        if requested_paths is not None:
+            requested = [str(path).strip() for path in requested_paths if str(path).strip()]
+            if not requested or len(set(requested)) != len(requested) \
+                    or any(path not in derived for path in requested):
+                raise ValueError("allowed_paths must be a subset of the mission-scoped safe paths")
+            allowed = requested
+        else:
+            allowed = sorted(derived)
+        if not allowed or len(set(allowed)) != len(allowed):
+            raise ValueError("quick sandbox allowed_paths must be a non-empty unique set")
         root = self.quick_sandbox()
         contract = (
             "Work only inside this disposable Git sandbox. Do not install packages, commit, "
             "push, access external paths, or modify the sandbox policy. Use only Python's "
             "standard-library unittest framework for tests, and run the recorded test command. "
             "The term needs_approval names a JOAO runtime state: never create a file or directory "
-            "with that name. The sandbox-local todo.json and test_tasks.json paths may be used "
-            "during validation, and their .tmp siblings are the only permitted atomic-write "
-            "staging files; remove test/runtime data before delivery.\n\n"
-            "User task:\n" + mission
+            "with that name. Runtime/staging files (todo.json, test_tasks.json and their .tmp "
+            "siblings) must be removed before delivery. You MUST create at least one real "
+            "deliverable file; an empty result is rejected.\n\n"
         )
+        if text_intent:
+            contract += (
+                "This is a text/writing request (no code required). Deliver the full result as a "
+                "Markdown file named output.md — write the actual content into that file. "
+                "No unit tests are required for a pure text deliverable.\n\n"
+            )
+        contract += "User task:\n" + mission
         full_test = ["python3", "-m", "unittest", "discover", "-s", ".", "-p", "test*.py"]
         generated = [path for path in ("todo.json", "test_tasks.json",
                                        "todo.json.tmp", "test_tasks.json.tmp") if path in allowed]

@@ -156,6 +156,65 @@ def parse_review_verdict(text: str, marker: str) -> str:
     return matches[-1].upper() if matches else ""
 
 
+# SHA-256 of the empty byte string: a final-diff.patch of exactly 0 bytes.
+# A run whose diff hashes to this produced literally nothing — fail-closed (A1).
+EMPTY_DIFF_SHA256 = hashlib.sha256(b"").hexdigest()
+
+
+def parse_test_cases(results: list[dict[str, Any]]) -> dict[str, int]:
+    """Count real test CASES (not commands) from unittest/pytest output (A2/F9).
+
+    A green run must report the cases that actually executed, not the number of
+    commands. Zero cases collected is reported as such — never as a green count.
+    """
+    collected = passed = 0
+    for item in results:
+        blob = (item.get("stdout") or "") + "\n" + (item.get("stderr") or "")
+        unittest_ran = re.search(r"Ran (\d+) tests? in", blob)
+        if unittest_ran:
+            count = int(unittest_ran.group(1))
+            collected += count
+            # unittest prints a trailing "OK" only when every case passed.
+            if item.get("ok") and re.search(r"^OK", blob, re.M):
+                passed += count
+            else:
+                failures = re.search(r"failures=(\d+)", blob)
+                errors = re.search(r"errors=(\d+)", blob)
+                bad = (int(failures.group(1)) if failures else 0) + (int(errors.group(1)) if errors else 0)
+                passed += max(0, count - bad)
+            continue
+        p = re.search(r"(\d+) passed", blob)
+        f = re.search(r"(\d+) failed", blob)
+        e = re.search(r"(\d+) error", blob)
+        n_pass = int(p.group(1)) if p else 0
+        n_fail = int(f.group(1)) if f else 0
+        n_err = int(e.group(1)) if e else 0
+        collected += n_pass + n_fail + n_err
+        passed += n_pass
+    return {"cases_collected": collected, "cases_passed": passed}
+
+
+TEXT_FILE_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:py|md|txt|json|html|htm|css|js|csv|ya?ml|toml|ini|rst)\b")
+CODE_INTENT_RE = re.compile(r"\.py\b|fonction|function|classe|\bclass\b|script|parser|parseur|algorithm|algorithme|"
+                            r"\bAPI\b|\bCLI\b|endpoint|regex|tests?\b|unittest|pytest", re.I)
+
+
+def mission_allowed_paths(mission: str) -> list[str]:
+    """Derive the sandbox write scope from the mission itself (A5b / V13-F14).
+
+    Never inherit a stale static profile (todo.py…): the allowed paths are the
+    files the mission actually names, plus the conventional src/ and tests/
+    directories and their atomic-write staging siblings.
+    """
+    paths: set[str] = {"src/", "tests/", "todo.json.tmp", "test_tasks.json.tmp"}
+    for match in TEXT_FILE_RE.findall(mission):
+        relative = match.lstrip("./")
+        if ".." in relative or relative.startswith("/") or "\\" in relative:
+            continue
+        paths.add(relative)
+    return sorted(paths)
+
+
 def extract_agent_finding(jsonl: str, marker: str) -> str:
     messages: list[str] = []
     for line in jsonl.splitlines():
@@ -1051,6 +1110,7 @@ class RunRuntime:
             run["step_elapsed_seconds"] = 0
         run["mission_display"] = self.user_mission(run.get("mission"))
         run["narration"] = self.narrate(run)
+        run["phase_label"] = self.phase_label(run)
         if run["status"] not in {"accepted", "stopped", "blocked", "failed"}:
             run["eta"] = self.estimate_eta(run.get("builder_name"), run.get("review_policy"),
                                            len(run["mission_display"]))
@@ -1114,11 +1174,28 @@ class RunRuntime:
             return "Accepté — résultat conservé dans l'évidence."
         if status == "stopped":
             return "Arrêté — run archivé."
-        if status in {"blocked", "failed"}:
+        if run.get("nothing_produced"):
+            return "🔴 Rien n'a été produit — diff vide, aucun fichier livré."
+        if status == "failed":
+            return "Échec — " + (run.get("block_cause") or step or "les tests ont échoué")
+        if status == "blocked":
             return "Bloqué — " + (run.get("block_cause") or step or "cause inconnue")
         if status == "paused":
             return "En pause (reprise interne possible)."
         return step or status
+    # A5/F7: clear human states — no more raw 'ready' while a run executes.
+    PHASE_LABELS = {
+        "pending": "queued", "planning": "running", "ready": "running",
+        "building": "running", "testing": "running", "reviewing": "running",
+        "correcting": "running", "needs_approval": "done", "accepted": "done",
+        "stopped": "stopped", "blocked": "failed", "failed": "failed", "paused": "paused",
+    }
+    def phase_label(self, run: dict[str, Any]) -> str:
+        status = run.get("status")
+        base = self.PHASE_LABELS.get(status, status or "?")
+        if base == "running":
+            return f"running · {self._gate_position(run)}"
+        return base
     def estimate_eta(self, builder_name: str, review_policy: str, mission_length: int) -> dict[str, Any]:
         """Rough ETA from past terminal runs of the same config and mission size."""
         bucket = "small" if mission_length < 200 else "medium" if mission_length < 600 else "large"
@@ -1257,12 +1334,42 @@ class RunRuntime:
                     if isinstance(value, str) and value.strip():
                         fragments.append(value)
         return fragments
+    def reviewer_verdicts(self, run_id: str) -> list[dict[str, Any]]:
+        """Structured reviewer findings from every stage's review evidence (A6).
+
+        Returns the real, intelligent verdicts (falsification detected, 9 is not
+        prime, forbidden library…) so the UI can show them instead of a generic
+        'plan review blocked'.
+        """
+        folder = self._dir(run_id)
+        out: list[dict[str, Any]] = []
+        for path in sorted(folder.glob("*-review-evidence*.json")):
+            try:
+                data = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            stage = data.get("stage") or path.name.split("-review", 1)[0]
+            for item in data.get("reviews", []):
+                if not isinstance(item, dict):
+                    continue
+                finding = (item.get("finding") or item.get("reason") or "").strip()
+                verdict = item.get("verdict") or (item.get("decision") or "").upper()
+                if finding and len(finding) >= 12 and verdict not in {"ACCEPT", "PASS"}:
+                    out.append({"stage": stage, "reviewer": item.get("reviewer"),
+                                "provider": item.get("provider"), "verdict": verdict,
+                                "finding": finding[:2000]})
+        return out
     def explain_block(self, run_id: str) -> dict[str, Any]:
         """Human-readable cause and unblock condition for a blocked/failed run."""
         run = self._read(run_id)
         if run["status"] not in {"blocked", "failed"}:
             return {"block_cause": None, "unblock_hint": None, "quota_blocked": False}
-        fragments = self._evidence_fragments(run_id, run)
+        # A1: an honest 'nothing produced' failure reads as such, in red.
+        if run.get("nothing_produced"):
+            return {"block_cause": "🔴 Rien n'a été produit — diff vide, aucun fichier livré. "
+                                   "Aucun compteur vert, aucune approbation possible.",
+                    "unblock_hint": "Reformule la demande ou relance : le builder n'a créé aucun fichier.",
+                    "quota_blocked": False, "nothing_produced": True, "block_verdicts": []}
         # Quota attribution must stay codex-scoped, like quota_trace.
         trace = self.quota_trace(run_id)
         quota = trace["quota_blocked"]
@@ -1270,14 +1377,24 @@ class RunRuntime:
             cause = "Quota fournisseur épuisé (Codex usage limit)"
             if trace.get("reset_hint"):
                 cause += f" — reset annoncé: {trace['reset_hint']}"
-            hint = ("Retry relancera la même configuration après le retour du quota; "
-                    "Reject termine ce run immédiatement et libère l'interface.")
-        else:
-            detail = next((frag.strip() for frag in fragments if frag.strip()), "cause inconnue")
-            cause = detail[:300]
-            hint = ("Retry relance une réparation bornée; Reject termine ce run. "
-                    "Consulte le dossier d'évidence pour le détail complet.")
-        return {"block_cause": cause, "unblock_hint": hint, "quota_blocked": quota}
+            return {"block_cause": cause, "block_verdicts": [], "quota_blocked": True,
+                    "unblock_hint": ("Retry relancera la même configuration après le retour du quota; "
+                                     "Reject termine ce run immédiatement et libère l'interface.")}
+        # A4/A6: surface the reviewer's real verdict, not the generic transition reason.
+        verdicts = self.reviewer_verdicts(run_id)
+        if verdicts:
+            best = verdicts[-1]
+            who = self.PROVIDER_LABELS.get(best.get("reviewer"), best.get("reviewer") or "reviewer")
+            cause = f"{who} a bloqué la gate {best['stage']} ({best['verdict'] or 'BLOCK'}) : {best['finding'][:280]}"
+            return {"block_cause": cause, "block_verdict_full": best["finding"],
+                    "block_verdicts": verdicts, "quota_blocked": False,
+                    "unblock_hint": "Le reviewer a refusé pour la raison ci-dessus. "
+                                    "Corrige la mission ou relance ; consulte l'évidence pour le détail complet."}
+        fragments = self._evidence_fragments(run_id, run)
+        detail = next((frag.strip() for frag in fragments if frag.strip()), "cause inconnue")
+        return {"block_cause": detail[:300], "block_verdicts": [], "quota_blocked": False,
+                "unblock_hint": ("Retry relance une réparation bornée; Reject termine ce run. "
+                                 "Consulte le dossier d'évidence pour le détail complet.")}
     def get_evidence_metadata(self, run_id: str) -> dict[str, Any]:
         """Safely read evidence metadata for a run."""
         run = self._read(run_id)
@@ -1372,6 +1489,16 @@ class RunRuntime:
                              "sha256": digest(target), "is_text": b"\0" not in head})
         atomic_write_json(folder / "deliverables-manifest.json",
                           {"schema_version": 1, "captured_at": now(), "files": manifest})
+    def _delivered_count(self, folder: Path) -> int:
+        """Number of real deliverable files persisted for this run (A1 gate)."""
+        manifest_path = folder / "deliverables-manifest.json"
+        if not manifest_path.is_file():
+            return 0
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return 0
+        return sum(1 for entry in manifest.get("files", []) if entry.get("sha256"))
     def list_result_files(self, run_id: str) -> list[dict[str, Any]]:
         """Deliverable files, from the persistent evidence copy when it exists."""
         run = self._read(run_id)
@@ -1440,6 +1567,10 @@ class RunRuntime:
                     "commands": len(results),
                     "passed": sum(1 for item in results if item.get("ok")),
                     "all_passed": bool(data.get("all_passed")),
+                    # A2/F9: real test CASES, not command count. 0 collected → grey, never green.
+                    "cases_collected": data.get("cases_collected"),
+                    "cases_passed": data.get("cases_passed"),
+                    "real_tests_ran": bool(data.get("cases_collected")),
                     "argv": [item.get("argv") for item in results],
                 }
             except (OSError, json.JSONDecodeError):
@@ -1751,6 +1882,16 @@ class RunRuntime:
         patch = self._git_diff(workspace)
         atomic_write_text(folder / "final-diff.patch", patch.decode(errors="replace")); run["final_diff_sha256"] = digest(folder / "final-diff.patch"); run["tasks"][1]["status"] = "completed"; self._write(run)
         self._persist_deliverables(run, workspace, folder)
+        # A1 fail-closed: an empty diff (0 bytes → EMPTY_DIFF_SHA256) or zero
+        # delivered files means the builder produced nothing. Never let that
+        # reach a green counter or needs_approval — fail honestly.
+        delivered = self._delivered_count(folder)
+        if run["final_diff_sha256"] == EMPTY_DIFF_SHA256 or delivered == 0:
+            run["nothing_produced"] = True; self._write(run)
+            self._event(run, "nothing_produced",
+                        final_diff_sha256=run["final_diff_sha256"], delivered=delivered)
+            self._transition(run, RunStatus.FAILED, "nothing_produced: le builder n'a produit aucun livrable")
+            self._finalize(run); return run
         build_review = self._review_gate(run, "build")
         if self._apply_control(run):
             return run
@@ -1763,7 +1904,7 @@ class RunRuntime:
         if not build_review.get("ok"):
             self._transition(run, RunStatus.BLOCKED, "build review blocked"); self._finalize(run); return run
         self._transition(run, RunStatus.TESTING, "targeted and full tests")
-        results = [self.tests.run(argv, workspace, profile.command_timeout_seconds) for argv in run["targeted_tests"] + run["full_tests"]]; atomic_write_json(folder / "test-results.json", {"results": results, "all_passed": all(item["ok"] for item in results)})
+        results = [self.tests.run(argv, workspace, profile.command_timeout_seconds) for argv in run["targeted_tests"] + run["full_tests"]]; atomic_write_json(folder / "test-results.json", {"results": results, "all_passed": all(item["ok"] for item in results), **parse_test_cases(results)})
         if self._apply_control(run):
             return run
         if not all(item["ok"] for item in results): self._transition(run, RunStatus.FAILED, "tests failed"); self._finalize(run); return run

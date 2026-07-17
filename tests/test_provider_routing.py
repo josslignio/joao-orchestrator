@@ -286,7 +286,7 @@ def test_glm_repair_declares_existing_diff_as_explicit_baseline(tmp_path, monkey
 def test_quick_sandbox_rejects_unsafe_requested_paths(tmp_path):
     api = LocalAPIServer(runtime(tmp_path))
     try:
-        with pytest.raises(ValueError, match="safe quick paths"):
+        with pytest.raises(ValueError, match="mission-scoped safe paths"):
             api.quick_launch({
                 "mission": "test", "builder_name": "glm", "review_mode": "none",
                 "allowed_paths": [".git/"],
@@ -535,7 +535,10 @@ def test_http_bubble_start_passes_selectors_to_runtime(tmp_path):
         assert "Work only inside this disposable Git sandbox." in run["mission"]
         assert "Work only in src/ and tests/." not in run["mission"]
         assert "never create a file or directory with that name" in run["mission"]
-        assert run["profile"]["allowed_write_paths"] == ["todo.py", "test_todo.py", "todo.json", "test_tasks.json", "todo.json.tmp", "test_tasks.json.tmp", "src/", "tests/"]
+        # A5b: allowed paths are the mission-scoped permissive superset (sorted).
+        assert run["profile"]["allowed_write_paths"] == sorted(
+            {"todo.py", "test_todo.py", "todo.json", "test_tasks.json",
+             "todo.json.tmp", "test_tasks.json.tmp", "src/", "tests/"})
         assert run["full_tests"] == [["python3", "-m", "unittest", "discover", "-s", ".", "-p", "test*.py"]]
         assert run["profile"]["generated_paths"] == ["todo.json", "test_tasks.json", "todo.json.tmp", "test_tasks.json.tmp"]
         assert run["status"] == "needs_approval"

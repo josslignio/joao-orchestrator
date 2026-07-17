@@ -77,7 +77,12 @@ def test_out_of_scope_or_failed_test_blocks(tmp_path):
 def test_dirty_secret_and_unreviewed_approval_are_refused(tmp_path):
     work = sandbox(tmp_path)
     (work / ".env").write_text("secret=not-read\n")
-    value = runtime(tmp_path, lambda *_: {"ok": True}, UnverifiedStageReviewer())
+    # Builder writes a real in-scope deliverable so the run reaches needs_approval
+    # (an empty diff would now fail-closed under A1 before approval is tested).
+    def build(_, workspace, __):
+        (Path(workspace) / "module.py").write_text("VALUE = 2\n")
+        return {"ok": True}
+    value = runtime(tmp_path, build, UnverifiedStageReviewer())
     with pytest.raises(RuntimeStateError, match="out-of-scope drift"):
         value.start(project_id="fixture", workspace=work, mission="unsafe", targeted_tests=[], full_tests=[[sys.executable, "-c", "pass"]])
     (work / ".env").unlink()
