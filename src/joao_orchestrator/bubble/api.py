@@ -331,8 +331,9 @@ class LocalAPIServer:
                         "reason": "réparation bornée relancée"}
             state = getattr(self.runtime, action)(run_id)
             if action == "resume":
+                # Judge the feedback on resume()'s own transition; the driver
+                # relaunched below may already have moved the run further.
                 self.resume_drive(run_id)
-                state = self.runtime.get(run_id)
         except RuntimeStateError as exc:
             current = self.runtime.get(run_id)
             return {"action": action, "accepted": False, "status": current["status"],
