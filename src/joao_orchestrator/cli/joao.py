@@ -27,6 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     ui = sub.add_parser("ui", help="start the local-only JOAO bubble")
     ui.add_argument("--state-root", default="~/.local/share/joao")
     ui.add_argument("--no-open", action="store_true", help="do not open the local browser automatically")
+    ui.add_argument("--port", type=int, default=0, help="fixed port (0 = random); the Finder splash needs a stable one")
 
     args = parser.parse_args(argv)
     if args.cmd == "autonomy":
@@ -52,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
             reviewer=codex_reviewer,
             reviewers={"codex": codex_reviewer, "claude": claude_reviewer, "glm": glm_reviewer},
             allow_test_adapters=False,
-        ))
+        ), port=args.port)
         print(server.url)
         if not args.no_open:
             webbrowser.open(server.url, new=2)
