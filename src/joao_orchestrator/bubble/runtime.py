@@ -903,16 +903,24 @@ class RunRuntime:
         return summaries[:limit]
     QUOTA_RE = re.compile(r"quota|rate.?limit|usage.?limit", re.I)
     def quota_trace(self, run_id: str) -> dict[str, Any]:
-        """Detect provider-quota evidence in a run regardless of its terminal state."""
+        """Detect Codex quota evidence in a run regardless of its terminal state.
+
+        Only evidence produced by a Codex adapter is considered, so mission text
+        or findings about rate limiters can never raise a false quota alarm.
+        """
         run = self._read(run_id)
-        combined = "\n".join(self._evidence_fragments(run_id, run))
+        codex_involved = ("codex" in str(run.get("builder_provider", ""))
+                          or "codex" in (run.get("reviewer_names") or []))
+        if not codex_involved:
+            return {"quota_blocked": False, "reset_hint": None}
+        combined = "\n".join(self._evidence_fragments(run_id, run, provider_filter="codex"))
         quota = bool(self.QUOTA_RE.search(combined))
         reset = re.search(r"try again at\s+([^.\"\n]+)", combined, re.I)
         return {"quota_blocked": quota,
                 "reset_hint": reset.group(1).strip() if reset else None}
-    def _evidence_fragments(self, run_id: str, run: dict[str, Any]) -> list[str]:
+    def _evidence_fragments(self, run_id: str, run: dict[str, Any], provider_filter: str | None = None) -> list[str]:
         folder = self._dir(run_id)
-        fragments: list[str] = [run.get("current_step") or ""]
+        fragments: list[str] = [] if provider_filter else [run.get("current_step") or ""]
         for path in sorted(folder.glob("*review-evidence*.json")) + [folder / "builder-evidence.json"]:
             if not path.is_file():
                 continue
@@ -923,6 +931,9 @@ class RunRuntime:
             reviews = data.get("reviews", [data] if isinstance(data, dict) else [])
             for item in reviews:
                 if not isinstance(item, dict):
+                    continue
+                if provider_filter and provider_filter not in str(item.get("provider", "")) \
+                        and provider_filter not in str(item.get("reviewer", "")):
                     continue
                 for key in ("reason", "last_error", "stderr", "stdout_tail", "finding"):
                     value = item.get(key)
