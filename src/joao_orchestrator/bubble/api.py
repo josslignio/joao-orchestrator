@@ -48,6 +48,7 @@ button:disabled{background:#161b22;border-color:#21262d;color:#484f58;cursor:not
 details{margin-top:6px}summary{cursor:pointer;color:#8b949e;font-size:12px}
 pre{white-space:pre-wrap;max-height:220px;overflow:auto;color:#c9d1d9;font-size:11px}
 .row{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;margin:3px 0}
+#runs{max-height:58vh;overflow-y:auto}
 </style>
 <main class="app">
 <div class="top"><div class="title">JOAO</div><div id="capabilities" class="muted">Chargement…</div></div>
@@ -142,7 +143,7 @@ function updateSafety(){if(!CAPS)return;const v=CAPS;const parts=[];
  el('safety-summary').innerHTML=parts.join(' · ');
  const q=el('quota-warning');
  if(quotaDoomed()){q.style.display='block';
-  q.textContent='⚠ Quota Codex épuisé ('+(v.codex.quota_warning.at||'récemment')+') — cette configuration sera bloquée tant que le quota n\\u2019est pas revenu.'}
+  q.textContent='⚠ Quota Codex épuisé ('+(v.codex.quota_warning.at||'récemment')+') — si tu lances quand même, le run se bloquera à la première gate Codex; utilise alors Reject pour le terminer, ou choisis une review sans Codex.'}
  else q.style.display='none';
  let valid=el('prompt').value.trim().length>0&&v[b].available;
  if(r==='codex'&&!v.codex.reviewer_available)valid=false;
