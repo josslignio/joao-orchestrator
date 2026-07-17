@@ -169,7 +169,7 @@ const TOKEN="__JOAO_TOKEN__";const el=id=>document.getElementById(id);
 let CAPS=null,LIST=[];const cards={};
 const ACTIONS={pending:["stop"],planning:["stop"],ready:["stop"],
  building:["stop"],testing:["stop"],reviewing:["stop"],
- needs_approval:["approve","reject"],paused:["stop"],correcting:["stop"],
+ needs_approval:["approve","reject"],paused:["resume","stop"],correcting:["stop"],
  blocked:["retry","reject"],failed:["retry","reject"],accepted:[],stopped:[]};
 const STCLASS={pending:"build",planning:"build",ready:"build",building:"build",testing:"build",
  reviewing:"build",correcting:"build",needs_approval:"wait",paused:"wait",
@@ -190,7 +190,7 @@ function gates(v){const done=(v.progress?v.progress.completed:0);let h='<div cla
 function buttons(v){const acts=ACTIONS[v.status]||[];
  const style={approve:'good',reject:'bad',stop:'bad',retry:''};
  return acts.map(a=>'<button class="btn '+(style[a]||'')+'" data-run="'+esc(v.run_id)+'" data-act="'+a+'">'
-  +({approve:'Approve',reject:'Reject',stop:'Stop',retry:'Retry'}[a]||a)+'</button>').join('')}
+  +({approve:'Approve',reject:'Reject',stop:'Stop',retry:'Retry',resume:'Resume'}[a]||a)+'</button>').join('')}
 function narration(d){if(!d)return '';
  let h='<div class="narration">'+esc(d.narration||d.current_step||'')
   +'<span class="steptime">étape '+fmt(d.step_elapsed_seconds)+' · total '+fmt(d.elapsed_seconds)+'</span>';

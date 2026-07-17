@@ -27,10 +27,12 @@ def test_chat_feel_behaviors_are_wired(tmp_path):
     page = served_page(tmp_path)
     # F1: Enter submits, Shift+Enter is a newline.
     assert "e.key==='Enter'&&!e.shiftKey" in page and "e.preventDefault()" in page
-    # F2: one Stop button; pause/resume gone from the UI.
-    assert '"resume"' not in page and 'data-act="pause"' not in page
+    # F2: one Stop button on active cards; no pause button anywhere. Resume
+    # survives ONLY on legacy paused cards (nothing in the UI creates new ones).
+    assert '"pause"' not in page and 'data-act="pause"' not in page
     assert re.search(r'building:\["stop"\]', page)
     assert 'needs_approval:["approve","reject"]' in page
+    assert 'paused:["resume","stop"]' in page
     # F5: the user's mission on the card.
     assert "Tu as demandé" in page and "mission_excerpt" in page
     # F3: narration + step elapsed + ETA.
