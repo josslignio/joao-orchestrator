@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import io
 import json
 import os
 import re
@@ -10,6 +11,7 @@ import secrets
 import shutil
 import subprocess
 import threading
+import zipfile
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
@@ -870,6 +872,7 @@ class RunRuntime:
             "tasks": run.get("tasks", []),
         }
         run["evidence_directory"] = str(folder)
+        run["result_available"] = (folder / "final-diff.patch").is_file()
         for filename, field in (("changed-paths.json", "changed_files"),
                                 ("test-results.json", "test_results"),
                                 ("review-evidence.json", "review_findings"),
@@ -1003,6 +1006,104 @@ class RunRuntime:
             "diff_content": diff_path.read_text(errors="replace"),
             "diff_size": diff_path.stat().st_size,
         }
+    def _result_file_target(self, run: dict[str, Any], relative: str) -> Path:
+        """Resolve a deliverable path and refuse anything outside the run workspace."""
+        workspace = Path(run["workspace"]).resolve()
+        target = (workspace / relative).resolve()
+        if target != workspace and workspace not in target.parents:
+            raise RuntimeStateError("result path escapes the run workspace: " + relative)
+        if target == workspace:
+            raise RuntimeStateError("result path must name a file, not the workspace root")
+        return target
+    def list_result_files(self, run_id: str) -> list[dict[str, Any]]:
+        """Deliverable files produced by the builder, with existence and hashes."""
+        run = self._read(run_id)
+        changed_path = self._dir(run_id) / "changed-paths.json"
+        if not changed_path.is_file():
+            return []
+        try:
+            changed = json.loads(changed_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return []
+        files: list[dict[str, Any]] = []
+        for relative in changed.get("after", []):
+            entry: dict[str, Any] = {"path": relative, "exists": False,
+                                     "bytes": None, "sha256": None, "is_text": False}
+            try:
+                target = self._result_file_target(run, relative)
+            except RuntimeStateError as exc:
+                entry["error"] = str(exc)
+                files.append(entry)
+                continue
+            if target.is_file():
+                head = target.open("rb").read(8192)
+                entry.update({"exists": True, "bytes": target.stat().st_size,
+                              "sha256": digest(target), "is_text": b"\0" not in head})
+            files.append(entry)
+        return files
+    def get_result_summary(self, run_id: str) -> dict[str, Any]:
+        """'What was built' digest a human can consult before deciding."""
+        run = self._read(run_id)
+        folder = self._dir(run_id)
+        summary: dict[str, Any] = {
+            "run_id": run_id, "status": run.get("status"),
+            "result_available": (folder / "final-diff.patch").is_file(),
+            "builder_name": run.get("builder_name"),
+            "builder_provider": run.get("builder_provider"),
+            "builder_model": run.get("builder_model"),
+            "review_policy": run.get("review_policy"),
+            "review_semantics": run.get("review_semantics"),
+            "final_diff_sha256": run.get("final_diff_sha256"),
+            "files": [], "tests": None,
+        }
+        if not summary["result_available"]:
+            summary["reason"] = "aucun diff final enregistré pour ce run"
+            return summary
+        summary["files"] = self.list_result_files(run_id)
+        tests_path = folder / "test-results.json"
+        if tests_path.is_file():
+            try:
+                data = json.loads(tests_path.read_text())
+                results = data.get("results", [])
+                summary["tests"] = {
+                    "commands": len(results),
+                    "passed": sum(1 for item in results if item.get("ok")),
+                    "all_passed": bool(data.get("all_passed")),
+                    "argv": [item.get("argv") for item in results],
+                }
+            except (OSError, json.JSONDecodeError):
+                summary["tests"] = {"error": "cannot read test-results.json"}
+        return summary
+    def read_result_file(self, run_id: str, relative: str) -> dict[str, Any]:
+        """Raw bytes of one deliverable, path-checked against the workspace."""
+        run = self._read(run_id)
+        target = self._result_file_target(run, relative)
+        if not target.is_file():
+            raise RuntimeStateError("result file not found: " + relative)
+        raw = target.read_bytes()
+        return {"path": relative, "bytes": len(raw), "is_text": b"\0" not in raw[:8192],
+                "sha256": hashlib.sha256(raw).hexdigest(), "content": raw}
+    def build_result_zip(self, run_id: str) -> dict[str, Any]:
+        """Bundle the deliverables, final diff and summary for one-click download."""
+        run = self._read(run_id)
+        folder = self._dir(run_id)
+        if not (folder / "final-diff.patch").is_file():
+            raise RuntimeStateError("aucun diff final enregistré pour ce run")
+        summary = self.get_result_summary(run_id)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+            for entry in summary["files"]:
+                if not entry.get("exists"):
+                    continue
+                target = self._result_file_target(run, entry["path"])
+                bundle.write(target, "deliverables/" + entry["path"])
+            bundle.write(folder / "final-diff.patch", "final-diff.patch")
+            bundle.writestr("result-summary.json",
+                            json.dumps(summary, indent=2, sort_keys=True))
+        raw = buffer.getvalue()
+        return {"run_id": run_id, "filename": f"{run_id}-result.zip",
+                "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+                "content": raw}
     def pause(self, run_id: str) -> dict[str, Any]:
         lock = self._run_lock(run_id)
         if not lock.acquire(blocking=False):

@@ -8,7 +8,7 @@ import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from ..domain.models import ProjectProfile
 from .runtime import RunRuntime, RuntimeStateError
@@ -43,6 +43,7 @@ button:disabled{background:#161b22;border-color:#21262d;color:#484f58;cursor:not
 .label.self-review{color:#d29922;background:#4d3800}
 .label.independent{color:#3fb950;background:#0f2e18}
 .blockbox{border:1px solid #f85149;background:#3d1514;border-radius:7px;padding:7px 10px;margin:7px 0;font-size:13px}
+.resultbox{border:1px solid #238636;background:#0f2e18;border-radius:7px;padding:7px 10px;margin:7px 0;font-size:13px}
 .hint{color:#d29922;font-size:12px;margin-top:3px}
 .feedback{min-height:16px;font-size:12px;margin-top:5px}
 details{margin-top:6px}summary{cursor:pointer;color:#8b949e;font-size:12px}
@@ -103,18 +104,62 @@ function card(v,full){const fb=feedback[v.run_id]||{};
   +'<div class="hint">Déblocage: '+esc(v.unblock_hint)+'</div></div>'}
  html+='<div>'+buttons(v)+'</div>';
  html+='<div class="feedback '+(fb.ok?'ok':'err')+'">'+esc(fb.text||'')+'</div>';
+ if(full)html+=resultBlock(v);
  if(full){html+='<details><summary>Évidence JSON (replié)</summary><pre>'+esc(JSON.stringify(detail,null,2))+'</pre></details>'
   +'<div class="muted">Evidence: '+esc(v.evidence_directory||'')+'</div>'}
  else{html+='<div class="muted" style="cursor:pointer" data-expand="'+esc(v.run_id)+'">détails…</div>'}
  return html+'</div>'}
+const resZ={};
+function resultBlock(v){
+ if(!v.result_available||!['needs_approval','accepted'].includes(v.status))return '';
+ const st=resZ[v.run_id];
+ if(!st||!st.sum)return '<div class="resultbox muted">Résultat en cours de chargement…</div>';
+ const s=st.sum;
+ let h='<div class="resultbox"><div class="row"><b>Résultat construit</b>'
+  +'<span>'+s.files.filter(f=>f.exists).length+' fichier(s) livrés</span>'
+  +(s.tests?'<span class="'+(s.tests.all_passed?'ok':'err')+'">tests '+s.tests.passed+'/'+s.tests.commands+(s.tests.all_passed?' OK':'')+'</span>'
+    :'<span class="warn">tests non exécutés</span>')+'</div>';
+ h+='<div><button class="ghost" data-res="diff" data-run="'+esc(v.run_id)+'">'+(st.open.diff?'Masquer le diff':'Voir le diff')+'</button>'
+  +'<button class="ghost" data-res="files" data-run="'+esc(v.run_id)+'">'+(st.open.files?'Masquer les fichiers':'Fichiers')+'</button>'
+  +'<button class="ghost" data-res="zip" data-run="'+esc(v.run_id)+'">Télécharger tout (zip)</button></div>';
+ if(st.open.diff)h+='<pre>'+esc(st.diff==null?'chargement…':st.diff)+'</pre>';
+ if(st.open.files){h+=s.files.map(f=>'<div class="row"><code>'+esc(f.path)+'</code>'
+   +(f.exists?'<span class="muted">'+f.bytes+' o</span>'
+     +(f.is_text?'<button class="ghost" data-res="preview" data-run="'+esc(v.run_id)+'" data-path="'+esc(f.path)+'">aperçu</button>':'')
+     +'<button class="ghost" data-res="download" data-run="'+esc(v.run_id)+'" data-path="'+esc(f.path)+'">télécharger</button>'
+    :'<span class="err">absent du workspace</span>')+'</div>').join('');
+  if(st.preview!=null)h+='<div class="muted">aperçu: '+esc(st.preview)+'</div><pre>'+esc(st.previewData==null?'chargement…':st.previewData)+'</pre>'}
+ return h+'</div>'}
+async function download(url,filename){const r=await fetch(url,{headers:{'X-JOAO-Token':TOKEN}});
+ if(!r.ok)throw Error('téléchargement refusé ('+r.status+')');
+ const blob=await r.blob();const a=document.createElement('a');
+ a.href=URL.createObjectURL(blob);a.download=filename;a.click();
+ setTimeout(()=>URL.revokeObjectURL(a.href),10000)}
+async function resultAction(kind,run,path){const st=resZ[run]=resZ[run]||{open:{}};
+ try{
+  if(kind==='diff'){st.open.diff=!st.open.diff;
+   if(st.open.diff&&st.diff==null){const d=await req('/runs/'+run+'/final-diff');st.diff=d.diff_content||d.error}}
+  else if(kind==='files'){st.open.files=!st.open.files}
+  else if(kind==='zip'){await download('/runs/'+run+'/result/zip',run+'-result.zip')}
+  else if(kind==='preview'){st.open.files=true;st.preview=path;st.previewData=null;refresh();
+   const d=await req('/runs/'+run+'/result/file?path='+encodeURIComponent(path));
+   st.previewData=d.content==null?'(fichier binaire — utilise télécharger)':d.content}
+  else if(kind==='download'){await download('/runs/'+run+'/result/file?path='+encodeURIComponent(path)+'&download=1',path.split('/').pop())}
+ }catch(err){feedback[run]={ok:false,text:'✗ résultat — '+err.message}}
+ refresh()}
 async function refresh(){try{const v=await req('/runs');const list=v.runs||[];
  if(!list.length)return;
  if(expanded===null&&list.length)expanded=list[0].run_id;
- if(expanded){try{detail=await req('/runs/'+expanded)}catch(_){detail=null}}
+ if(expanded){try{detail=await req('/runs/'+expanded)}catch(_){detail=null}
+  if(detail&&detail.result_available&&['needs_approval','accepted'].includes(detail.status)){
+   const st=resZ[expanded]=resZ[expanded]||{open:{}};
+   if(!st.sum||st.sumStatus!==detail.status){
+    try{st.sum=await req('/runs/'+expanded+'/result');st.sumStatus=detail.status}catch(_){}}}}
  el('runs').innerHTML=list.map(s=>s.run_id===expanded&&detail?card(detail,true):card(s,false)).join('');
  }catch(_){}}
 document.addEventListener('click',async e=>{const t=e.target;
  if(t.dataset&&t.dataset.expand){expanded=t.dataset.expand;refresh();return}
+ if(t.dataset&&t.dataset.res){resultAction(t.dataset.res,t.dataset.run,t.dataset.path);return}
  if(!(t.dataset&&t.dataset.act))return;
  t.disabled=true;
  try{const r=await req('/runs/'+t.dataset.run+'/'+t.dataset.act,{method:'POST'});
@@ -191,6 +236,14 @@ class LocalAPIServer:
                 self.end_headers()
                 self.wfile.write(raw)
 
+            def send_blob(self, raw, kind, filename):
+                self.send_response(200)
+                self.send_header("Content-Type", kind)
+                self.send_header("Content-Length", str(len(raw)))
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.end_headers()
+                self.wfile.write(raw)
+
             def payload(self):
                 return json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode())
 
@@ -217,6 +270,23 @@ class LocalAPIServer:
                         return self.send(200, outer.runtime.get_evidence_metadata(bits[1]))
                     if len(bits) == 3 and bits[0] == "runs" and bits[2] == "final-diff":
                         return self.send(200, outer.runtime.get_final_diff(bits[1]))
+                    if len(bits) == 3 and bits[0] == "runs" and bits[2] == "result":
+                        return self.send(200, outer.runtime.get_result_summary(bits[1]))
+                    if len(bits) == 4 and bits[0] == "runs" and bits[2] == "result" and bits[3] == "zip":
+                        bundle = outer.runtime.build_result_zip(bits[1])
+                        return self.send_blob(bundle["content"], "application/zip", bundle["filename"])
+                    if len(bits) == 4 and bits[0] == "runs" and bits[2] == "result" and bits[3] == "file":
+                        query = parse_qs(urlparse(self.path).query)
+                        relative = (query.get("path") or [""])[0]
+                        record = outer.runtime.read_result_file(bits[1], relative)
+                        if query.get("download"):
+                            name = Path(relative).name or "result-file"
+                            return self.send_blob(record["content"], "application/octet-stream", name)
+                        content = record.pop("content")
+                        record["truncated"] = len(content) > 200_000
+                        record["content"] = (content[:200_000].decode("utf-8", errors="replace")
+                                             if record["is_text"] else None)
+                        return self.send(200, record)
                     self.send(404, {"error": "not found"})
                 except RuntimeStateError as exc:
                     self.send(404, {"error": str(exc)})
