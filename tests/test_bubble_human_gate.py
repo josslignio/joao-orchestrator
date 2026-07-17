@@ -190,7 +190,7 @@ def test_ui_page_ships_contextual_controls_and_collapsed_json(tmp_path):
         # collapsed evidence JSON and block-cause box
         assert "<details><summary>" in page and "block_cause" in page
         # color semantics: green ready, orange warning, red error
-        assert ".ok{color:#3fb950}" in page and ".warn{color:#d29922}" in page and ".err{color:#f85149}" in page
+        assert ".ok{color:var(--green)}" in page and ".warn{color:var(--orange)}" in page and ".err{color:var(--red)}" in page
         # quota-doomed configuration warning near the selectors
         assert "quota-warning" in page and "quota_warning" in page
     finally:
