@@ -80,6 +80,64 @@ def test_read_only_probe_and_run(tmp_path: Path) -> None:
     assert evidence["fallback_used"] is False
 
 
+def test_read_only_tolerates_preexisting_dirty_state_it_reviews(tmp_path: Path) -> None:
+    """A reviewer runs read-only over a builder's uncommitted diff — legitimate."""
+    fake = _fake_opencode(tmp_path)
+    repo = _repo(tmp_path)
+    (repo / "todo.py").write_text("VALUE = 2\n", encoding="utf-8")  # builder's work under review
+    task = tmp_path / "task.md"
+    task.write_text("Review the diff.\n", encoding="utf-8")
+    output = tmp_path / "out.jsonl"
+    proc = subprocess.run(
+        [sys.executable, str(ADAPTER), "--workspace", str(repo), "--task-file", str(task),
+         "--output", str(output), "--mode", "read-only", "--opencode", str(fake)],
+        env=_env(tmp_path), capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stderr
+    evidence = json.loads(output.with_suffix(output.suffix + ".evidence.json").read_text())
+    assert evidence["ok"] is True
+    assert evidence["unauthorized_paths"] == []
+    assert evidence["changed_paths_before"] == ["todo.py"]
+
+
+def test_read_only_still_fails_when_the_task_itself_writes(tmp_path: Path) -> None:
+    fake = tmp_path / "opencode-writes"
+    fake.write_text(
+        """#!/usr/bin/env python3
+import json, pathlib, sys
+args=sys.argv[1:]
+if args == ['--version']:
+ print('1.17.20'); raise SystemExit(0)
+if args == ['run','--help']:
+ print('Usage: opencode run [message..] --model --agent --format --dir --auto --title'); raise SystemExit(0)
+if args == ['auth','list']:
+ print('zai-coding-plan'); raise SystemExit(0)
+if args[:2] == ['models','zai-coding-plan']:
+ print('zai-coding-plan/glm-4.5-air'); raise SystemExit(0)
+if args and args[0] == 'run':
+ work=pathlib.Path(args[args.index('--dir')+1])
+ (work/'scratch.txt').write_text('reviewer drift\\n')
+ print(json.dumps({'ok':True}))
+ raise SystemExit(0)
+raise SystemExit(2)
+""",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    repo = _repo(tmp_path)
+    task = tmp_path / "task.md"
+    task.write_text("Review only.\n", encoding="utf-8")
+    output = tmp_path / "out.jsonl"
+    proc = subprocess.run(
+        [sys.executable, str(ADAPTER), "--workspace", str(repo), "--task-file", str(task),
+         "--output", str(output), "--mode", "read-only", "--opencode", str(fake)],
+        env=_env(tmp_path), capture_output=True, text=True,
+    )
+    assert proc.returncode != 0
+    evidence = json.loads(output.with_suffix(output.suffix + ".evidence.json").read_text())
+    assert evidence["unauthorized_paths"] == ["scratch.txt"]
+
+
 def test_workspace_write_allowed_path(tmp_path: Path) -> None:
     fake = _fake_opencode(tmp_path)
     repo = _repo(tmp_path)

@@ -376,8 +376,10 @@ def main() -> int:
         changed_by_task = sorted(set(after) - set(before))
         evidence["changed_paths_by_task"] = changed_by_task
         unauthorized = [path for path in changed_by_task if not path_allowed(path, args.allowed_path)]
-        if args.mode == "read-only" and after:
-            unauthorized = after
+        if args.mode == "read-only":
+            # Read-only means the task itself changed nothing; pre-existing
+            # uncommitted work (e.g. a builder diff under review) is legitimate.
+            unauthorized = changed_by_task
         evidence["unauthorized_paths"] = unauthorized
         evidence["argv"] = argv[:-1] + [f"<prompt sha256={sha256_bytes(prompt.encode('utf-8'))}>"]
         evidence["config_sha256"] = sha256_bytes(canonical_json_bytes(config))
