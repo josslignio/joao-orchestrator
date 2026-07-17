@@ -746,14 +746,15 @@ class GLMCLIReviewer(ReviewerAdapter):
             "test": ["test-results.json"],
             "final": ["final-diff.patch", "test-results.json"],
         }
-        sections = []
-        for name in stage_evidence.get(stage, []):
-            path = run_dir / name
-            if path.is_file():
-                sections.append(f"\n--- {name} (verbatim, truncated to 45000 chars) ---\n"
-                                + path.read_text(errors="replace")[:45000])
-        evidence_inline = "".join(sections) or "\n--- no recorded evidence file for this gate ---"
-        prompt = (
+        def neutralize(text: str) -> str:
+            # Quoted mission or evidence must never satisfy the verdict regex.
+            return text.replace("GLM_REVIEW", "GLM-REVIEW-QUOTED")
+
+        def truncate_utf8(text: str, limit: int) -> str:
+            raw = text.encode("utf-8", errors="replace")
+            return text if len(raw) <= limit else raw[:limit].decode("utf-8", errors="replace")
+
+        head = (
             "You are a read-only JOAO reviewer. Review the " + stage + " gate for the mission below. "
             "All the gate evidence you need is included verbatim at the end of this task; never claim "
             "evidence is inaccessible, and do not try to read outside the workspace. Do not edit files, "
@@ -770,8 +771,19 @@ class GLMCLIReviewer(ReviewerAdapter):
             "evidence; keep tool use minimal at every gate, and ALWAYS finish by printing the final "
             "verdict line. "
             "End with exactly GLM_REVIEW: ACCEPT, GLM_REVIEW: P1, or GLM_REVIEW: BLOCK.\n\nMISSION:\n"
-            + run["mission"] + "\n\nGATE EVIDENCE:" + evidence_inline
+            + neutralize(run["mission"]) + "\n\nGATE EVIDENCE:"
         )
+        # The wrapper caps a normal-budget task at 120000 bytes; budget the
+        # inline evidence in encoded bytes with headroom, never in characters.
+        names = [name for name in stage_evidence.get(stage, []) if (run_dir / name).is_file()]
+        available = max(2000, 110_000 - len(head.encode("utf-8")))
+        sections = []
+        for name in names:
+            body = truncate_utf8(neutralize((run_dir / name).read_text(errors="replace")),
+                                 available // len(names))
+            sections.append(f"\n--- {name} (verbatim, may be truncated) ---\n{body}")
+        evidence_inline = "".join(sections) or "\n--- no recorded evidence file for this gate ---"
+        prompt = head + evidence_inline
         atomic_write_text(task, prompt)
         before_paths = git_status_paths(workspace)
         before_fingerprint = git_worktree_fingerprint(workspace)
