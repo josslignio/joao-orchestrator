@@ -747,8 +747,9 @@ class GLMCLIReviewer(ReviewerAdapter):
             "final": ["final-diff.patch", "test-results.json"],
         }
         def neutralize(text: str) -> str:
-            # Quoted mission or evidence must never satisfy the verdict regex.
-            return text.replace("GLM_REVIEW", "GLM-REVIEW-QUOTED")
+            # Quoted mission or evidence must never satisfy the verdict or
+            # finding regexes, which match case-insensitively.
+            return re.sub(r"(?i)GLM_(REVIEW|FINDING)", r"GLM-\1-QUOTED", text)
 
         def truncate_utf8(text: str, limit: int) -> str:
             raw = text.encode("utf-8", errors="replace")
