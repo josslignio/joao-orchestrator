@@ -164,8 +164,12 @@ def test_quota_warning_never_fires_from_non_codex_evidence(tmp_path):
         launched = http(api, "quick-missions", {"mission": "mission au sujet des rate limits",
                                                 "builder_name": "glm", "review_mode": "claude"})
         api.workers[launched["run_id"]].join(timeout=20)
-        assert api.runtime.get(launched["run_id"])["status"] == "blocked"
+        run = api.runtime.get(launched["run_id"])
+        assert run["status"] == "blocked"
         assert http(api, "capabilities")["codex"]["quota_warning"] is None
+        # ... and the block explanation must not claim a Codex quota either.
+        assert run["quota_blocked"] is False
+        assert "Quota" not in (run["block_cause"] or "")
     finally:
         api.close()
 
