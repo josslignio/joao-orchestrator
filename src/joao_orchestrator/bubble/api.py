@@ -320,6 +320,9 @@ class LocalAPIServer:
                     "reason": f"action non applicable à l'état {before['status']} (possibles: {applicable})"}
         try:
             if action == "retry":
+                if before.get("corrections_used", 0) >= before.get("max_corrections", 1):
+                    return {"action": action, "accepted": False, "status": before["status"],
+                            "reason": "budget de réparation épuisé — utilise Reject pour terminer ce run"}
                 self.drive(run_id)
                 after = self.runtime.get(run_id)
                 return {"action": action, "accepted": True, "status": after["status"],
@@ -333,10 +336,15 @@ class LocalAPIServer:
             return {"action": action, "accepted": False, "status": current["status"],
                     "reason": str(exc)}
         queued = state.get("control_request") == action
-        changed = state["status"] != before["status"]
-        if not changed and not queued and action in {"pause", "stop"}:
+        # Accept only an outcome that matches the action's intent, never a
+        # coincidental state change that happened mid-flight.
+        intent = {"pause": {"paused"}, "stop": {"stopped"}, "reject": {"stopped"},
+                  "approve": {"accepted"},
+                  "resume": {"ready", "building", "testing", "reviewing", "needs_approval"}}
+        if action in intent and not queued and state["status"] not in intent[action]:
             return {"action": action, "accepted": False, "status": state["status"],
-                    "reason": f"aucun effet: l'état {state['status']} n'accepte pas {action}"}
+                    "reason": f"aucun effet: l'état est {state['status']}, pas "
+                              f"{'/'.join(sorted(intent[action]))}"}
         reason = ("demande enregistrée; appliquée au prochain point sûr" if queued
                   else f"état: {before['status']} → {state['status']}")
         return {"action": action, "accepted": True, "status": state["status"], "reason": reason}
