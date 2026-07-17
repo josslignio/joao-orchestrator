@@ -875,6 +875,8 @@ class RunRuntime:
                     run[field] = json.loads(path.read_text())
                 except (OSError, json.JSONDecodeError):
                     run[field] = {"error": f"cannot read {filename}"}
+        if run["status"] in {"blocked", "failed"}:
+            run.update(self.explain_block(run_id))
         with self._control_lock:
             if request := self._control_requests.get(run_id):
                 run["control_request"] = request
@@ -899,6 +901,44 @@ class RunRuntime:
                 "is_self_review", "no_review_label")})
         summaries.sort(key=lambda item: item.get("created_at") or "", reverse=True)
         return summaries[:limit]
+    QUOTA_RE = re.compile(r"quota|rate.?limit|usage.?limit", re.I)
+    def explain_block(self, run_id: str) -> dict[str, Any]:
+        """Human-readable cause and unblock condition for a blocked/failed run."""
+        run = self._read(run_id)
+        folder = self._dir(run_id)
+        if run["status"] not in {"blocked", "failed"}:
+            return {"block_cause": None, "unblock_hint": None, "quota_blocked": False}
+        fragments: list[str] = [run.get("current_step") or ""]
+        for path in sorted(folder.glob("*review-evidence*.json")) + [folder / "builder-evidence.json"]:
+            if not path.is_file():
+                continue
+            try:
+                data = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            reviews = data.get("reviews", [data] if isinstance(data, dict) else [])
+            for item in reviews:
+                if not isinstance(item, dict):
+                    continue
+                for key in ("reason", "last_error", "stderr", "stdout_tail", "finding"):
+                    value = item.get(key)
+                    if isinstance(value, str) and value.strip():
+                        fragments.append(value)
+        combined = "\n".join(fragments)
+        quota = bool(self.QUOTA_RE.search(combined))
+        reset = re.search(r"try again at\s+([^.\"\n]+)", combined, re.I)
+        if quota:
+            cause = "Quota fournisseur épuisé (Codex usage limit)"
+            if reset:
+                cause += f" — reset annoncé: {reset.group(1).strip()}"
+            hint = ("Retry relancera la même configuration après le retour du quota; "
+                    "Reject termine ce run immédiatement et libère l'interface.")
+        else:
+            detail = next((frag.strip() for frag in fragments if frag.strip()), "cause inconnue")
+            cause = detail[:300]
+            hint = ("Retry relance une réparation bornée; Reject termine ce run. "
+                    "Consulte le dossier d'évidence pour le détail complet.")
+        return {"block_cause": cause, "unblock_hint": hint, "quota_blocked": quota}
     def get_evidence_metadata(self, run_id: str) -> dict[str, Any]:
         """Safely read evidence metadata for a run."""
         run = self._read(run_id)
