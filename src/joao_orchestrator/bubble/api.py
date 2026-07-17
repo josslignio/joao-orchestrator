@@ -17,57 +17,151 @@ from .runtime import RunRuntime, RuntimeStateError
 HTML = """<!doctype html>
 <meta charset="utf-8"><title>JOAO</title>
 <style>
-:root{color-scheme:dark}body{margin:0;background:#0d1117;color:#e6edf3;font:15px system-ui}
-.app{max-width:880px;min-height:100vh;margin:auto;border-inline:1px solid #30363d;padding:28px}
-.top{display:flex;justify-content:space-between;align-items:center}.title{font-size:25px;font-weight:750}
-.sub,.muted{color:#8b949e}.sub{margin:6px 0 28px}.muted{font-size:12px}.chat{min-height:45vh}
-.empty{color:#8b949e;text-align:center;padding:100px 20px}.run{border:1px solid #30363d;border-radius:12px;padding:14px;background:#161b22;margin:12px 0}
-.state{font-weight:700}.composer{position:sticky;bottom:18px;background:#0d1117;padding-top:12px}
-textarea{width:100%;box-sizing:border-box;min-height:130px;border:1px solid #30363d;border-radius:12px;background:#161b22;color:#e6edf3;padding:15px;font:inherit;resize:vertical}
-button{background:#238636;border:1px solid #2ea043;color:white;border-radius:8px;padding:9px 14px;font-weight:700;margin-right:8px}.ghost{background:#21262d;border-color:#30363d}
-button:disabled{background:#30363d;border-color:#30363d;color:#8b949e;cursor:not-allowed}
-.modes{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.mode{border:1px solid #30363d;border-radius:8px;padding:8px 10px;color:#c9d1d9;cursor:pointer}.mode:has(input:checked){border-color:#58a6ff;background:#0c2d4a}.mode input{accent-color:#58a6ff}
-pre{white-space:pre-wrap;max-height:260px;overflow:auto;color:#c9d1d9}
-.summary{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin:12px 0;font-size:13px}
-label.no-review{color:#f85149;background:#3d1514;padding:4px 8px;border-radius:4px;font-weight:700}
-label.self-review{color:#d29922;background:#4d3800;padding:4px 8px;border-radius:4px;font-weight:700}
+:root{color-scheme:dark}body{margin:0;background:#0d1117;color:#e6edf3;font:14px system-ui}
+.app{max-width:940px;margin:auto;padding:14px 20px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.title{font-size:20px;font-weight:750}
+.muted{color:#8b949e;font-size:12px}
+.ok{color:#3fb950}.warn{color:#d29922}.err{color:#f85149}
+.chip{display:inline-block;border:1px solid #30363d;border-radius:999px;padding:2px 9px;font-size:12px;margin-left:5px}
+.chip.ok{border-color:#238636}.chip.err{border-color:#f85149}.chip.warn{border-color:#d29922}
+textarea{width:100%;box-sizing:border-box;min-height:64px;border:1px solid #30363d;border-radius:8px;background:#161b22;color:#e6edf3;padding:9px;font:inherit;resize:vertical}
+button{background:#238636;border:1px solid #2ea043;color:white;border-radius:7px;padding:6px 12px;font-weight:650;margin-right:6px;cursor:pointer}
+.ghost{background:#21262d;border-color:#30363d}
+button:disabled{background:#161b22;border-color:#21262d;color:#484f58;cursor:not-allowed}
+.modes{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.mode{border:1px solid #30363d;border-radius:7px;padding:4px 9px;color:#c9d1d9;cursor:pointer;font-size:13px}
+.mode:has(input:checked){border-color:#58a6ff;background:#0c2d4a}.mode input{accent-color:#58a6ff}
+.form{border:1px solid #30363d;border-radius:10px;background:#161b22;padding:10px 12px;margin:10px 0}
+.card{border:1px solid #30363d;border-radius:10px;background:#161b22;padding:10px 12px;margin:8px 0}
+.pill{display:inline-block;border-radius:999px;padding:1px 10px;font-weight:700;font-size:12px}
+.pill.run{background:#0c2d4a;color:#58a6ff}.pill.good{background:#0f2e18;color:#3fb950}
+.pill.wait{background:#4d3800;color:#d29922}.pill.bad{background:#3d1514;color:#f85149}
+.pill.off{background:#21262d;color:#8b949e}
+.label{padding:2px 7px;border-radius:4px;font-weight:700;font-size:11px;margin-left:6px}
+.label.no-review{color:#f85149;background:#3d1514}
+.label.self-review{color:#d29922;background:#4d3800}
+.label.independent{color:#3fb950;background:#0f2e18}
+.blockbox{border:1px solid #f85149;background:#3d1514;border-radius:7px;padding:7px 10px;margin:7px 0;font-size:13px}
+.hint{color:#d29922;font-size:12px;margin-top:3px}
+.feedback{min-height:16px;font-size:12px;margin-top:5px}
+details{margin-top:6px}summary{cursor:pointer;color:#8b949e;font-size:12px}
+pre{white-space:pre-wrap;max-height:220px;overflow:auto;color:#c9d1d9;font-size:11px}
+.row{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;margin:3px 0}
 </style>
-<main class="app"><div class="top"><div class="title">JOAO</div><div id="capabilities" class="muted">Chargement…</div></div>
-<div class="sub">Écris comme ici. JOAO pilote le moteur choisi, applique seulement tes options, et conserve les preuves.</div>
-<section id="chat" class="chat"><div class="empty">Écris une première tâche pour tester JOAO dans son sandbox isolée.</div></section>
-<section class="composer"><div class="muted">Disposable workspace</div><select id="workspace" style="width:100%;box-sizing:border-box;margin:8px 0;border:1px solid #30363d;border-radius:8px;background:#161b22;color:#e6edf3;padding:10px;font:inherit"><option value="quick-sandbox">Quick Sandbox (auto-generated)</option></select>
+<main class="app">
+<div class="top"><div class="title">JOAO</div><div id="capabilities" class="muted">Chargement…</div></div>
+<section class="form">
 <textarea id="prompt" autofocus placeholder="Ex. Ajoute une fonction qui normalise un titre et les tests associés."></textarea>
-<div class="muted">Moteur de construction — un seul à la fois</div><div class="modes">
+<div class="muted">Moteur — un seul à la fois</div><div class="modes">
 <label class="mode"><input type="radio" name="builder" value="glm" checked> GLM</label>
 <label class="mode"><input type="radio" name="builder" value="codex"> Codex</label>
 <label class="mode"><input type="radio" name="builder" value="claude"> Claude</label></div>
-<div class="muted">Review indépendante à chaque gate (plan, diff, validation complète, livraison)</div><div class="modes">
+<div class="muted">Review à chaque gate (plan, diff, tests, livraison)</div><div class="modes">
 <label class="mode"><input type="radio" name="review" value="none"> No Review</label>
 <label class="mode"><input type="radio" name="review" value="codex" checked> Codex</label>
-<label class="mode"><input type="radio" name="review" value="claude" disabled> Claude</label>
-<label class="mode"><input type="radio" name="review" value="codex_and_claude" disabled> Codex + Claude</label>
+<label class="mode"><input type="radio" name="review" value="claude"> Claude</label>
+<label class="mode"><input type="radio" name="review" value="codex_and_claude"> Codex + Claude</label>
 </div>
-<div id="safety-summary" class="summary" style="display:none">Provider preflight check pending...</div>
-<button id="start-btn" onclick="send()" disabled>Run</button><span class="muted">Le test est isolé : aucune modification de tes projets.</span></section></main>
+<div id="safety-summary" class="muted"></div>
+<div id="quota-warning" class="warn" style="display:none;font-size:13px;margin:4px 0"></div>
+<button id="start-btn" onclick="send()" disabled>Run</button>
+<span class="muted">Sandbox Git jetable : aucune modification de tes projets.</span>
+<div id="launch-feedback" class="feedback"></div>
+</section>
+<section id="runs"><div class="muted">Aucun run pour l'instant. Les runs persistés réapparaissent ici après redémarrage.</div></section>
+</main>
 <script>
-const TOKEN="__JOAO_TOKEN__";let active=null;const el=id=>document.getElementById(id);
-async function req(url,opt={}){opt.headers={...(opt.headers||{}),'X-JOAO-Token':TOKEN};const r=await fetch(url,opt),v=await r.json();if(!r.ok)throw Error(v.error||'request failed');return v}
-function esc(s){const n=document.createElement('span');n.textContent=s;return n.innerHTML}
-function show(v){const isSelfReview=v.is_self_review;const noReview=v.no_review_label;let reviewLabel='';if(noReview)reviewLabel='<label class="no-review">NO REVIEW — HUMAN APPROVAL REQUIRED</label>';else if(isSelfReview)reviewLabel='<label class="self-review">SELF-REVIEW — NOT INDEPENDENT</label>';const progress=v.progress||{completed:0,total:0};const files=v.changed_files?JSON.stringify(v.changed_files.changed_by_builder||[]):'pending';const tests=v.test_results?JSON.stringify(v.test_results):'pending';const review=v.review_findings?JSON.stringify(v.review_findings):'pending';el('chat').innerHTML='<div class="run"><div class="state">'+esc(v.status)+' · '+progress.completed+'/'+progress.total+' gates · '+esc(v.elapsed_seconds)+'s</div>'+reviewLabel+'<div class="muted">'+esc(v.current_step)+'</div><div>Run <code>'+esc(v.run_id)+'</code></div><div>Builder: '+esc(v.builder_provider)+' / '+esc(v.builder_model)+'</div><div>Review: '+esc(v.review_policy)+' ('+esc((v.reviewer_providers||[]).join(' + ')||'none')+')</div><div class="muted">Modified: '+esc(files)+'</div><div class="muted">Tests: '+esc(tests)+'</div><div class="muted">Review: '+esc(review)+'</div><div class="muted">Evidence: '+esc(v.evidence_directory)+'</div><button class="ghost" onclick="openEvidence()">Open evidence</button><button class="ghost" onclick="openDiff()">Open final diff</button><pre id="detail">'+esc(JSON.stringify(v,null,2))+'</pre><button class="ghost" onclick="act(\\'pause\\')">Pause après étape</button><button class="ghost" onclick="act(\\'resume\\')">Resume</button><button class="ghost" onclick="act(\\'stop\\')">Stop après étape</button><button class="ghost" onclick="act(\\'retry\\')">Retry</button><button class="ghost" onclick="act(\\'approve\\')">Approve</button><button class="ghost" onclick="act(\\'reject\\')">Reject</button></div>'}
+const TOKEN="__JOAO_TOKEN__";const el=id=>document.getElementById(id);
+let CAPS=null,expanded=null,detail=null;const feedback={};
+const ACTIONS={pending:["pause","stop"],planning:["pause","stop"],ready:["pause","stop"],
+ building:["pause","stop"],testing:["pause","stop"],reviewing:["pause","stop"],
+ needs_approval:["approve","reject","stop"],paused:["resume","stop"],
+ blocked:["retry","reject"],failed:["retry","reject"],accepted:[],stopped:[]};
+const ALL=["pause","resume","stop","retry","approve","reject"];
+const PILL={pending:"run",planning:"run",ready:"run",building:"run",testing:"run",reviewing:"run",
+ needs_approval:"wait",paused:"wait",blocked:"bad",failed:"bad",accepted:"good",stopped:"off"};
+async function req(url,opt={}){opt.headers={...(opt.headers||{}),'X-JOAO-Token':TOKEN};
+ const r=await fetch(url,opt),v=await r.json();if(!r.ok)throw Error(v.error||'requête refusée');return v}
+function esc(s){const n=document.createElement('span');n.textContent=s==null?'':s;return n.innerHTML}
 function selected(name){return document.querySelector('input[name="'+name+'"]:checked').value}
-async function send(){const mission=el('prompt').value.trim();if(!mission)return;try{const v=await req('/quick-missions',{method:'POST',body:JSON.stringify({mission,builder_name:selected('builder'),review_mode:selected('review')})});active=v.run_id;el('prompt').value='';poll()}catch(e){el('chat').innerHTML='<div class="run">'+esc(e.message)+'</div>'}}
-async function act(name){if(active){try{await req('/runs/'+active+'/'+name,{method:'POST'})}catch(e){el('chat').innerHTML='<div class="run">'+esc(e.message)+'</div>'}}poll()}
-async function openEvidence(){if(active){try{el('detail').textContent=JSON.stringify(await req('/runs/'+active+'/evidence-metadata'),null,2)}catch(e){el('detail').textContent=e.message}}}
-async function openDiff(){if(active){try{const v=await req('/runs/'+active+'/final-diff');el('detail').textContent=v.diff_content||v.error}catch(e){el('detail').textContent=e.message}}}
-async function poll(){if(!active)return;try{show(await req('/runs/'+active))}catch(_){}}
-function enableChoice(name,value,enabled){const input=document.querySelector('input[name="'+name+'"][value="'+value+'"]');input.disabled=!enabled;input.closest('.mode').style.opacity=enabled?'1':'.45'}
-function ensureChoice(name){const current=document.querySelector('input[name="'+name+'"]:checked');if(!current||current.disabled){const fallback=document.querySelector('input[name="'+name+'"]:not(:disabled)');if(fallback)fallback.checked=true}}
-function updateSafetySummary(caps){const summary=[];for(const name of ['glm','codex','claude']){const cap=caps[name];summary.push(name.toUpperCase()+': '+(cap.available?'ready ('+cap.executable+')':'unavailable ('+cap.reason+')'))}const builder=selected('builder'),review=selected('review');const isSelfReview=(builder==='codex'&&review.includes('codex'))||(builder==='claude'&&review.includes('claude'));const noReview=review==='none';if(isSelfReview)summary.push('WARNING: Self-review ('+builder+' builds and reviews)');if(noReview)summary.push('WARNING: No-review policy - changes will NOT be independently reviewed');el('safety-summary').textContent=summary.join(' | ');el('safety-summary').style.display='block';el('safety-summary').style.color=(isSelfReview||noReview)?'#f85149':'#8b949e';}
-async function caps(){const v=await req('/capabilities');enableChoice('builder','glm',v.glm.available);enableChoice('builder','codex',v.codex.available);enableChoice('builder','claude',v.claude.available);enableChoice('review','codex',v.codex.reviewer_available);enableChoice('review','claude',v.claude.reviewer_available);enableChoice('review','codex_and_claude',v.codex.reviewer_available&&v.claude.reviewer_available);ensureChoice('builder');ensureChoice('review');updateSafetySummary(v);el('capabilities').textContent='GLM '+(v.glm.available?'prêt':'indisponible')+' · Codex '+(v.codex.available?'prêt':'indisponible')+' · Claude '+(v.claude.available?'prêt':'indisponible');validateSelection()}
-function validateSelection(){const builder=selected('builder');const review=selected('review');const capsPromise=req('/capabilities');capsPromise.then(v=>{let valid=el('workspace').value==='quick-sandbox'&&el('prompt').value.trim().length>0&&v[builder].available;if(review==='codex'&&!v.codex.reviewer_available)valid=false;if(review==='claude'&&!v.claude.reviewer_available)valid=false;if(review==='codex_and_claude'&&!(v.codex.reviewer_available&&v.claude.reviewer_available))valid=false;el('start-btn').disabled=!valid;updateSafetySummary(v)}).catch(()=>{el('start-btn').disabled=true})}
-document.querySelectorAll('input[name="builder"],input[name="review"]').forEach(i=>i.addEventListener('change',validateSelection));
-el('prompt').addEventListener('input',validateSelection);el('workspace').addEventListener('change',validateSelection);
-setInterval(poll,1200);caps();
+function labels(v){let out='';if(v.no_review_label)out+='<span class="label no-review">NO REVIEW — HUMAN APPROVAL REQUIRED</span>';
+ else if(v.is_self_review)out+='<span class="label self-review">SELF-REVIEW — NON INDÉPENDANTE</span>';
+ else if((v.review_policy||'none')!=='none')out+='<span class="label independent">REVIEW INDÉPENDANTE</span>';return out}
+function buttons(v){return ALL.map(a=>{const on=(ACTIONS[v.status]||[]).includes(a);
+ return '<button class="ghost" data-run="'+esc(v.run_id)+'" data-act="'+a+'"'+(on?'':' disabled')+'>'+a+'</button>'}).join('')}
+function card(v,full){const fb=feedback[v.run_id]||{};
+ let html='<div class="card" id="card-'+esc(v.run_id)+'">';
+ html+='<div class="row"><span class="pill '+(PILL[v.status]||'off')+'">'+esc(v.status)+'</span>'
+  +'<code>'+esc(v.run_id)+'</code>'+labels(v)+'</div>';
+ html+='<div class="row"><span>Builder: <b>'+esc(v.builder_provider||v.builder_name)+'</b> / '+esc(v.builder_model)+'</span>'
+  +'<span>Review: '+esc(v.review_policy||'none')+'</span>'
+  +(full&&v.progress?'<span>'+v.progress.completed+'/'+v.progress.total+' gates · '+esc(v.elapsed_seconds)+'s</span>':'')+'</div>';
+ html+='<div class="muted">'+esc(v.current_step)+'</div>';
+ if(v.block_cause){html+='<div class="blockbox">Cause: '+esc(v.block_cause)
+  +'<div class="hint">Déblocage: '+esc(v.unblock_hint)+'</div></div>'}
+ html+='<div>'+buttons(v)+'</div>';
+ html+='<div class="feedback '+(fb.ok?'ok':'err')+'">'+esc(fb.text||'')+'</div>';
+ if(full){html+='<details><summary>Évidence JSON (replié)</summary><pre>'+esc(JSON.stringify(detail,null,2))+'</pre></details>'
+  +'<div class="muted">Evidence: '+esc(v.evidence_directory||'')+'</div>'}
+ else{html+='<div class="muted" style="cursor:pointer" data-expand="'+esc(v.run_id)+'">détails…</div>'}
+ return html+'</div>'}
+async function refresh(){try{const v=await req('/runs');const list=v.runs||[];
+ if(!list.length)return;
+ if(expanded===null&&list.length)expanded=list[0].run_id;
+ if(expanded){try{detail=await req('/runs/'+expanded)}catch(_){detail=null}}
+ el('runs').innerHTML=list.map(s=>s.run_id===expanded&&detail?card(detail,true):card(s,false)).join('');
+ }catch(_){}}
+document.addEventListener('click',async e=>{const t=e.target;
+ if(t.dataset&&t.dataset.expand){expanded=t.dataset.expand;refresh();return}
+ if(!(t.dataset&&t.dataset.act))return;
+ t.disabled=true;
+ try{const r=await req('/runs/'+t.dataset.run+'/'+t.dataset.act,{method:'POST'});
+  feedback[t.dataset.run]={ok:r.accepted,text:(r.accepted?'✓ '+t.dataset.act+' acceptée — ':'✗ '+t.dataset.act+' refusée — ')+r.reason};
+ }catch(err){feedback[t.dataset.run]={ok:false,text:'✗ '+t.dataset.act+' — '+err.message}}
+ refresh()});
+async function send(){const mission=el('prompt').value.trim();if(!mission)return;
+ el('launch-feedback').textContent='';
+ try{const v=await req('/quick-missions',{method:'POST',body:JSON.stringify({mission,builder_name:selected('builder'),review_mode:selected('review')})});
+  expanded=v.run_id;el('prompt').value='';
+  el('launch-feedback').innerHTML='<span class="ok">✓ run lancé: '+esc(v.run_id)+'</span>';refresh()}
+ catch(e){el('launch-feedback').innerHTML='<span class="err">✗ lancement refusé — '+esc(e.message)+'</span>'}}
+function enableChoice(name,value,enabled){const input=document.querySelector('input[name="'+name+'"][value="'+value+'"]');
+ input.disabled=!enabled;input.closest('.mode').style.opacity=enabled?'1':'.45'}
+function ensureChoice(name){const current=document.querySelector('input[name="'+name+'"]:checked');
+ if(!current||current.disabled){const fallback=document.querySelector('input[name="'+name+'"]:not(:disabled)');if(fallback)fallback.checked=true}}
+function quotaDoomed(){if(!CAPS||!CAPS.codex.quota_warning)return false;
+ const b=selected('builder'),r=selected('review');return b==='codex'||r==='codex'||r==='codex_and_claude'}
+function updateSafety(){if(!CAPS)return;const v=CAPS;const parts=[];
+ for(const name of ['glm','codex','claude']){const cap=v[name];
+  parts.push('<span class="'+(cap.available?'ok':'err')+'">'+name.toUpperCase()+': '+(cap.available?'prêt':'indisponible')+'</span>')}
+ const b=selected('builder'),r=selected('review');
+ if((b==='codex'&&r.includes('codex'))||(b==='claude'&&r.includes('claude')))
+  parts.push('<span class="warn">AVERTISSEMENT: self-review — '+b+' construit ET review</span>');
+ if(r==='none')parts.push('<span class="err">NO REVIEW — approbation humaine seule</span>');
+ el('safety-summary').innerHTML=parts.join(' · ');
+ const q=el('quota-warning');
+ if(quotaDoomed()){q.style.display='block';
+  q.textContent='⚠ Quota Codex épuisé ('+(v.codex.quota_warning.at||'récemment')+') — cette configuration sera bloquée tant que le quota n\\u2019est pas revenu.'}
+ else q.style.display='none';
+ let valid=el('prompt').value.trim().length>0&&v[b].available;
+ if(r==='codex'&&!v.codex.reviewer_available)valid=false;
+ if(r==='claude'&&!v.claude.reviewer_available)valid=false;
+ if(r==='codex_and_claude'&&!(v.codex.reviewer_available&&v.claude.reviewer_available))valid=false;
+ el('start-btn').disabled=!valid}
+async function caps(){try{CAPS=await req('/capabilities');const v=CAPS;
+ enableChoice('builder','glm',v.glm.available);enableChoice('builder','codex',v.codex.available);
+ enableChoice('builder','claude',v.claude.available);enableChoice('review','codex',v.codex.reviewer_available);
+ enableChoice('review','claude',v.claude.reviewer_available);
+ enableChoice('review','codex_and_claude',v.codex.reviewer_available&&v.claude.reviewer_available);
+ ensureChoice('builder');ensureChoice('review');
+ el('capabilities').innerHTML=['glm','codex','claude'].map(n=>'<span class="chip '+(v[n].available?'ok':'err')+'">'
+  +n.toUpperCase()+' '+(v[n].available?'prêt':'indisponible')+'</span>').join('')
+  +(v.codex.quota_warning?'<span class="chip warn">quota Codex épuisé</span>':'');
+ updateSafety()}catch(_){el('start-btn').disabled=true}}
+document.querySelectorAll('input[name="builder"],input[name="review"]').forEach(i=>i.addEventListener('change',updateSafety));
+el('prompt').addEventListener('input',updateSafety);
+setInterval(refresh,2000);setInterval(caps,30000);caps();refresh();
 </script>"""
 
 
