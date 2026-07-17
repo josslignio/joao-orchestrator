@@ -902,12 +902,16 @@ class RunRuntime:
         summaries.sort(key=lambda item: item.get("created_at") or "", reverse=True)
         return summaries[:limit]
     QUOTA_RE = re.compile(r"quota|rate.?limit|usage.?limit", re.I)
-    def explain_block(self, run_id: str) -> dict[str, Any]:
-        """Human-readable cause and unblock condition for a blocked/failed run."""
+    def quota_trace(self, run_id: str) -> dict[str, Any]:
+        """Detect provider-quota evidence in a run regardless of its terminal state."""
         run = self._read(run_id)
+        combined = "\n".join(self._evidence_fragments(run_id, run))
+        quota = bool(self.QUOTA_RE.search(combined))
+        reset = re.search(r"try again at\s+([^.\"\n]+)", combined, re.I)
+        return {"quota_blocked": quota,
+                "reset_hint": reset.group(1).strip() if reset else None}
+    def _evidence_fragments(self, run_id: str, run: dict[str, Any]) -> list[str]:
         folder = self._dir(run_id)
-        if run["status"] not in {"blocked", "failed"}:
-            return {"block_cause": None, "unblock_hint": None, "quota_blocked": False}
         fragments: list[str] = [run.get("current_step") or ""]
         for path in sorted(folder.glob("*review-evidence*.json")) + [folder / "builder-evidence.json"]:
             if not path.is_file():
@@ -924,6 +928,13 @@ class RunRuntime:
                     value = item.get(key)
                     if isinstance(value, str) and value.strip():
                         fragments.append(value)
+        return fragments
+    def explain_block(self, run_id: str) -> dict[str, Any]:
+        """Human-readable cause and unblock condition for a blocked/failed run."""
+        run = self._read(run_id)
+        if run["status"] not in {"blocked", "failed"}:
+            return {"block_cause": None, "unblock_hint": None, "quota_blocked": False}
+        fragments = self._evidence_fragments(run_id, run)
         combined = "\n".join(fragments)
         quota = bool(self.QUOTA_RE.search(combined))
         reset = re.search(r"try again at\s+([^.\"\n]+)", combined, re.I)

@@ -284,18 +284,20 @@ class LocalAPIServer:
                 "workspace_lock": {"active_count": len(self._active_workspaces)}}
 
     def _codex_quota_warning(self):
-        """Latest observed Codex quota block, so the UI can warn before launch."""
+        """Latest observed Codex quota evidence, whatever the run's terminal state."""
         for summary in self.runtime.list_runs(limit=10):
-            if summary.get("status") not in {"blocked", "failed"}:
+            if summary.get("status") not in {"blocked", "failed", "stopped"}:
                 continue
             try:
-                explained = self.runtime.explain_block(summary["run_id"])
+                trace = self.runtime.quota_trace(summary["run_id"])
             except Exception:
                 continue
-            if explained.get("quota_blocked"):
+            if trace.get("quota_blocked"):
+                message = "Quota fournisseur épuisé (Codex usage limit)"
+                if trace.get("reset_hint"):
+                    message += f" — reset annoncé: {trace['reset_hint']}"
                 return {"at": summary.get("updated_at"),
-                        "run_id": summary.get("run_id"),
-                        "message": explained.get("block_cause")}
+                        "run_id": summary.get("run_id"), "message": message}
         return None
 
     # Actions applicable per persisted state; everything else must be refused.

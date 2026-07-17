@@ -118,12 +118,16 @@ def test_capabilities_expose_the_last_codex_quota_block(tmp_path):
     api = LocalAPIServer(runtime(tmp_path, codex=QuotaBlockedReviewer()))
     api.serve_in_thread()
     try:
-        blocked_quota_run(api)
+        run_id = blocked_quota_run(api)
         capabilities = http(api, "capabilities")
         warning = capabilities["codex"]["quota_warning"]
         assert warning is not None
         assert warning["at"]
         assert "quota" in warning["message"].lower()
+        # A stopped run that hit the quota is still live evidence Codex is dead.
+        http(api, f"runs/{run_id}/reject", {})
+        warning = http(api, "capabilities")["codex"]["quota_warning"]
+        assert warning is not None and "quota" in warning["message"].lower()
     finally:
         api.close()
 
