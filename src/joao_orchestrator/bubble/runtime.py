@@ -1169,6 +1169,7 @@ class RunRuntime:
                 return max(0, int((b - a).total_seconds()))
             except ValueError:
                 return None
+        last_state: dict[str, Any] | None = None
         for event in events:
             kind = event.get("kind")
             at = event.get("at")
@@ -1177,21 +1178,25 @@ class RunRuntime:
                 label = self.STEP_LABELS.get(to_status, to_status)
                 if to_status == "building" and event.get("reason") == "correction build":
                     label = "Re-build après correction"
-                if steps and steps[-1].get("duration_seconds") is None:
-                    steps[-1]["duration_seconds"] = seconds_between(steps[-1]["at"], at)
-                steps.append({"at": at, "label": label, "status": to_status,
-                              "duration_seconds": None})
+                # Durations belong to state steps; review rows are point events
+                # and must never absorb the elapsed time of the state they end.
+                if last_state is not None and last_state["duration_seconds"] is None:
+                    last_state["duration_seconds"] = seconds_between(last_state["at"], at)
+                step = {"at": at, "label": label, "status": to_status,
+                        "duration_seconds": None}
+                steps.append(step)
+                last_state = step
             elif kind == "review_completed":
                 decision = str(event.get("decision", "")).upper()
                 reviewer = self.PROVIDER_LABELS.get(event.get("reviewer"), event.get("reviewer"))
                 steps.append({"at": at, "label": f"Review {event.get('stage')} par {reviewer}: "
                               + ("ACCEPT" if decision == "PASS" else decision),
-                              "status": "review", "duration_seconds": None})
+                              "status": "review", "duration_seconds": None, "point": True})
             elif kind == "human_approval":
                 steps.append({"at": at, "label": "Approbation humaine", "status": "human",
-                              "duration_seconds": None})
-        if steps and steps[-1].get("duration_seconds") is None:
-            steps[-1]["duration_seconds"] = seconds_between(steps[-1]["at"], run.get("updated_at"))
+                              "duration_seconds": None, "point": True})
+        if last_state is not None and last_state["duration_seconds"] is None:
+            last_state["duration_seconds"] = seconds_between(last_state["at"], run.get("updated_at"))
         return steps
     def list_runs(self, limit: int = 50) -> list[dict[str, Any]]:
         """Persisted run summaries, newest first, for UI restoration."""

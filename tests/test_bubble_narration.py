@@ -99,6 +99,9 @@ def test_timeline_reads_like_a_story_with_durations(tmp_path):
         assert "Tests" in labels
         assert any(label.startswith("Review build par") for label in labels)
         assert "Approbation humaine" in labels and "Accepté" in labels
-        assert all("duration_seconds" in step for step in steps)
+        # Durations belong to state steps — even those followed by review rows.
+        state_steps = [step for step in steps if not step.get("point")]
+        assert state_steps and all(step["duration_seconds"] is not None for step in state_steps)
+        assert all(step["duration_seconds"] is None for step in steps if step.get("point"))
     finally:
         api.close()
