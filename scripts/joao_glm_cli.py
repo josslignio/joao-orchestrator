@@ -96,6 +96,20 @@ def git_changed_paths(workspace: Path) -> list[str]:
     return sorted(set(changed))
 
 
+def dirty_state_fingerprint(workspace: Path, paths: list[str]) -> dict[str, str]:
+    """Content identity of every dirty path, so read-only drift is provable."""
+    state: dict[str, str] = {}
+    for relative in paths:
+        path = workspace / relative
+        if path.is_symlink():
+            state[relative] = "link:" + os.readlink(path)
+        elif path.is_file():
+            state[relative] = sha256_file(path)
+        else:
+            state[relative] = "<missing-or-directory>"
+    return state
+
+
 def path_allowed(path: str, rules: list[str]) -> bool:
     norm = path.lstrip("./").replace("\\", "/")
     for raw in rules:
@@ -351,6 +365,8 @@ def main() -> int:
 
         before = git_changed_paths(workspace)
         evidence["changed_paths_before"] = before
+        state_before = dirty_state_fingerprint(workspace, before)
+        evidence["dirty_state_before"] = state_before
         if args.mode == "workspace-write" and before != sorted(set(args.baseline_path)):
             raise RuntimeError("workspace-write dirty baseline differs from explicit baseline contract")
 
@@ -377,9 +393,16 @@ def main() -> int:
         evidence["changed_paths_by_task"] = changed_by_task
         unauthorized = [path for path in changed_by_task if not path_allowed(path, args.allowed_path)]
         if args.mode == "read-only":
-            # Read-only means the task itself changed nothing; pre-existing
-            # uncommitted work (e.g. a builder diff under review) is legitimate.
-            unauthorized = changed_by_task
+            # Read-only means the task itself changed nothing: pre-existing
+            # uncommitted work (e.g. a builder diff under review) is legitimate,
+            # but any content mutation, deletion, or revert of it is drift —
+            # proven by content fingerprints, not by the path set alone.
+            state_after = dirty_state_fingerprint(workspace, after)
+            evidence["dirty_state_after"] = state_after
+            unauthorized = sorted(
+                path for path in set(before) | set(after)
+                if state_before.get(path) != state_after.get(path)
+            )
         evidence["unauthorized_paths"] = unauthorized
         evidence["argv"] = argv[:-1] + [f"<prompt sha256={sha256_bytes(prompt.encode('utf-8'))}>"]
         evidence["config_sha256"] = sha256_bytes(canonical_json_bytes(config))
