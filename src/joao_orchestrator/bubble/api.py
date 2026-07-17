@@ -384,10 +384,20 @@ class LocalAPIServer:
             def authorized(self):
                 return secrets.compare_digest(self.headers.get("X-JOAO-Token", ""), outer.token)
 
+            def host_ok(self):
+                # The token page is served on GET /; with a fixed port a DNS
+                # rebinding page could otherwise read it. Loopback hosts only.
+                host = self.headers.get("Host", "")
+                port = outer.server.server_port
+                return host in {f"127.0.0.1:{port}", f"localhost:{port}",
+                                f"[::1]:{port}", "127.0.0.1", "localhost", "[::1]"}
+
             def do_GET(self):
                 path = urlparse(self.path).path
                 bits = path.strip("/").split("/")
                 try:
+                    if not self.host_ok():
+                        return self.send(403, {"error": "invalid Host header"})
                     if path == "/":
                         return self.send(200, HTML.replace("__JOAO_TOKEN__", outer.token), "text/html; charset=utf-8")
                     if not self.authorized():
@@ -431,6 +441,8 @@ class LocalAPIServer:
                 path = urlparse(self.path).path
                 bits = path.strip("/").split("/")
                 try:
+                    if not self.host_ok():
+                        return self.send(403, {"error": "invalid Host header"})
                     if not self.authorized():
                         return self.send(401, {"error": "missing or invalid local session token"})
                     if path == "/quick-missions":

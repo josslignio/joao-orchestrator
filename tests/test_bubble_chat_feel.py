@@ -47,6 +47,24 @@ def test_chat_feel_behaviors_are_wired(tmp_path):
     assert "résultat écarté, run archivé rejeté" in page
 
 
+def test_token_page_refuses_foreign_host_headers(tmp_path):
+    import urllib.error
+    api = LocalAPIServer(runtime(tmp_path))
+    api.serve_in_thread()
+    try:
+        request = urllib.request.Request(api.url, headers={"Host": "evil.example"})
+        try:
+            urllib.request.urlopen(request, timeout=10)
+            raise AssertionError("foreign Host was served the token page")
+        except urllib.error.HTTPError as error:
+            assert error.code == 403
+        # The legitimate loopback Host still gets the page.
+        with urllib.request.urlopen(urllib.request.Request(api.url), timeout=10) as response:
+            assert "TOKEN" in response.read().decode()
+    finally:
+        api.close()
+
+
 def test_validated_look_is_applied(tmp_path):
     page = served_page(tmp_path)
     # Night gradient + powder grain.
