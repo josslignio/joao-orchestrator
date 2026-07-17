@@ -1357,6 +1357,12 @@ class RunRuntime:
                 manifest.append({"path": relative, "bytes": None, "sha256": None,
                                  "is_text": False, "skipped": "hors workspace"})
                 continue
+            # A hardlink resolves in-workspace yet shares content with an
+            # outside file — same smuggling channel as a symlink.
+            if source.stat().st_nlink > 1:
+                manifest.append({"path": relative, "bytes": None, "sha256": None,
+                                 "is_text": False, "skipped": "lien matériel refusé"})
+                continue
             target = target_root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)

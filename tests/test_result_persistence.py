@@ -117,6 +117,9 @@ def test_symlinked_deliverables_are_refused_not_dereferenced(tmp_path):
     (workspace / "todo.py").write_text("VALUE = 2\n")
     (workspace / "loot").symlink_to(secret)
 
+    import os
+    os.link(secret, workspace / "loot_hard")  # hardlink: resolves in-workspace
+
     rt = runtime(tmp_path)
     folder = tmp_path / "evidence"
     folder.mkdir()
@@ -124,8 +127,10 @@ def test_symlinked_deliverables_are_refused_not_dereferenced(tmp_path):
     manifest = json.loads((folder / "deliverables-manifest.json").read_text())
     by_path = {entry["path"]: entry for entry in manifest["files"]}
     assert by_path["loot"]["skipped"] == "symlink refusé"
+    assert by_path["loot_hard"]["skipped"] == "lien matériel refusé"
     assert by_path["todo.py"]["sha256"]
     assert not (folder / "deliverables" / "loot").exists()
+    assert not (folder / "deliverables" / "loot_hard").exists()
     blob = b"".join(p.read_bytes() for p in (folder / "deliverables").rglob("*") if p.is_file())
     assert b"CONTENU-SECRET-HORS-SANDBOX" not in blob
 
