@@ -858,7 +858,12 @@ class RunRuntime:
         run = self._read(run_id)
         folder = self._dir(run_id)
         created = datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
-        run["elapsed_seconds"] = max(0, int((datetime.now(timezone.utc) - created).total_seconds()))
+        if run["status"] in {"accepted", "stopped", "blocked", "failed"}:
+            # Terminal card: the clock must freeze at the last transition.
+            end = datetime.fromisoformat(run["updated_at"].replace("Z", "+00:00"))
+        else:
+            end = datetime.now(timezone.utc)
+        run["elapsed_seconds"] = max(0, int((end - created).total_seconds()))
         run["progress"] = {
             "completed": sum(item.get("status") == "completed" for item in run.get("tasks", [])),
             "total": len(run.get("tasks", [])),
