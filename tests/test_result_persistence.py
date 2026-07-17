@@ -135,6 +135,46 @@ def test_symlinked_deliverables_are_refused_not_dereferenced(tmp_path):
     assert b"CONTENU-SECRET-HORS-SANDBOX" not in blob
 
 
+def test_resume_never_strands_a_run_without_a_driver(tmp_path):
+    """Legacy paused card: dead sandbox → refused while still paused; a driver
+    failure after the transition → honest stop, never a stranded active state."""
+    api = LocalAPIServer(runtime(tmp_path))
+    api.serve_in_thread()
+    try:
+        launched = http(api, "quick-missions", {"mission": "mission pause héritée",
+                                                "builder_name": "glm", "review_mode": "none"})
+        run_id = launched["run_id"]
+        api.workers[run_id].join(timeout=30)
+        run = api.runtime._read(run_id)
+        run["status"] = "paused"  # manufacture the legacy paused card
+        api.runtime._write(run)
+
+        workspace = run["workspace"]
+        shutil.rmtree(workspace)
+        refused = http(api, f"runs/{run_id}/resume", {})
+        assert refused["accepted"] is False
+        assert "sandbox" in refused["reason"]
+        assert api.runtime._read(run_id)["status"] == "paused"  # still recoverable
+
+        Path(workspace).mkdir()  # sandbox back, but the driver will fail
+        from joao_orchestrator.bubble.runtime import RuntimeStateError
+
+        def failing_drive(_run_id):
+            raise RuntimeStateError("another JOAO builder is active for this worktree")
+
+        original = api.resume_drive
+        api.resume_drive = failing_drive
+        try:
+            result = http(api, f"runs/{run_id}/resume", {})
+        finally:
+            api.resume_drive = original
+        assert result["accepted"] is False
+        assert result["status"] == "stopped"
+        assert "arrêté proprement" in result["reason"]
+    finally:
+        api.close()
+
+
 def test_result_panel_data_present_after_a_forced_repair_loop(tmp_path):
     """F11 regression: a run that went through a repair loop still serves its result."""
     api = LocalAPIServer(runtime(tmp_path, claude=OneRepairLoopReviewer()))

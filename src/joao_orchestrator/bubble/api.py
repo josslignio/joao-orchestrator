@@ -556,11 +556,22 @@ class LocalAPIServer:
                 after = self.runtime.get(run_id)
                 return {"action": action, "accepted": True, "status": after["status"],
                         "reason": "réparation bornée relancée"}
+            if action == "resume" and not Path(before["workspace"]).is_dir():
+                # Refuse BEFORE leaving paused: nothing can drive a dead sandbox.
+                return {"action": action, "accepted": False, "status": before["status"],
+                        "reason": "le sandbox de ce run n'existe plus — utilise Stop pour l'archiver"}
             state = getattr(self.runtime, action)(run_id)
             if action == "resume":
                 # Judge the feedback on resume()'s own transition; the driver
                 # relaunched below may already have moved the run further.
-                self.resume_drive(run_id)
+                try:
+                    self.resume_drive(run_id)
+                except RuntimeStateError as exc:
+                    # The run already left paused; stranding it in an active
+                    # state with no worker would lie to the card. Stop honestly.
+                    stopped = self.runtime.stop(run_id)
+                    return {"action": action, "accepted": False, "status": stopped["status"],
+                            "reason": f"reprise impossible ({exc}) — run arrêté proprement"}
         except RuntimeStateError as exc:
             current = self.runtime.get(run_id)
             return {"action": action, "accepted": False, "status": current["status"],
@@ -723,7 +734,17 @@ class LocalAPIServer:
         if previous is not None and previous.is_alive():
             def deferred_restart():
                 previous.join()
-                self.drive(run_id)
+                try:
+                    self.drive(run_id)
+                except RuntimeStateError as exc:
+                    # Never leave a resumed run stranded without a worker.
+                    try:
+                        current = self.runtime.get(run_id)
+                        if current["status"] not in {"stopped", "accepted", "blocked", "failed"}:
+                            self.runtime._event(current, "resume_failed", error=str(exc))
+                            self.runtime.stop(run_id)
+                    except Exception:
+                        pass
             threading.Thread(target=deferred_restart, name="joao-resume-" + run_id, daemon=True).start()
             return {"run_id": run_id, "status": "resume_queued"}
         return self.drive(run_id)
