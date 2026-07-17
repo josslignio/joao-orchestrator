@@ -134,13 +134,8 @@ class LocalAPIServer:
                         return self.send(202, outer.quick_launch(self.payload()))
                     if path == "/missions":
                         return self.send(202, outer.launch(self.payload()))
-                    if len(bits) == 3 and bits[0] == "runs" and bits[2] in {"pause", "resume", "stop", "approve", "reject"}:
-                        state = getattr(outer.runtime, bits[2])(bits[1])
-                        if bits[2] == "resume":
-                            outer.resume_drive(bits[1])
-                        return self.send(200, state)
-                    if len(bits) == 3 and bits[0] == "runs" and bits[2] == "retry":
-                        return self.send(202, outer.drive(bits[1]))
+                    if len(bits) == 3 and bits[0] == "runs" and bits[2] in {"pause", "resume", "stop", "approve", "reject", "retry"}:
+                        return self.send(200, outer.control(bits[1], bits[2]))
                     self.send(404, {"error": "not found"})
                 except (RuntimeStateError, ValueError, json.JSONDecodeError) as exc:
                     self.send(409, {"error": str(exc)})
@@ -190,6 +185,47 @@ class LocalAPIServer:
         })
         return {"glm": glm, "codex": codex, "claude": claude,
                 "workspace_lock": {"active_count": len(self._active_workspaces)}}
+
+    # Actions applicable per persisted state; everything else must be refused.
+    APPLICABLE = {
+        "pending": {"pause", "stop"}, "planning": {"pause", "stop"},
+        "ready": {"pause", "stop"}, "building": {"pause", "stop"},
+        "testing": {"pause", "stop"}, "reviewing": {"pause", "stop"},
+        "needs_approval": {"approve", "reject", "stop"},
+        "paused": {"resume", "stop"}, "blocked": {"retry", "reject"},
+        "failed": {"retry", "reject"}, "accepted": set(), "stopped": set(),
+    }
+
+    def control(self, run_id, action):
+        """Apply a UI control and always answer with explicit accepted/refused feedback."""
+        before = self.runtime.get(run_id)
+        allowed = self.APPLICABLE.get(before["status"], set())
+        if action not in allowed:
+            applicable = ", ".join(sorted(allowed)) or "aucune"
+            return {"action": action, "accepted": False, "status": before["status"],
+                    "reason": f"action non applicable à l'état {before['status']} (possibles: {applicable})"}
+        try:
+            if action == "retry":
+                self.drive(run_id)
+                after = self.runtime.get(run_id)
+                return {"action": action, "accepted": True, "status": after["status"],
+                        "reason": "réparation bornée relancée"}
+            state = getattr(self.runtime, action)(run_id)
+            if action == "resume":
+                self.resume_drive(run_id)
+                state = self.runtime.get(run_id)
+        except RuntimeStateError as exc:
+            current = self.runtime.get(run_id)
+            return {"action": action, "accepted": False, "status": current["status"],
+                    "reason": str(exc)}
+        queued = state.get("control_request") == action
+        changed = state["status"] != before["status"]
+        if not changed and not queued and action in {"pause", "stop"}:
+            return {"action": action, "accepted": False, "status": state["status"],
+                    "reason": f"aucun effet: l'état {state['status']} n'accepte pas {action}"}
+        reason = ("demande enregistrée; appliquée au prochain point sûr" if queued
+                  else f"état: {before['status']} → {state['status']}")
+        return {"action": action, "accepted": True, "status": state["status"], "reason": reason}
 
     @staticmethod
     def command(text):
