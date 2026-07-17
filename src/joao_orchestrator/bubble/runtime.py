@@ -172,6 +172,20 @@ def extract_agent_finding(jsonl: str, marker: str) -> str:
     return messages[-1][-4000:] if messages else ""
 
 
+def extract_opencode_text(jsonl: str) -> str:
+    """Concatenate the assistant text events of an OpenCode --format json stream."""
+    texts: list[str] = []
+    for line in jsonl.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        part = event.get("part", {})
+        if event.get("type") == "text" and isinstance(part.get("text"), str):
+            texts.append(part["text"])
+    return "\n".join(texts)
+
+
 def git_status_paths(workspace: Path) -> list[str]:
     result = subprocess.run(
         ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
@@ -220,6 +234,10 @@ NEXT = {
 
 class RuntimeStateError(RuntimeError):
     pass
+
+
+# Deterministic reviewer ordering for review policies and their combinations.
+CANONICAL_REVIEWERS = ["codex", "claude", "glm"]
 
 
 class BuilderAdapter(ABC):
@@ -685,6 +703,101 @@ class ClaudeCLIReviewer(ReviewerAdapter):
         return self.review_stage(run, run_dir, "final")
 
 
+class GLMCLIReviewer(ReviewerAdapter):
+    """Read-only GLM reviewer through the fail-closed joao-glm wrapper (free plan)."""
+
+    provider = "zai-coding-plan"; model = "zai-coding-plan/glm-4.5-air"
+
+    def __init__(self, executable: Path = Path("~/.local/bin/joao-glm").expanduser(), timeout: int = 1200):
+        self.executable = executable
+        self.timeout = timeout
+
+    def preflight(self) -> dict[str, Any]:
+        found = resolve_executable(self.executable, fallback=Path("~/.local/bin/joao-glm"))
+        if not found:
+            return {"available": False, "executable": str(self.executable), "model": self.model,
+                    "provider": self.provider, "real_or_mock": "real", "mode": "read_only_review",
+                    "reason": f"GLM executable not found at {self.executable}",
+                    "last_error": "Executable not found or not executable",
+                    "auth_status": "unknown", "config_status": "not_configured"}
+        return {"available": True, "executable": found, "model": self.model,
+                "provider": self.provider, "real_or_mock": "real", "mode": "read_only_review",
+                "reason": "GLM reviewer is available", "last_error": None,
+                "auth_status": "adapter_managed", "config_status": "configured"}
+
+    def review_stage(self, run, run_dir, stage: str) -> dict[str, Any]:
+        started = now()
+        workspace = Path(run["workspace"])
+        found = resolve_executable(self.executable, fallback=Path("~/.local/bin/joao-glm"))
+        if not found:
+            return {"ok": False, "decision": "block", "stage": stage,
+                    "provider": self.provider, "model": self.model, "real_or_mock": "real",
+                    "returncode": -1, "timestamp_start": started, "timestamp_end": now(),
+                    "reason": f"GLM executable not found at {self.executable}",
+                    "last_error": "Executable not found"}
+        repair_suffix = f"-repair-{run.get('corrections_used')}" if run.get("corrections_used") else ""
+        task = run_dir / f"glm-{stage}-review-task{repair_suffix}.md"
+        output = run_dir / f"glm-{stage}-review{repair_suffix}.jsonl"
+        prompt = (
+            "You are a read-only JOAO reviewer. Review the " + stage + " gate for the mission below. "
+            f"Inspect the current Git diff and local evidence in {run_dir}. Do not edit files, install "
+            "packages, commit, push, or use the network. Judge only this gate: at the plan gate, assess "
+            "only whether the bounded plan and safety contract are sound. At the build gate, inspect only "
+            "the produced diff; JOAO itself executes the recorded test commands at the dedicated test gate, "
+            "so never demand test execution or test output at the build gate. At the test gate, inspect the "
+            "recorded test results. At the final gate, recheck the complete diff, tests, scope, and evidence. "
+            "A P1 requires a concrete correctness or safety defect, not a speculative enhancement. "
+            "For P1 or BLOCK, print GLM_FINDING: followed by one concrete repair line. "
+            "End with exactly GLM_REVIEW: ACCEPT, GLM_REVIEW: P1, or GLM_REVIEW: BLOCK.\n\n"
+            + run["mission"]
+        )
+        atomic_write_text(task, prompt)
+        argv = [found, "--workspace", str(workspace), "--task-file", str(task),
+                "--output", str(output), "--mode", "read-only", "--budget", "normal"]
+        before_paths = git_status_paths(workspace)
+        before_fingerprint = git_worktree_fingerprint(workspace)
+        try:
+            proc = subprocess.run(argv, shell=False, capture_output=True, text=True,
+                                  timeout=self.timeout, env=bounded_provider_env())
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {"ok": False, "decision": "block", "stage": stage,
+                    "provider": self.provider, "model": self.model, "real_or_mock": "real",
+                    "returncode": -1, "timestamp_start": started, "timestamp_end": now(),
+                    "reason": f"GLM reviewer failed: {exc}", "last_error": str(exc)}
+        review_text = ""
+        if output.is_file():
+            review_text = extract_opencode_text(output.read_text(errors="replace"))
+        text = review_text or (proc.stdout + "\n" + proc.stderr)
+        verdict = parse_review_verdict(text, "GLM_REVIEW") or "MISSING"
+        decision = {"ACCEPT": "pass", "P1": "p1", "BLOCK": "block"}.get(verdict, "block")
+        finding_match = re.findall(r"GLM_FINDING:\s*(.+)", text, flags=re.I)
+        finding = finding_match[-1].strip()[-4000:] if finding_match else ""
+        malformed_finding = verdict in {"P1", "BLOCK"} and len(finding) < 12
+        if malformed_finding:
+            decision = "block"
+        after_paths = git_status_paths(workspace)
+        reviewer_drift = sorted(set(after_paths) ^ set(before_paths))
+        if git_worktree_fingerprint(workspace) != before_fingerprint and not reviewer_drift:
+            reviewer_drift = ["<content changed in existing worktree path>"]
+        if reviewer_drift:
+            verdict, decision = "BLOCK", "block"
+        return {
+            "ok": proc.returncode == 0 and verdict == "ACCEPT" and not reviewer_drift,
+            "decision": decision, "stage": stage, "verdict": verdict, "finding": finding,
+            "malformed_finding": malformed_finding, "returncode": proc.returncode,
+            "provider": self.provider, "model": self.model, "executable": found,
+            "real_or_mock": "real", "timestamp_start": started, "timestamp_end": now(),
+            "output": str(output), "output_sha256": digest(output) if output.is_file() else None,
+            "stdout_tail": proc.stdout[-2000:], "stderr": proc.stderr[-4000:],
+            "proof": {"verdict": verdict, "reviewed_diff_sha256": run.get("final_diff_sha256")},
+            "adapter_command": argv, "reviewer_workspace_drift": reviewer_drift,
+            "evidence_paths": [str(output), str(task)],
+        }
+
+    def review(self, run, run_dir):
+        return self.review_stage(run, run_dir, "final")
+
+
 def claude_capability() -> dict[str, Any]:
     return ClaudeCLIReviewer().preflight()
 
@@ -742,22 +855,20 @@ class RunRuntime:
         if review_policy == "none":
             reviewer_names = []
         elif reviewer_names is None:
-            reviewer_names = ["codex"] if codex_review else []
+            if review_policy:
+                reviewer_names = review_policy.split("_and_")
+            else:
+                reviewer_names = ["codex"] if codex_review else []
         reviewer_names = list(reviewer_names or [])
         if review_policy is None:
-            if reviewer_names == ["codex"]:
-                review_policy = "codex"
-            elif reviewer_names == ["claude"]:
-                review_policy = "claude"
-            elif reviewer_names == ["codex", "claude"]:
-                review_policy = "codex_and_claude"
-            elif not reviewer_names:
-                review_policy = "none"
-        expected_reviewers = {
-            "none": [], "codex": ["codex"], "claude": ["claude"],
-            "codex_and_claude": ["codex", "claude"],
-        }
-        if review_policy not in expected_reviewers or reviewer_names != expected_reviewers[review_policy]:
+            review_policy = "_and_".join(reviewer_names) or "none"
+        # Any duplicate-free combination of known reviewers is a valid policy;
+        # the policy string is the canonical-order join of the selected names.
+        canonical = [name for name in CANONICAL_REVIEWERS if name in reviewer_names]
+        if (len(set(reviewer_names)) != len(reviewer_names)
+                or any(name not in CANONICAL_REVIEWERS for name in reviewer_names)
+                or reviewer_names != canonical
+                or review_policy != ("_and_".join(reviewer_names) or "none")):
             raise RuntimeStateError("review policy and selected reviewers do not match")
 
         builder_instance = self.builders[builder_name]

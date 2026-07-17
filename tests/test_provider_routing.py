@@ -120,14 +120,15 @@ class FixtureReviewer(ReviewerAdapter):
         return self.review_stage(run, run_dir, "final")
 
 
-def runtime(path: Path, *, builder=None, codex=None, claude=None, production=False):
+def runtime(path: Path, *, builder=None, codex=None, claude=None, glm=None, production=False):
     builder = builder or FixtureBuilder()
     codex = codex or FixtureReviewer("codex-fixture")
     claude = claude or FixtureReviewer("claude-fixture")
+    glm = glm or FixtureReviewer("glm-fixture")
     return RunRuntime(
         path / "state", builder=builder,
         builders={"glm": builder, "codex": builder, "claude": builder},
-        reviewer=codex, reviewers={"codex": codex, "claude": claude},
+        reviewer=codex, reviewers={"codex": codex, "claude": claude, "glm": glm},
         allow_test_adapters=not production,
     )
 

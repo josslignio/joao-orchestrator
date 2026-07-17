@@ -38,18 +38,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "ui":
         from joao_orchestrator.bubble.api import LocalAPIServer
-        from joao_orchestrator.bubble.runtime import ClaudeBuilder, ClaudeCLIReviewer, CodexBuilder, CodexCLIReviewer, GLMBuilder, RunRuntime
+        from joao_orchestrator.bubble.runtime import ClaudeBuilder, ClaudeCLIReviewer, CodexBuilder, CodexCLIReviewer, GLMBuilder, GLMCLIReviewer, RunRuntime
         glm = GLMBuilder()
         codex_builder = CodexBuilder()
         claude_builder = ClaudeBuilder()
         codex_reviewer = CodexCLIReviewer()
         claude_reviewer = ClaudeCLIReviewer()
+        glm_reviewer = GLMCLIReviewer()
         server = LocalAPIServer(RunRuntime(
             Path(args.state_root).expanduser(),
             builder=glm,
             builders={"glm": glm, "codex": codex_builder, "claude": claude_builder},
             reviewer=codex_reviewer,
-            reviewers={"codex": codex_reviewer, "claude": claude_reviewer},
+            reviewers={"codex": codex_reviewer, "claude": claude_reviewer, "glm": glm_reviewer},
             allow_test_adapters=False,
         ))
         print(server.url)

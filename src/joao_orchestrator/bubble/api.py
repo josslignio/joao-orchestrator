@@ -63,7 +63,9 @@ pre{white-space:pre-wrap;max-height:220px;overflow:auto;color:#c9d1d9;font-size:
 <label class="mode"><input type="radio" name="review" value="none"> No Review</label>
 <label class="mode"><input type="radio" name="review" value="codex" checked> Codex</label>
 <label class="mode"><input type="radio" name="review" value="claude"> Claude</label>
+<label class="mode"><input type="radio" name="review" value="glm"> GLM</label>
 <label class="mode"><input type="radio" name="review" value="codex_and_claude"> Codex + Claude</label>
+<label class="mode"><input type="radio" name="review" value="claude_and_glm"> Claude + GLM</label>
 </div>
 <div id="safety-summary" class="muted"></div>
 <div id="quota-warning" class="warn" style="display:none;font-size:13px;margin:4px 0"></div>
@@ -176,13 +178,14 @@ function enableChoice(name,value,enabled){const input=document.querySelector('in
  input.disabled=!enabled;input.closest('.mode').style.opacity=enabled?'1':'.45'}
 function ensureChoice(name){const current=document.querySelector('input[name="'+name+'"]:checked');
  if(!current||current.disabled){const fallback=document.querySelector('input[name="'+name+'"]:not(:disabled)');if(fallback)fallback.checked=true}}
+function reviewParts(r){return r==='none'?[]:r.split('_and_')}
 function quotaDoomed(){if(!CAPS||!CAPS.codex.quota_warning)return false;
- const b=selected('builder'),r=selected('review');return b==='codex'||r==='codex'||r==='codex_and_claude'}
+ const b=selected('builder'),r=selected('review');return b==='codex'||reviewParts(r).includes('codex')}
 function updateSafety(){if(!CAPS)return;const v=CAPS;const parts=[];
  for(const name of ['glm','codex','claude']){const cap=v[name];
   parts.push('<span class="'+(cap.available?'ok':'err')+'">'+name.toUpperCase()+': '+(cap.available?'prêt':'indisponible')+'</span>')}
  const b=selected('builder'),r=selected('review');
- if((b==='codex'&&r.includes('codex'))||(b==='claude'&&r.includes('claude')))
+ if(reviewParts(r).includes(b))
   parts.push('<span class="warn">AVERTISSEMENT: self-review — '+b+' construit ET review</span>');
  if(r==='none')parts.push('<span class="err">NO REVIEW — approbation humaine seule</span>');
  el('safety-summary').innerHTML=parts.join(' · ');
@@ -191,15 +194,13 @@ function updateSafety(){if(!CAPS)return;const v=CAPS;const parts=[];
   q.textContent='⚠ Quota Codex épuisé ('+(v.codex.quota_warning.at||'récemment')+') — si tu lances quand même, le run se bloquera à la première gate Codex; utilise alors Reject pour le terminer, ou choisis une review sans Codex.'}
  else q.style.display='none';
  let valid=el('prompt').value.trim().length>0&&v[b].available;
- if(r==='codex'&&!v.codex.reviewer_available)valid=false;
- if(r==='claude'&&!v.claude.reviewer_available)valid=false;
- if(r==='codex_and_claude'&&!(v.codex.reviewer_available&&v.claude.reviewer_available))valid=false;
+ for(const name of reviewParts(r))if(!v[name].reviewer_available)valid=false;
  el('start-btn').disabled=!valid}
 async function caps(){try{CAPS=await req('/capabilities');const v=CAPS;
  enableChoice('builder','glm',v.glm.available);enableChoice('builder','codex',v.codex.available);
- enableChoice('builder','claude',v.claude.available);enableChoice('review','codex',v.codex.reviewer_available);
- enableChoice('review','claude',v.claude.reviewer_available);
- enableChoice('review','codex_and_claude',v.codex.reviewer_available&&v.claude.reviewer_available);
+ enableChoice('builder','claude',v.claude.available);
+ document.querySelectorAll('input[name="review"]').forEach(i=>{
+  enableChoice('review',i.value,reviewParts(i.value).every(n=>v[n].reviewer_available))});
  ensureChoice('builder');ensureChoice('review');
  el('capabilities').innerHTML=['glm','codex','claude'].map(n=>'<span class="chip '+(v[n].available?'ok':'err')+'">'
   +n.toUpperCase()+' '+(v[n].available?'prêt':'indisponible')+'</span>').join('')
@@ -336,6 +337,14 @@ class LocalAPIServer:
         claude = preflight(self.runtime.builders.get("claude"), "Claude builder not configured")
         codex_review = preflight(self.runtime.reviewers.get("codex"), "Codex reviewer not configured")
         claude_review = preflight(self.runtime.reviewers.get("claude"), "Claude reviewer not configured")
+        glm_review = preflight(self.runtime.reviewers.get("glm"), "GLM reviewer not configured")
+        glm.update({
+            "reviewer_available": bool(glm_review["available"]),
+            "reviewer_reason": glm_review["reason"],
+            "reviewer_model": glm_review["model"],
+            "reviewer_executable": glm_review["executable"],
+            "reviewer_last_error": glm_review["last_error"],
+        })
         codex.update({
             "reviewer_available": bool(codex_review["available"]),
             "reviewer_reason": codex_review["reason"],
@@ -456,17 +465,18 @@ class LocalAPIServer:
         builder = str(data.get("builder_name", "glm"))
         mode = str(data.get("review_mode", "codex"))
 
-        # Map review modes to reviewer names and policy
-        review_mapping = {
-            "none": ([], "none"),
-            "codex": (["codex"], "codex"),
-            "claude": (["claude"], "claude"),
-            "codex_and_claude": (["codex", "claude"], "codex_and_claude"),
-            "codex_claude": (["codex", "claude"], "codex_and_claude"),
-        }
-
-        if builder not in {"glm", "codex", "claude"} or mode not in review_mapping:
+        # Any duplicate-free combination of known reviewers is a valid mode;
+        # names are canonicalized so glm_and_claude and claude_and_glm agree.
+        if builder not in {"glm", "codex", "claude"}:
             raise ValueError("unknown builder or review mode")
+        legacy_modes = {"codex_claude": "codex_and_claude"}
+        mode = legacy_modes.get(mode, mode)
+        parts = [] if mode == "none" else mode.split("_and_")
+        known = ["codex", "claude", "glm"]
+        if len(set(parts)) != len(parts) or any(name not in known for name in parts):
+            raise ValueError("unknown builder or review mode")
+        reviewer_names = [name for name in known if name in parts]
+        review_policy = "_and_".join(reviewer_names) or "none"
 
         capabilities = self.capabilities()
 
@@ -475,7 +485,6 @@ class LocalAPIServer:
             raise ValueError(f"Selected builder is unavailable: {capabilities[builder]['reason']}")
 
         # Check reviewer availability (skip for no-review)
-        reviewer_names, review_policy = review_mapping[mode]
         for name in reviewer_names:
             reviewer_available = capabilities[name].get("reviewer_available", capabilities[name]["available"])
             if not reviewer_available:
