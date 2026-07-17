@@ -946,13 +946,13 @@ class RunRuntime:
         if run["status"] not in {"blocked", "failed"}:
             return {"block_cause": None, "unblock_hint": None, "quota_blocked": False}
         fragments = self._evidence_fragments(run_id, run)
-        combined = "\n".join(fragments)
-        quota = bool(self.QUOTA_RE.search(combined))
-        reset = re.search(r"try again at\s+([^.\"\n]+)", combined, re.I)
+        # Quota attribution must stay codex-scoped, like quota_trace.
+        trace = self.quota_trace(run_id)
+        quota = trace["quota_blocked"]
         if quota:
             cause = "Quota fournisseur épuisé (Codex usage limit)"
-            if reset:
-                cause += f" — reset annoncé: {reset.group(1).strip()}"
+            if trace.get("reset_hint"):
+                cause += f" — reset annoncé: {trace['reset_hint']}"
             hint = ("Retry relancera la même configuration après le retour du quota; "
                     "Reject termine ce run immédiatement et libère l'interface.")
         else:
