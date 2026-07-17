@@ -471,7 +471,11 @@ class LocalAPIServer:
                     if state["status"] != "correcting":
                         break
             except Exception as exc:
-                self.runtime._event(self.runtime.get(run_id), "runtime_exception", error=f"{type(exc).__name__}: {exc}")
+                current = self.runtime.get(run_id)
+                if isinstance(exc, RuntimeStateError) and current["status"] in {"stopped", "accepted"}:
+                    pass  # a user control landed between iterations; not a failure
+                else:
+                    self.runtime._event(current, "runtime_exception", error=f"{type(exc).__name__}: {exc}")
             finally:
                 with self._dispatch_lock:
                     if self._active_workspaces.get(workspace) == run_id:
