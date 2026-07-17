@@ -112,6 +112,8 @@ class LocalAPIServer:
                         return self.send(401, {"error": "missing or invalid local session token"})
                     if path == "/capabilities":
                         return self.send(200, outer.capabilities())
+                    if path == "/runs":
+                        return self.send(200, {"runs": outer.runtime.list_runs()})
                     if len(bits) == 2 and bits[0] == "runs":
                         return self.send(200, outer.runtime.get(bits[1]))
                     if len(bits) == 3 and bits[0] == "runs" and bits[2] == "events":
@@ -183,8 +185,24 @@ class LocalAPIServer:
             "reviewer_executable": claude_review["executable"],
             "reviewer_last_error": claude_review["last_error"],
         })
+        codex["quota_warning"] = self._codex_quota_warning()
         return {"glm": glm, "codex": codex, "claude": claude,
                 "workspace_lock": {"active_count": len(self._active_workspaces)}}
+
+    def _codex_quota_warning(self):
+        """Latest observed Codex quota block, so the UI can warn before launch."""
+        for summary in self.runtime.list_runs(limit=10):
+            if summary.get("status") not in {"blocked", "failed"}:
+                continue
+            try:
+                explained = self.runtime.explain_block(summary["run_id"])
+            except Exception:
+                continue
+            if explained.get("quota_blocked"):
+                return {"at": summary.get("updated_at"),
+                        "run_id": summary.get("run_id"),
+                        "message": explained.get("block_cause")}
+        return None
 
     # Actions applicable per persisted state; everything else must be refused.
     APPLICABLE = {
