@@ -738,21 +738,36 @@ class GLMCLIReviewer(ReviewerAdapter):
         repair_suffix = f"-repair-{run.get('corrections_used')}" if run.get("corrections_used") else ""
         task = run_dir / f"glm-{stage}-review-task{repair_suffix}.md"
         output = run_dir / f"glm-{stage}-review{repair_suffix}.jsonl"
+        # OpenCode's read-only agent cannot leave the workspace, so every gate's
+        # evidence must travel inline inside the task itself.
+        stage_evidence = {
+            "plan": ["plan.json", "project-profile.json"],
+            "build": ["final-diff.patch"],
+            "test": ["test-results.json"],
+            "final": ["final-diff.patch", "test-results.json"],
+        }
+        sections = []
+        for name in stage_evidence.get(stage, []):
+            path = run_dir / name
+            if path.is_file():
+                sections.append(f"\n--- {name} (verbatim, truncated to 45000 chars) ---\n"
+                                + path.read_text(errors="replace")[:45000])
+        evidence_inline = "".join(sections) or "\n--- no recorded evidence file for this gate ---"
         prompt = (
             "You are a read-only JOAO reviewer. Review the " + stage + " gate for the mission below. "
-            f"Inspect the current Git diff and local evidence in {run_dir}. Do not edit files, install "
-            "packages, commit, push, or use the network. Judge only this gate: at the plan gate, assess "
-            "only whether the bounded plan and safety contract are sound, reading only mission.md, plan.json "
-            "and project-profile.json in the evidence directory; the mission may legitimately create files "
-            "that do not exist yet, so a missing deliverable file is never a plan defect. At the build gate, "
-            "inspect only the produced diff; JOAO itself executes the recorded test commands at the dedicated "
-            "test gate, so never demand test execution or test output at the build gate. At the test gate, "
-            "inspect the recorded test results. At the final gate, recheck the complete diff, tests, scope, "
-            "and evidence. A P1 or BLOCK requires a concrete correctness or safety defect, not a speculative "
-            "enhancement or a preference. "
+            "All the gate evidence you need is included verbatim at the end of this task; never claim "
+            "evidence is inaccessible, and do not try to read outside the workspace. Do not edit files, "
+            "install packages, commit, push, or use the network. Judge only this gate: at the plan gate, "
+            "assess only whether the bounded plan and safety contract are sound; the mission may "
+            "legitimately create files that do not exist yet, so a missing deliverable file is never a "
+            "plan defect. At the build gate, inspect only the produced diff; JOAO itself executes the "
+            "recorded test commands at the dedicated test gate, so never demand test execution or test "
+            "output at the build gate. At the test gate, inspect the recorded test results. At the final "
+            "gate, recheck the complete diff, tests, and scope. A P1 or BLOCK requires a concrete "
+            "correctness or safety defect, not a speculative enhancement or a preference. "
             "For P1 or BLOCK, print GLM_FINDING: followed by one concrete repair line. "
-            "End with exactly GLM_REVIEW: ACCEPT, GLM_REVIEW: P1, or GLM_REVIEW: BLOCK.\n\n"
-            + run["mission"]
+            "End with exactly GLM_REVIEW: ACCEPT, GLM_REVIEW: P1, or GLM_REVIEW: BLOCK.\n\nMISSION:\n"
+            + run["mission"] + "\n\nGATE EVIDENCE:" + evidence_inline
         )
         atomic_write_text(task, prompt)
         argv = [found, "--workspace", str(workspace), "--task-file", str(task),

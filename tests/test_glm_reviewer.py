@@ -100,6 +100,24 @@ def test_glm_reviewer_blocks_on_workspace_drift(tmp_path):
     assert result["reviewer_workspace_drift"] == ["scratch.txt"]
 
 
+def test_glm_review_task_carries_the_gate_evidence_inline(tmp_path):
+    root = git_workspace(tmp_path)
+    run_dir = tmp_path / "run"; run_dir.mkdir()
+    (run_dir / "plan.json").write_text('{"objective_verbatim": "OBJECTIF-SENTINELLE"}')
+    (run_dir / "project-profile.json").write_text('{"project_id": "PROFIL-SENTINELLE"}')
+    (run_dir / "final-diff.patch").write_text("+++ DIFF-SENTINELLE\n")
+    reviewer = GLMCLIReviewer(executable=stub_glm(tmp_path, ["GLM_REVIEW: ACCEPT"]))
+
+    reviewer.review_stage(fake_run(root), run_dir, "plan")
+    plan_task = (run_dir / "glm-plan-review-task.md").read_text()
+    assert "OBJECTIF-SENTINELLE" in plan_task and "PROFIL-SENTINELLE" in plan_task
+    assert "never claim evidence is inaccessible" in plan_task
+
+    reviewer.review_stage(fake_run(root), run_dir, "final")
+    final_task = (run_dir / "glm-final-review-task.md").read_text()
+    assert "DIFF-SENTINELLE" in final_task
+
+
 def test_glm_reviewer_blocks_on_missing_verdict(tmp_path):
     root = git_workspace(tmp_path)
     run_dir = tmp_path / "run"; run_dir.mkdir()
