@@ -129,7 +129,8 @@ function resultBlock(v){
  const s=st.sum;
  let h='<div class="resultbox"><div class="row"><b>Résultat construit</b>'
   +'<span>'+s.files.filter(f=>f.exists).length+' fichier(s) livrés</span>'
-  +(s.tests?'<span class="'+(s.tests.all_passed?'ok':'err')+'">tests '+s.tests.passed+'/'+s.tests.commands+(s.tests.all_passed?' OK':'')+'</span>'
+  +(s.tests&&s.tests.commands!=null?'<span class="'+(s.tests.all_passed?'ok':'err')+'">tests '+s.tests.passed+'/'+s.tests.commands+(s.tests.all_passed?' OK':'')+'</span>'
+    :s.tests&&s.tests.error?'<span class="warn">résultats de tests illisibles</span>'
     :'<span class="warn">tests non exécutés</span>')+'</div>';
  h+='<div><button class="ghost" data-res="diff" data-run="'+esc(v.run_id)+'">'+(st.open.diff?'Masquer le diff':'Voir le diff')+'</button>'
   +'<button class="ghost" data-res="files" data-run="'+esc(v.run_id)+'">'+(st.open.files?'Masquer les fichiers':'Fichiers')+'</button>'
