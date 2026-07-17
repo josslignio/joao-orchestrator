@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Install a local Finder-launchable JOAO Command Center app bundle."""
+"""Install the Finder-launchable JOÃO.AI app bundle for THIS worktree.
+
+Fixes over the original installer: the launcher exports a provider-capable
+PATH (Finder apps start with a minimal one), logs to a stable file, uses the
+installing interpreter's absolute path, and always points at the repository
+this script is run from — never a stale worktree.
+"""
 from __future__ import annotations
 
 import argparse
@@ -10,7 +16,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-APP = Path("/Applications/JOAO Command Center.app")
+APP_NAME = "JOÃO.AI"
+APP = Path(f"/Applications/{APP_NAME}.app")
 
 def write(path: Path, value: bytes, mode: int | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -28,14 +35,15 @@ def main() -> int:
     cli = repo / "src/joao_orchestrator/cli/joao.py"
     if not cli.is_file():
         parser.error(f"JOAO CLI not found: {cli}")
+    executable_name = app.stem
     contents = app / "Contents"
     info = {
-        "CFBundleDisplayName": "JOAO Command Center",
-        "CFBundleExecutable": "JOAO Command Center",
-        "CFBundleIdentifier": "local.joss.joao-command-center",
-        "CFBundleName": "JOAO Command Center",
+        "CFBundleDisplayName": APP_NAME,
+        "CFBundleExecutable": executable_name,
+        "CFBundleIdentifier": "ai.joao.command-center",
+        "CFBundleName": APP_NAME,
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "1.0",
+        "CFBundleShortVersionString": "1.2",
         "LSMinimumSystemVersion": "12.0",
         "NSHighResolutionCapable": True,
     }
@@ -48,7 +56,7 @@ def main() -> int:
         f">>{shlex.quote(str(log))} 2>&1\n"
     )
     write(contents / "Info.plist", plistlib.dumps(info))
-    write(contents / "MacOS" / "JOAO Command Center", launcher.encode("utf-8"), 0o755)
+    write(contents / "MacOS" / executable_name, launcher.encode("utf-8"), 0o755)
     print(app)
     return 0
 
