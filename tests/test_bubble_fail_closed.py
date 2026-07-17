@@ -51,6 +51,20 @@ def test_mission_allowed_paths_are_derived_from_the_mission():
     assert not any(p.startswith("/") or ".." in p for p in evil)
 
 
+def test_needs_approval_without_deliverable_never_says_result_ready(tmp_path):
+    """A plan-gate reviewer disagreement resolves to needs_approval with no build
+    (e.g. Codex QUOTA_BLOCKED vs Claude ACCEPT). Narration must not lie."""
+    rt = runtime(tmp_path)
+    honest = rt.narrate({"run_id": "x", "status": "needs_approval", "result_available": False,
+                         "builder_name": "glm", "reviewer_names": ["claude", "codex"]})
+    assert "Résultat prêt" not in honest
+    assert "désaccord" in honest and "aucun livrable" in honest
+    # with a real deliverable it still announces the result
+    ready = rt.narrate({"run_id": "x", "status": "needs_approval", "result_available": True,
+                        "builder_name": "glm", "reviewer_names": [], "review_policy": "none"})
+    assert "Résultat prêt" in ready
+
+
 class NothingBuilder(FixtureBuilder):
     """A builder that runs but creates no file (the V13-F3/T5 empty-diff bug)."""
     def build(self, mission, workspace, run_dir, allowed, correction):

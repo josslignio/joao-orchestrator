@@ -1167,6 +1167,11 @@ class RunRuntime:
         if status == "correcting":
             return f"Correction demandée par la review — {builder} va reprendre le diff…"
         if status == "needs_approval":
+            # Fail-closed: never announce 'Résultat prêt' when nothing was built
+            # (e.g. a plan-gate reviewer disagreement resolves here with no diff).
+            if not run.get("result_available"):
+                return ("Décision requise — désaccord des reviewers au niveau du plan, "
+                        "aucun livrable n'a été construit. Consulte les verdicts.")
             verdict = ""
             review = run.get("review_findings") or {}
             if isinstance(review, dict) and review.get("reviews"):
