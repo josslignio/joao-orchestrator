@@ -1336,9 +1336,21 @@ class RunRuntime:
         if target_root.exists():
             shutil.rmtree(target_root)
         manifest: list[dict[str, Any]] = []
+        workspace_root = workspace.resolve()
         for relative in self._paths(workspace):
             source = workspace / relative
+            # A symlink would be dereferenced by the copy and served forever:
+            # refuse it, and confine the resolved path to the workspace.
+            if source.is_symlink():
+                manifest.append({"path": relative, "bytes": None, "sha256": None,
+                                 "is_text": False, "skipped": "symlink refusé"})
+                continue
             if not source.is_file():
+                continue
+            resolved = source.resolve()
+            if resolved != workspace_root and workspace_root not in resolved.parents:
+                manifest.append({"path": relative, "bytes": None, "sha256": None,
+                                 "is_text": False, "skipped": "hors workspace"})
                 continue
             target = target_root / relative
             target.parent.mkdir(parents=True, exist_ok=True)

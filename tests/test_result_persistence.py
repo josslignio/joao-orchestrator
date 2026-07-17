@@ -101,6 +101,35 @@ def test_downloads_survive_ui_restart_after_cleanup(tmp_path):
         fresh.close()
 
 
+def test_symlinked_deliverables_are_refused_not_dereferenced(tmp_path):
+    """A builder symlink must never smuggle outside content into the evidence."""
+    import subprocess
+    secret = tmp_path / "secret.txt"
+    secret.write_text("CONTENU-SECRET-HORS-SANDBOX\n")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    for argv in (["git", "init", "-q"], ["git", "config", "user.email", "t@e.i"],
+                 ["git", "config", "user.name", "t"]):
+        subprocess.run(argv, cwd=workspace, check=True)
+    (workspace / "base.txt").write_text("base\n")
+    subprocess.run(["git", "add", "."], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=workspace, check=True)
+    (workspace / "todo.py").write_text("VALUE = 2\n")
+    (workspace / "loot").symlink_to(secret)
+
+    rt = runtime(tmp_path)
+    folder = tmp_path / "evidence"
+    folder.mkdir()
+    rt._persist_deliverables({"run_id": "run-x"}, workspace, folder)
+    manifest = json.loads((folder / "deliverables-manifest.json").read_text())
+    by_path = {entry["path"]: entry for entry in manifest["files"]}
+    assert by_path["loot"]["skipped"] == "symlink refusé"
+    assert by_path["todo.py"]["sha256"]
+    assert not (folder / "deliverables" / "loot").exists()
+    blob = b"".join(p.read_bytes() for p in (folder / "deliverables").rglob("*") if p.is_file())
+    assert b"CONTENU-SECRET-HORS-SANDBOX" not in blob
+
+
 def test_result_panel_data_present_after_a_forced_repair_loop(tmp_path):
     """F11 regression: a run that went through a repair loop still serves its result."""
     api = LocalAPIServer(runtime(tmp_path, claude=OneRepairLoopReviewer()))
