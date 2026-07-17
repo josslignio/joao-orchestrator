@@ -114,6 +114,33 @@ def test_result_file_refuses_workspace_escape(tmp_path):
         api.close()
 
 
+def test_download_filenames_never_reach_headers_unsanitized(tmp_path):
+    from joao_orchestrator.bubble.api import safe_disposition_filename
+
+    assert safe_disposition_filename('evil"\r\nSet-Cookie: x=1') == 'evil___Set-Cookie: x=1'
+    assert safe_disposition_filename("émoji😀.txt") == "_moji_.txt"
+    assert safe_disposition_filename("\r\n") == "__"
+    assert safe_disposition_filename("") == "download"
+    assert safe_disposition_filename("   ") == "download"
+    assert safe_disposition_filename("todo.py") == "todo.py"
+
+    api = LocalAPIServer(runtime(tmp_path))
+    api.serve_in_thread()
+    try:
+        run_id = approved_run(api)
+        workspace = Path(api.runtime.get(run_id)["workspace"])
+        hostile = 'piège".txt'
+        (workspace / hostile).write_text("contenu\n")
+        raw, headers = http_raw(
+            api, f"runs/{run_id}/result/file?path={urllib.request.quote(hostile)}&download=1")
+        assert raw == "contenu\n".encode()
+        disposition = headers["Content-Disposition"]
+        assert "\r" not in disposition and "\n" not in disposition
+        assert 'pi_ge_.txt' in disposition
+    finally:
+        api.close()
+
+
 def test_ui_page_ships_the_result_panel(tmp_path):
     api = LocalAPIServer(runtime(tmp_path))
     api.serve_in_thread()

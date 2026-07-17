@@ -14,6 +14,16 @@ from ..domain.models import ProjectProfile
 from .runtime import RunRuntime, RuntimeStateError
 
 
+def safe_disposition_filename(name: str) -> str:
+    """Builder-controlled names must never reach raw HTTP headers.
+
+    Keeps printable ASCII minus the quote/backslash; anything else (CR/LF
+    header injection, non-latin-1 crash material) becomes an underscore.
+    """
+    cleaned = "".join(ch if 32 <= ord(ch) < 127 and ch not in '"\\' else "_" for ch in name)
+    return cleaned.strip() or "download"
+
+
 HTML = """<!doctype html>
 <meta charset="utf-8"><title>JOÃO.AI</title>
 <style>
@@ -241,7 +251,8 @@ class LocalAPIServer:
                 self.send_response(200)
                 self.send_header("Content-Type", kind)
                 self.send_header("Content-Length", str(len(raw)))
-                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                self.send_header("Content-Disposition",
+                                 f'attachment; filename="{safe_disposition_filename(filename)}"')
                 self.end_headers()
                 self.wfile.write(raw)
 
