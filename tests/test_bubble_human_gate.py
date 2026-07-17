@@ -181,14 +181,16 @@ def test_ui_page_ships_contextual_controls_and_collapsed_json(tmp_path):
         request = urllib.request.Request(api.url)
         with urllib.request.urlopen(request, timeout=10) as response:
             page = response.read().decode()
-        # restored runs list + contextual action map + explicit feedback wiring
+        # restored runs list wiring
         assert "req('/runs')" in page
-        assert "const ACTIONS=" in page and 'blocked:["retry","reject"]' in page
-        assert 'correcting:["stop"]' in page  # the correction loop stays controllable
+        # V13-F11: no approve/reject in the normal flow; a single Stop on active runs
+        assert 'data-act="approve"' not in page and "data-stop" in page
         assert "&quot;" in page  # esc() hardens attribute interpolation
-        assert "refusée" in page and "acceptée" in page
-        # collapsed evidence JSON and block-cause box
-        assert "<details><summary>" in page and "block_cause" in page
+        # A6: the real reviewer verdict is shown, with an expandable full text
+        assert "block_verdicts" in page and "Verdict complet du reviewer" in page
+        assert "block_cause" in page
+        # collapsed evidence JSON
+        assert "<details><summary>" in page
         # color semantics: green ready, orange warning, red error
         assert ".ok{color:var(--green)}" in page and ".warn{color:var(--orange)}" in page and ".err{color:var(--red)}" in page
         # quota-doomed configuration warning near the selectors

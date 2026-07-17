@@ -25,28 +25,25 @@ def served_page(tmp_path) -> str:
 
 def test_chat_feel_behaviors_are_wired(tmp_path):
     page = served_page(tmp_path)
-    # F1: Enter submits, Shift+Enter is a newline.
+    # V13-F1: Enter submits, Shift+Enter newline; composer anchored at the bottom.
     assert "e.key==='Enter'&&!e.shiftKey" in page and "e.preventDefault()" in page
-    # F2: one Stop button on active cards; no pause button anywhere. Resume
-    # survives ONLY on legacy paused cards (nothing in the UI creates new ones).
-    assert '"pause"' not in page and 'data-act="pause"' not in page
-    assert re.search(r'building:\["stop"\]', page)
-    assert 'needs_approval:["approve","reject"]' in page
-    assert 'paused:["resume","stop"]' in page
-    # F5: the user's mission on the card.
-    assert "Tu as demandé" in page and "mission_excerpt" in page
-    # F3: narration + step elapsed + ETA.
+    assert "composer-zone" in page
+    # V13-F11: approve/reject removed from the normal flow; result shows directly.
+    assert 'data-act="approve"' not in page and 'data-act="reject"' not in page
+    assert "resultBlock" in page
+    # a single Stop control on active runs (no pause/resume UI)
+    assert "data-stop" in page and 'data-act="pause"' not in page
+    # V13-F5: the user's mission in its own bubble.
+    assert "msg-user" in page and "mission_display" in page
+    # V13-F3: narration + step elapsed + ETA.
     assert "narration" in page and "step_elapsed_seconds" in page
     assert "résultat estimé dans" in page and "eta_seconds" in page
-    # F7/F11: needs_approval auto-opens the result, errors are honest.
-    assert "s.status==='needs_approval'&&!c.userClosed" in page
-    assert "Résultat indisponible" in page
-    # F9: the timeline panel.
-    assert "Ce qui s\\'est passé" in page or "Ce qui s'est passé" in page
-    assert "/timeline" in page
-    # F10: decision consequences.
-    assert "résultat conservé, run archivé accepté" in page
-    assert "résultat écarté, run archivé rejeté" in page
+    # V13-F10: attachments (📎, drag-drop, paste).
+    assert "file-input" in page and "data-rmatt" in page and "addFiles" in page
+    # V13-F12: artifacts side panel.
+    assert "openArtifact" in page and 'id="artifacts"' in page and "art-body" in page
+    # A1/A6: honest empty result + real reviewer verdict surfaced.
+    assert "nothing_produced" in page and "block_verdicts" in page
 
 
 def test_token_page_refuses_foreign_host_headers(tmp_path):
@@ -69,15 +66,16 @@ def test_token_page_refuses_foreign_host_headers(tmp_path):
 
 def test_validated_look_is_applied(tmp_path):
     page = served_page(tmp_path)
-    # Night gradient + powder grain.
+    # Night P1 gradient + powder grain.
     assert "linear-gradient(160deg,#0b0e1a,#1a1440)" in page
     assert "feTurbulence" in page
-    # Wordmark: animated gradient + chromatic ghost offsets.
-    assert "hueShift" in page and "background-clip:text" in page
-    assert "text-shadow:2px 0" in page
-    # Mascot placeholder + mockup card vocabulary.
-    assert 'class="mascot"' in page
+    # A1 wordmark + bloom doux (the locked brand; the chrome/ghost F2 was abandoned).
+    assert "@keyframes flowS" in page and "background-clip:text" in page
+    assert 'class="a1"' in page and 'class="bloomD"' in page
+    # neon mascot 96px in the header.
+    assert 'class="mascot"' in page and "height:96px" in page
+    # Claude-clone layout vocabulary: sidebar conversations + run cards + bottom composer.
+    assert "sidebar" in page and 'id="convs"' in page
     assert "runcard" in page and "run-head" in page and "gates" in page
     assert 'class="st ' in page and "lbl-rev" in page
-    # Composer stays visible: the mission form is a fixed card above the scroll list.
-    assert "Nouvelle mission" in page and "inputbox" in page
+    assert "Nouvelle conversation" in page and "inputbox" in page

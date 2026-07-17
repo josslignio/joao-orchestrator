@@ -255,7 +255,8 @@ def test_ui_launches_glm_reviewed_and_glm_self_reviewed_runs(tmp_path):
         page_request = urllib.request.Request(api.url)
         with urllib.request.urlopen(page_request, timeout=10) as response:
             page = response.read().decode()
-        assert 'value="glm"' in page and 'value="claude_and_glm"' in page
+        # GLM offered as a review option; combinations canonicalize server-side.
+        assert 'value="glm"' in page and 'value="claude_and_codex"' in page
         assert "reviewParts" in page
     finally:
         api.close()

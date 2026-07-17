@@ -148,9 +148,10 @@ def test_ui_page_ships_the_result_panel(tmp_path):
         with urllib.request.urlopen(urllib.request.Request(api.url), timeout=10) as response:
             page = response.read().decode()
         assert "resultBlock" in page and "result_available" in page
-        assert 'data-res="diff"' in page and 'data-res="zip"' in page
-        assert 'data-res="preview"' in page and 'data-res="download"' in page
-        assert "Télécharger tout (zip)" in page
+        assert "data-zip=" in page  # one-click bundle
+        assert "data-open-run" in page and "data-open-path" in page  # preview -> artifacts panel
+        assert "data-dl-run" in page  # per-file download
+        assert "Télécharger (zip)" in page
         assert ".resultbox" in page
     finally:
         api.close()

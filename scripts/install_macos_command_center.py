@@ -124,12 +124,18 @@ def main() -> int:
         "CFBundleIdentifier": "ai.joao.command-center",
         "CFBundleName": APP_NAME,
         "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": "1.3",
+        "CFBundleShortVersionString": "1.4",
         "LSMinimumSystemVersion": "12.0",
         "NSHighResolutionCapable": True,
     }
     icon = resources / "joao.icns"
-    if build_icns(icon):
+    # BLOC C2: prefer the locked neon-mascot .icns bundled with the app; fall
+    # back to generating one from the SVG only if the asset is missing.
+    bundled_icns = repo / "src/joao_orchestrator/bubble/assets/joao.icns"
+    if bundled_icns.is_file():
+        write(icon, bundled_icns.read_bytes())
+        info["CFBundleIconFile"] = "joao.icns"
+    elif build_icns(icon):
         info["CFBundleIconFile"] = "joao.icns"
     log = Path("~/.local/share/joao/command-center.log").expanduser()
     launcher = (

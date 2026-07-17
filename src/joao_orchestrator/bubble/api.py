@@ -1,6 +1,9 @@
 """Local-only JOAO chat console, backed by the bounded runtime."""
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
 import json
 import secrets
 import shlex
@@ -12,6 +15,14 @@ from urllib.parse import parse_qs, urlparse
 
 from ..domain.models import ProjectProfile
 from .runtime import CODE_INTENT_RE, RunRuntime, RuntimeStateError, mission_allowed_paths
+
+
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+ASSET_ROUTES = {
+    "/favicon.ico": ("favicon.ico", "image/x-icon"),
+    "/assets/mascot.png": ("mascot-neon.png", "image/png"),
+    "/assets/icon-1024.png": ("icon-1024.png", "image/png"),
+}
 
 
 def safe_disposition_filename(name: str) -> str:
@@ -26,323 +37,340 @@ def safe_disposition_filename(name: str) -> str:
 
 HTML = """<!doctype html>
 <meta charset="utf-8"><title>JOÃO.AI</title>
+<link rel="icon" href="/favicon.ico">
 <style>
 :root{color-scheme:dark;
- --bg:#0b0e1a;--bg2:#1a1440;--panel:#11141c;--panel2:#161a24;
+ --bg:#0b0e1a;--bg2:#1a1440;--panel:#11141c;--panel2:#161a24;--panel3:#1b2030;
  --line:rgba(255,255,255,.07);--line2:rgba(255,255,255,.12);
  --txt:#e8eaf0;--txt2:#9aa1b5;--txt3:#5c6478;
  --green:#3ddc85;--orange:#ffb454;--red:#ff5c5c;--blue:#6ea8ff;--violet:#a78bfa;--r:14px}
 *{box-sizing:border-box}
 body{margin:0;color:var(--txt);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
- background:linear-gradient(160deg,#0b0e1a,#1a1440) fixed;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+ background:linear-gradient(160deg,#0b0e1a,#1a1440) fixed;height:100vh;overflow:hidden}
 body::before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.05;z-index:0;
  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
-::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:4px}
-@keyframes hueShift{0%{filter:hue-rotate(0deg) saturate(1.3)}50%{filter:hue-rotate(160deg) saturate(1.6)}100%{filter:hue-rotate(360deg) saturate(1.3)}}
-@keyframes shine{0%{background-position:0% 50%}100%{background-position:200% 50%}}
-.wordmark{font-size:21px;font-weight:800;letter-spacing:.5px;
- background:linear-gradient(110deg,#7dd3fc,#c084fc,#f0abfc,#67e8f9,#a5f3fc,#7dd3fc);
- background-size:200% auto;-webkit-background-clip:text;background-clip:text;color:transparent;
- animation:shine 6s linear infinite,hueShift 14s linear infinite;
- text-shadow:2px 0 rgba(240,171,252,.28),-2px 0 rgba(110,168,255,.28)}
-.wordmark small{font-weight:600;opacity:.9}
-.mascot{width:34px;height:34px;flex-shrink:0}
-.topbar{position:relative;z-index:1;display:flex;align-items:center;gap:10px;padding:12px 22px;
- border-bottom:1px solid var(--line);background:rgba(13,15,21,.7);backdrop-filter:blur(12px)}
-.chip{font-size:11.5px;font-weight:600;padding:4px 11px;border-radius:20px;border:1px solid}
+::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:5px}
+@keyframes flowS{0%{background-position:0% 50%}100%{background-position:300% 50%}}
+.wm{position:relative;font-weight:800;font-size:20px;letter-spacing:.3px;white-space:nowrap}
+.wm small{font-size:.62em;font-weight:600;opacity:.9}
+.a1{background:linear-gradient(100deg,#ff6ec7,#ffd36e,#6effb0,#6ec3ff,#c96eff,#ff6ec7);background-size:300% auto;
+ -webkit-background-clip:text;background-clip:text;color:transparent;animation:flowS 9s linear infinite;filter:saturate(1.35)}
+.bloomD{position:absolute;inset:0;z-index:-1;background:linear-gradient(100deg,#ff6ec7,#ffd36e,#6effb0,#6ec3ff,#c96eff,#ff6ec7);
+ background-size:300% auto;-webkit-background-clip:text;background-clip:text;color:transparent;animation:flowS 9s linear infinite;filter:blur(5px);opacity:.5}
+.app{display:grid;grid-template-columns:250px 1fr;grid-template-rows:auto 1fr;height:100vh;position:relative;z-index:1}
+.header{grid-column:1/3;display:flex;align-items:center;gap:14px;padding:8px 22px;border-bottom:1px solid var(--line);
+ background:rgba(13,15,26,.72);backdrop-filter:blur(10px);min-height:56px;overflow:visible}
+.header .mascot{position:absolute;left:50%;transform:translateX(-50%);height:96px;filter:drop-shadow(0 0 10px rgba(201,110,255,.45));pointer-events:none}
+.chips{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+.chip{font-size:11.5px;font-weight:600;padding:4px 11px;border-radius:20px;border:1px solid var(--line2)}
 .chip.ok{color:var(--green);border-color:rgba(61,220,133,.35);background:rgba(61,220,133,.07)}
-.chip.warn{color:var(--orange);border-color:rgba(255,180,84,.4);background:rgba(255,180,84,.08)}
 .chip.err{color:var(--red);border-color:rgba(255,92,92,.4);background:rgba(255,92,92,.08)}
-.ok{color:var(--green)}.warn{color:var(--orange)}.err{color:var(--red)}
-.main{position:relative;z-index:1;flex:1;overflow-y:auto}
-.wrap{max-width:860px;margin:0 auto;padding:20px 24px 30px;display:flex;flex-direction:column;gap:14px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px}
-.card h3{font-size:13px;font-weight:700;margin:0 0 11px;color:var(--txt)}
-.inputbox{display:flex;align-items:flex-end;gap:10px;background:var(--panel2);border:1px solid var(--line2);
- border-radius:16px;padding:11px 13px;transition:.2s;margin-bottom:10px}
-.inputbox:focus-within{border-color:rgba(110,168,255,.5);box-shadow:0 0 0 3px rgba(110,168,255,.12)}
-.inputbox textarea{flex:1;background:none;border:0;outline:0;color:var(--txt);font:inherit;resize:none;min-height:40px;max-height:130px}
-.sendbtn{width:34px;height:34px;border-radius:10px;border:0;color:#fff;cursor:pointer;font-size:15px;flex-shrink:0;
- background:linear-gradient(120deg,#3d6ef7,#7c5cff)}
-.sendbtn:disabled{opacity:.35;cursor:default}
-.selectors{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.sel{display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:2px;gap:1px;align-items:center}
-.sel .lbl{font-size:10px;color:var(--txt3);padding:0 4px 0 9px;text-transform:uppercase;letter-spacing:.5px}
-.sel label{border:0;color:var(--txt3);font-size:11.5px;font-weight:600;padding:5px 12px;border-radius:8px;cursor:pointer}
-.sel label:has(input:checked){background:rgba(110,168,255,.16);color:#cfe0ff}
-.sel label:has(input:disabled){opacity:.35;cursor:default}
-.sel input{display:none}
-.hint{font-size:11px;color:var(--txt3);margin-top:7px;text-align:center}
-.runcard{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
-.run-head{display:flex;align-items:center;gap:10px;padding:12px 16px;cursor:pointer;flex-wrap:wrap}
-.run-head:hover{background:rgba(255,255,255,.02)}
-.st{font-size:11px;font-weight:800;padding:3px 10px;border-radius:7px;letter-spacing:.4px}
-.st.acc{background:rgba(61,220,133,.14);color:var(--green)}
-.st.build{background:rgba(110,168,255,.14);color:var(--blue)}
-.st.wait{background:rgba(255,180,84,.14);color:var(--orange)}
-.st.block{background:rgba(255,92,92,.13);color:var(--red)}
-.st.off{background:rgba(255,255,255,.07);color:var(--txt2)}
-.lbl-rev{font-size:10.5px;font-weight:800;padding:3px 9px;border-radius:6px;letter-spacing:.4px}
-.lbl-rev.ind{background:rgba(61,220,133,.1);color:var(--green)}
-.lbl-rev.self{background:rgba(255,180,84,.12);color:var(--orange)}
+.chip.warn{color:var(--orange);border-color:rgba(255,180,84,.4);background:rgba(255,180,84,.08)}
+.sidebar{border-right:1px solid var(--line);display:flex;flex-direction:column;padding:12px 10px;gap:8px;overflow:hidden;background:rgba(13,15,26,.4)}
+.newbtn{display:flex;align-items:center;gap:8px;justify-content:center;padding:9px;border-radius:10px;cursor:pointer;
+ background:linear-gradient(120deg,#3d6ef7,#7c5cff);color:#fff;border:0;font:inherit;font-weight:650}
+#search{background:var(--panel2);border:1px solid var(--line);border-radius:9px;color:var(--txt);padding:7px 10px;font:inherit;font-size:13px}
+.convs{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:2px}
+.conv{padding:8px 10px;border-radius:9px;color:var(--txt2);cursor:pointer;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conv:hover{background:rgba(255,255,255,.04);color:var(--txt)}
+.conv.active{background:rgba(110,168,255,.13);color:#cfe0ff}
+.side-h{font-size:11px;font-weight:700;letter-spacing:.6px;color:var(--txt3);padding:2px 10px;text-transform:uppercase}
+.main{display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.feed{flex:1;overflow-y:auto;padding:20px 26px;display:flex;flex-direction:column;gap:16px}
+.empty{margin:auto;color:var(--txt3);text-align:center;font-size:14px}
+.msg-user{align-self:flex-end;max-width:78%;background:#1a2130;border:1px solid var(--line2);border-radius:14px 14px 4px 14px;padding:11px 15px}
+.msg-user .who{font-size:11px;color:var(--txt3);font-weight:600;margin-bottom:3px}
+.msg-user .txt{white-space:pre-wrap;word-break:break-word}
+.msg-user .att{display:inline-flex;gap:6px;align-items:center;margin-top:7px;margin-right:6px;font-size:12px;
+ background:rgba(255,255,255,.05);border:1px solid var(--line2);border-radius:8px;padding:3px 9px;color:var(--txt2)}
+.runcard{align-self:flex-start;max-width:86%;width:640px;max-width:min(86%,640px);background:var(--panel);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+.run-head{display:flex;align-items:center;gap:9px;padding:11px 15px;flex-wrap:wrap}
+.st{font-size:11px;font-weight:800;padding:3px 10px;border-radius:7px;letter-spacing:.3px}
+.st.run{background:rgba(110,168,255,.14);color:var(--blue)}.st.done{background:rgba(61,220,133,.14);color:var(--green)}
+.st.fail{background:rgba(255,92,92,.14);color:var(--red)}.st.off{background:rgba(255,255,255,.07);color:var(--txt2)}
+.st.queued{background:rgba(255,180,84,.14);color:var(--orange)}
+.lbl-rev{font-size:10px;font-weight:800;padding:3px 8px;border-radius:6px;letter-spacing:.3px}
+.lbl-rev.ind{background:rgba(61,220,133,.1);color:var(--green)}.lbl-rev.self{background:rgba(255,180,84,.12);color:var(--orange)}
 .lbl-rev.none{background:rgba(255,92,92,.12);color:var(--red)}
-.runid{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--txt2)}
 .run-meta{font-size:12px;color:var(--txt3);margin-left:auto;white-space:nowrap}
-.gates{display:flex;gap:4px;margin:0 6px}
-.gates i{width:16px;height:5px;border-radius:3px;background:rgba(255,255,255,.09)}
-.gates i.done{background:var(--green)}
-.run-body{border-top:1px solid var(--line);padding:14px 16px}
-.asked{font-size:13px;color:var(--txt2);background:rgba(110,168,255,.06);border:1px solid rgba(110,168,255,.15);
- border-radius:10px;padding:9px 12px;margin-bottom:10px}
-.asked b{color:var(--txt)}
-.narration{font-size:13.5px;color:var(--txt);margin-bottom:8px}
-.steptime{color:var(--txt3);font-size:12px;margin-left:8px}
-.eta{color:var(--violet);font-size:12px;margin-left:8px}
-.deliv-h{font-size:11px;font-weight:800;letter-spacing:.7px;color:var(--txt3);text-transform:uppercase;margin:13px 0 8px}
-.built{font-size:13px;color:var(--txt2);line-height:1.7}
-.built b{color:var(--txt)}
-.files{display:flex;flex-direction:column;gap:7px;margin-top:8px}
-.file{display:flex;align-items:center;gap:11px;background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:9px 13px}
-.file .fname{font-weight:600;font-size:13px}
-.file .fmeta{font-size:11.5px;color:var(--txt3)}
-.file .actions{margin-left:auto;display:flex;gap:6px}
-.btn{border:1px solid var(--line2);background:rgba(255,255,255,.04);color:var(--txt);font:inherit;font-size:12px;
- font-weight:600;padding:6px 13px;border-radius:9px;cursor:pointer;transition:.15s}
-.btn:hover{background:rgba(255,255,255,.09)}
-.btn.primary{background:linear-gradient(120deg,#3d6ef7,#7c5cff);border-color:transparent}
-.btn.good{background:rgba(61,220,133,.15);border-color:rgba(61,220,133,.4);color:var(--green)}
-.btn.bad{background:rgba(255,92,92,.12);border-color:rgba(255,92,92,.35);color:var(--red)}
-.btn.ghost{border-color:transparent;color:var(--txt2)}
-.zipbar{display:flex;align-items:center;gap:10px;margin-top:10px;padding:9px 13px;border:1px dashed var(--line2);
- border-radius:11px;color:var(--txt2);font-size:12.5px}
-.diff{background:#0b0e14;border:1px solid var(--line);border-radius:10px;padding:11px 14px;
- font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.6;overflow:auto;max-height:300px;
- margin-top:4px;white-space:pre-wrap}
-.resultbox{border:1px solid rgba(61,220,133,.3);background:rgba(61,220,133,.05);border-radius:11px;padding:12px 14px;margin:10px 0}
-.blockbox{border:1px solid rgba(255,92,92,.4);background:rgba(255,92,92,.07);border-radius:11px;padding:10px 13px;margin:9px 0;font-size:13px}
+.gates{display:flex;gap:4px;margin:0 4px}.gates i{width:15px;height:5px;border-radius:3px;background:rgba(255,255,255,.09)}.gates i.done{background:var(--green)}
+.run-body{border-top:1px solid var(--line);padding:12px 15px}
+.narr{font-size:13.5px;color:var(--txt);margin-bottom:6px}
+.steptime{color:var(--txt3);font-size:12px;margin-left:6px}.eta{color:var(--violet);font-size:12px;margin-left:6px}
+.blockbox{border:1px solid rgba(255,92,92,.4);background:rgba(255,92,92,.07);border-radius:10px;padding:9px 12px;margin:8px 0;font-size:13px}
 .blockbox .hint2{color:var(--orange);font-size:12px;margin-top:4px}
-.ctrls{display:flex;gap:7px;margin-top:12px;align-items:center}
-.consequence{font-size:12px;color:var(--txt3);margin-top:7px}
-.feedback{min-height:15px;font-size:12px;margin-top:6px}
-.timeline{margin-top:8px}
-.timeline .tstep{display:flex;gap:10px;font-size:12.5px;color:var(--txt2);padding:3px 0}
-.timeline .tstep .tdur{margin-left:auto;color:var(--txt3);font-variant-numeric:tabular-nums}
-details{margin-top:8px}summary{cursor:pointer;color:var(--txt3);font-size:12px}
-pre{white-space:pre-wrap;max-height:240px;overflow:auto;color:var(--txt2);font-size:11px}
-.muted{color:var(--txt3);font-size:12px}
-#quota-warning{display:none;font-size:12.5px;margin-top:8px}
+.resultbox{border:1px solid rgba(61,220,133,.3);background:rgba(61,220,133,.05);border-radius:11px;padding:11px 13px;margin:9px 0}
+.deliv-h{font-size:11px;font-weight:800;letter-spacing:.6px;color:var(--txt3);text-transform:uppercase;margin:11px 0 7px}
+.deliv-h:first-child{margin-top:0}
+.built{font-size:13px;color:var(--txt2);line-height:1.7}.built b{color:var(--txt)}
+.files{display:flex;flex-direction:column;gap:6px;margin-top:7px}
+.file{display:flex;align-items:center;gap:10px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 12px;cursor:pointer}
+.file:hover{border-color:var(--line2)}
+.file .fname{font-weight:600;font-size:13px}.file .fmeta{font-size:11.5px;color:var(--txt3)}
+.file .actions{margin-left:auto;display:flex;gap:6px}
+.btn{border:1px solid var(--line2);background:rgba(255,255,255,.04);color:var(--txt);font:inherit;font-size:12px;font-weight:600;padding:5px 12px;border-radius:9px;cursor:pointer}
+.btn:hover{background:rgba(255,255,255,.09)}.btn.primary{background:linear-gradient(120deg,#3d6ef7,#7c5cff);border-color:transparent}
+.btn.ghost{border-color:transparent;color:var(--txt2)}
+.zipbar{display:flex;align-items:center;gap:9px;margin-top:9px;padding:8px 12px;border:1px dashed var(--line2);border-radius:10px;color:var(--txt2);font-size:12.5px}
+.feedbk{display:flex;gap:8px;align-items:center;margin-top:9px;font-size:12px;color:var(--txt3)}
+.fb-btn{cursor:pointer;padding:3px 9px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.03)}
+.fb-btn:hover{background:rgba(255,255,255,.08)}
+.ok{color:var(--green)}.warn{color:var(--orange)}.err{color:var(--red)}.muted{color:var(--txt3);font-size:12px}
+details{margin-top:7px}summary{cursor:pointer;color:var(--txt3);font-size:12px}
+pre{white-space:pre-wrap;max-height:220px;overflow:auto;color:var(--txt2);font-size:11px}
+.composer-zone{border-top:1px solid var(--line);background:rgba(13,15,26,.85);backdrop-filter:blur(12px);padding:12px 24px 14px}
+.composer{max-width:820px;margin:0 auto}
+.attachrow{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:7px}
+.attchip{display:inline-flex;align-items:center;gap:7px;font-size:12px;background:var(--panel2);border:1px solid var(--line2);border-radius:9px;padding:4px 10px;color:var(--txt2)}
+.attchip .x{cursor:pointer;color:var(--txt3);font-weight:700}.attchip .x:hover{color:var(--red)}
+.inputbox{display:flex;align-items:flex-end;gap:10px;background:var(--panel2);border:1px solid var(--line2);border-radius:16px;padding:10px 12px;transition:.15s}
+.inputbox.drag{border-color:var(--violet);box-shadow:0 0 0 3px rgba(167,139,250,.18)}
+.inputbox:focus-within{border-color:rgba(110,168,255,.5);box-shadow:0 0 0 3px rgba(110,168,255,.12)}
+.inputbox textarea{flex:1;background:none;border:0;outline:0;color:var(--txt);font:inherit;resize:none;min-height:24px;max-height:180px}
+.icobtn{width:34px;height:34px;border-radius:10px;border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--txt2);cursor:pointer;font-size:16px;flex-shrink:0}
+.icobtn:hover{background:rgba(255,255,255,.08);color:var(--txt)}
+.sendbtn{width:34px;height:34px;border-radius:10px;border:0;color:#fff;cursor:pointer;font-size:15px;flex-shrink:0;background:linear-gradient(120deg,#3d6ef7,#7c5cff)}
+.sendbtn:disabled{opacity:.35;cursor:default}
+.selectors{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+.sel{display:flex;background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:2px;align-items:center}
+.sel .lbl{font-size:10px;color:var(--txt3);padding:0 4px 0 9px;text-transform:uppercase;letter-spacing:.4px}
+.sel label{color:var(--txt3);font-size:11.5px;font-weight:600;padding:4px 11px;border-radius:7px;cursor:pointer}
+.sel label:has(input:checked){background:rgba(110,168,255,.16);color:#cfe0ff}
+.sel label:has(input:disabled){opacity:.35;cursor:default}.sel input{display:none}
+.hint{font-size:11px;color:var(--txt3);margin-top:6px;text-align:center}
+#quota-warning{display:none;color:var(--orange);font-size:12.5px;margin-top:6px;text-align:center}
+.artifacts{position:fixed;top:0;right:0;height:100vh;width:min(46vw,620px);background:var(--panel);border-left:1px solid var(--line2);
+ z-index:20;display:none;flex-direction:column;box-shadow:-16px 0 40px rgba(0,0,0,.4)}
+.artifacts.open{display:flex}
+.art-head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.art-head .aname{font-weight:650;font-size:13px}
+.art-body{flex:1;overflow:auto;padding:0}
+.art-body pre{margin:0;padding:16px;max-height:none;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:#cdd6e6;line-height:1.65}
+.art-body .md{padding:20px;line-height:1.7}.art-body .md h1,.art-body .md h2{border-bottom:1px solid var(--line);padding-bottom:5px}
+.art-body .md code{background:rgba(255,255,255,.08);padding:2px 5px;border-radius:5px;font-family:ui-monospace,monospace;font-size:.9em}
+.art-body iframe{width:100%;height:100%;border:0;background:#fff}
+.art-body img{max-width:100%;display:block;margin:16px auto}
 </style>
-<div class="topbar">
-<svg class="mascot" viewBox="0 0 64 64"><circle cx="32" cy="36" r="21" fill="#f2c49b"/><path d="M11 32 Q11 12 32 12 Q53 12 53 32 L53 34 L11 34 Z" fill="#ffcf3f"/><rect x="8" y="31" width="48" height="6" rx="3" fill="#f5b91e"/><rect x="28" y="8" width="8" height="8" rx="2" fill="#ffcf3f"/><circle cx="24" cy="42" r="6.5" fill="#fff"/><circle cx="40" cy="42" r="6.5" fill="#fff"/><circle cx="24" cy="42" r="4.6" fill="#1a1208"/><circle cx="40" cy="42" r="4.6" fill="#1a1208"/><circle cx="25.5" cy="40.5" r="1.4" fill="#fff"/><circle cx="41.5" cy="40.5" r="1.4" fill="#fff"/><path d="M22 52 Q27 49 32 51.5 Q37 49 42 52 Q37 56.5 32 54.5 Q27 56.5 22 52 Z" fill="#4a2f1a"/></svg>
-<div class="wordmark">JOÃO<small>.AI</small></div>
-<div id="capabilities" style="display:flex;gap:8px;flex-wrap:wrap;margin-left:auto"><span class="muted">Chargement…</span></div>
+<div class="app">
+<div class="header">
+<span class="wm"><span class="a1">JOÃO<small>.AI</small></span><span class="bloomD">JOÃO<small>.AI</small></span></span>
+<img class="mascot" src="/assets/mascot.png" alt="JOÃO">
+<div class="chips" id="capabilities"><span class="muted">Chargement…</span></div>
 </div>
-<div class="main"><div class="wrap">
-<div class="card">
-<h3>Nouvelle mission</h3>
-<div class="inputbox">
-<textarea id="prompt" rows="2" autofocus placeholder="Décris la mission — JOÃO orchestre : sandbox, build, tests, review, evidence. Entrée pour lancer, Shift+Entrée pour une nouvelle ligne."></textarea>
-<button id="start-btn" class="sendbtn" onclick="send()" disabled title="Lancer">➤</button>
+<aside class="sidebar">
+<button class="newbtn" id="new-conv">+ Nouvelle conversation</button>
+<input id="search" placeholder="Rechercher…" autocomplete="off">
+<div class="side-h">Conversations</div>
+<div class="convs" id="convs"></div>
+</aside>
+<main class="main">
+<div class="feed" id="feed"><div class="empty">Écris une demande en bas pour lancer une mission.<br>JOÃO construit, teste, review, et te montre le résultat directement.</div></div>
+<div class="composer-zone"><div class="composer">
+<div class="attachrow" id="attachrow"></div>
+<div class="inputbox" id="inputbox">
+<button class="icobtn" id="attach-btn" title="Joindre des fichiers">📎</button>
+<textarea id="prompt" rows="1" placeholder="Décris ta mission — code + tests, ou un texte. Entrée pour envoyer, Maj+Entrée pour un retour ligne."></textarea>
+<input type="file" id="file-input" multiple hidden>
+<button class="sendbtn" id="send-btn" title="Envoyer" disabled>➤</button>
 </div>
 <div class="selectors">
 <div class="sel"><span class="lbl">Moteur</span>
 <label><input type="radio" name="builder" value="glm" checked> GLM</label>
-<label><input type="radio" name="builder" value="codex"> Codex</label>
-<label><input type="radio" name="builder" value="claude"> Claude</label></div>
+<label><input type="radio" name="builder" value="claude"> Claude</label>
+<label><input type="radio" name="builder" value="codex"> Codex</label></div>
 <div class="sel"><span class="lbl">Review</span>
 <label><input type="radio" name="review" value="none"> Aucune</label>
 <label><input type="radio" name="review" value="claude" checked> Claude</label>
 <label><input type="radio" name="review" value="glm"> GLM</label>
 <label><input type="radio" name="review" value="codex"> Codex</label>
-<label><input type="radio" name="review" value="codex_and_claude"> Codex + Claude</label>
-<label><input type="radio" name="review" value="claude_and_glm"> Claude + GLM</label></div>
+<label><input type="radio" name="review" value="claude_and_codex"> Claude+Codex</label></div>
 </div>
-<div id="safety-summary" class="muted" style="margin-top:8px"></div>
-<div id="quota-warning" class="warn"></div>
-<div id="launch-feedback" class="feedback"></div>
-<div class="hint">Sandbox Git jetable · le moteur et le modèle réellement utilisés sont toujours affichés · reviews à chaque gate (plan, diff, tests, livraison)</div>
-</div>
-<div id="runs"><div class="muted">Aucun run pour l'instant. Les runs persistés réapparaissent ici après redémarrage.</div></div>
+<div id="quota-warning"></div>
+<div class="hint">Sandbox Git jetable · moteur & modèle réels toujours affichés · review indépendante à chaque gate · évidence signée archivée</div>
 </div></div>
+</main>
+</div>
+<div class="artifacts" id="artifacts">
+<div class="art-head"><span class="aname" id="art-name"></span>
+<button class="btn ghost" id="art-copy" style="margin-left:auto">Copier</button>
+<button class="btn ghost" id="art-dl">Télécharger</button>
+<button class="btn ghost" id="art-close">✕</button></div>
+<div class="art-body" id="art-body"></div>
+</div>
 <script>
 const TOKEN="__JOAO_TOKEN__";const el=id=>document.getElementById(id);
-let CAPS=null,LIST=[];const cards={};
-const ACTIONS={pending:["stop"],planning:["stop"],ready:["stop"],
- building:["stop"],testing:["stop"],reviewing:["stop"],
- needs_approval:["approve","reject"],paused:["resume","stop"],correcting:["stop"],
- blocked:["retry","reject"],failed:["retry","reject"],accepted:[],stopped:[]};
-const STCLASS={pending:"build",planning:"build",ready:"build",building:"build",testing:"build",
- reviewing:"build",correcting:"build",needs_approval:"wait",paused:"wait",
- blocked:"block",failed:"block",accepted:"acc",stopped:"off"};
+let CAPS=null,LIST=[],pending=[];const cards={};let artifact=null;
+// Conversations: localStorage grouping of run_ids into named threads.
+function loadConvs(){try{return JSON.parse(localStorage.getItem('joao_convs')||'[]')}catch(_){return[]}}
+function saveConvs(c){localStorage.setItem('joao_convs',JSON.stringify(c))}
+let CONVS=loadConvs();let activeConv=localStorage.getItem('joao_active')||null;
+if(!CONVS.length){newConversation()}
+if(!activeConv||!CONVS.find(c=>c.id===activeConv))activeConv=CONVS[0].id;
+function newConversation(){const id='c'+Date.now().toString(36);CONVS.unshift({id,title:'Nouvelle conversation',runs:[]});activeConv=id;saveConvs(CONVS);localStorage.setItem('joao_active',id);return id}
+function activeConvObj(){return CONVS.find(c=>c.id===activeConv)}
 async function req(url,opt={}){opt.headers={...(opt.headers||{}),'X-JOAO-Token':TOKEN};
  const r=await fetch(url,opt),v=await r.json();if(!r.ok)throw Error(v.error||'requête refusée');return v}
 function esc(s){const n=document.createElement('span');n.textContent=s==null?'':s;return n.innerHTML.replace(/"/g,'&quot;')}
-function C(id){return cards[id]=cards[id]||{open:false,userClosed:false}}
 function selected(name){return document.querySelector('input[name="'+name+'"]:checked').value}
 function reviewParts(r){return r==='none'?[]:r.split('_and_')}
-function fmt(s){if(s==null)return '';s=Math.max(0,Math.round(s));const m=Math.floor(s/60);
- return m?m+'′'+String(s%60).padStart(2,'0')+'″':s+'″'}
-function labels(v){let out='';if(v.no_review_label||v.review_policy==='none')out+='<span class="lbl-rev none">NO REVIEW — APPROBATION HUMAINE</span>';
- else if(v.is_self_review)out+='<span class="lbl-rev self">SELF-REVIEW — NON INDÉPENDANTE</span>';
- else out+='<span class="lbl-rev ind">REVIEW INDÉPENDANTE</span>';return out}
-function gates(v){const done=(v.progress?v.progress.completed:0);let h='<div class="gates">';
- for(let i=0;i<4;i++)h+='<i class="'+(i<done?'done':'')+'"></i>';return h+'</div>'}
-function buttons(v){const acts=ACTIONS[v.status]||[];
- const style={approve:'good',reject:'bad',stop:'bad',retry:''};
- return acts.map(a=>'<button class="btn '+(style[a]||'')+'" data-run="'+esc(v.run_id)+'" data-act="'+a+'">'
-  +({approve:'Approve',reject:'Reject',stop:'Stop',retry:'Retry',resume:'Resume'}[a]||a)+'</button>').join('')}
-function narration(d){if(!d)return '';
- let h='<div class="narration">'+esc(d.narration||d.current_step||'')
-  +'<span class="steptime">étape '+fmt(d.step_elapsed_seconds)+' · total '+fmt(d.elapsed_seconds)+'</span>';
- if(d.eta&&d.eta.eta_seconds!=null){const rest=d.eta.eta_seconds-d.elapsed_seconds;
-  h+='<span class="eta">'+(rest>15?'résultat estimé dans ~'+fmt(rest):'résultat imminent')
-   +' (basé sur '+d.eta.based_on_runs+' run'+(d.eta.based_on_runs>1?'s':'')+')</span>'}
- return h+'</div>'}
+function fmt(s){if(s==null)return '';s=Math.max(0,Math.round(s));const m=Math.floor(s/60);return m?m+'′'+String(s%60).padStart(2,'0')+'″':s+'″'}
+function C(id){return cards[id]=cards[id]||{open:{}}}
+// ---------- sidebar ----------
+function renderConvs(){const q=(el('search').value||'').toLowerCase();
+ el('convs').innerHTML=CONVS.filter(c=>!q||c.title.toLowerCase().includes(q)).map(c=>
+  '<div class="conv'+(c.id===activeConv?' active':'')+'" data-conv="'+esc(c.id)+'">'+esc(c.title||'Sans titre')+'</div>').join('')}
+// ---------- feed ----------
+function stClass(v){const p=v.phase_label||'';if(p.startsWith('running'))return 'run';if(p==='done')return 'done';
+ if(p==='failed')return 'fail';if(p==='queued')return 'queued';return 'off'}
+function labels(v){if(v.no_review_label||v.review_policy==='none')return '<span class="lbl-rev none">SANS REVIEW</span>';
+ if(v.is_self_review)return '<span class="lbl-rev self">SELF-REVIEW</span>';return '<span class="lbl-rev ind">REVIEW INDÉPENDANTE</span>'}
+function gatesBar(v){const done=(v.progress?v.progress.completed:0);let h='<div class="gates">';for(let i=0;i<4;i++)h+='<i class="'+(i<done?'done':'')+'"></i>';return h+'</div>'}
+function testLine(s){if(!s.tests)return '';const t=s.tests;
+ if(t.cases_collected!=null&&t.cases_collected>0)return ' · <b class="'+(t.all_passed?'ok':'err')+'">'+t.cases_passed+'/'+t.cases_collected+' cas de test passés ('+t.commands+' commande'+(t.commands>1?'s':'')+')</b>';
+ if(t.cases_collected===0)return ' · <span class="muted">aucun test réel exécuté</span>';
+ if(t.error)return ' · <span class="warn">résultats de tests illisibles</span>';return ' · <span class="muted">tests non exécutés</span>'}
 function resultBlock(v){const c=C(v.run_id);
- if(!['needs_approval','accepted'].includes(v.status))return '';
- if(!v.result_available)return '<div class="blockbox">Aucun résultat enregistré pour ce run — le diff final est absent de l\\'évidence.</div>';
- if(c.sumError)return '<div class="blockbox">Résultat indisponible : '+esc(c.sumError)+' — réessaie ou consulte le dossier d\\'évidence.</div>';
+ if(v.phase_label!=='done')return '';
+ if(!v.result_available||v.nothing_produced)return '';
  const s=c.sum;if(!s)return '<div class="resultbox muted">Chargement du résultat…</div>';
  const delivered=s.files.filter(f=>f.exists);
- let h='<div class="resultbox"><div class="deliv-h" style="margin-top:0">Ce qui a été construit</div>';
- h+='<div class="built"><b>'+delivered.length+' fichier'+(delivered.length>1?'s':'')+' livré'+(delivered.length>1?'s':'')+'</b>';
- if(s.tests&&s.tests.commands!=null)h+=' · <b class="'+(s.tests.all_passed?'ok':'err')+'">'+s.tests.passed+'/'+s.tests.commands+' tests verts</b>';
- else if(s.tests&&s.tests.error)h+=' · <span class="warn">résultats de tests illisibles</span>';
- else h+=' · <span class="warn">tests non exécutés</span>';
- h+=' · builder <b>'+esc(s.builder_provider||s.builder_name)+'</b>';
- if(s.review_policy&&s.review_policy!=='none')h+=' · review <b>'+esc(s.review_policy)+'</b>';
+ let h='<div class="resultbox"><div class="deliv-h">Résultat construit</div>';
+ h+='<div class="built"><b>'+delivered.length+' fichier'+(delivered.length>1?'s':'')+' livré'+(delivered.length>1?'s':'')+'</b>'+testLine(s);
+ if(s.review_policy&&s.review_policy!=='none')h+=' · review <b>'+esc(s.review_policy)+'</b>';h+='</div>';
+ h+='<div class="deliv-h">Fichiers</div><div class="files">';
+ for(const f of s.files){h+='<div class="file" data-open-run="'+esc(v.run_id)+'" data-open-path="'+esc(f.path)+'">'
+  +'<div><div class="fname">'+esc(f.path)+'</div><div class="fmeta">'+(f.exists?f.bytes+' o · '+(f.is_text?'texte':'binaire'):'<span class="err">absent</span>')+'</div></div>'
+  +'<div class="actions">'+(f.exists&&f.is_text?'<button class="btn ghost" data-open-run="'+esc(v.run_id)+'" data-open-path="'+esc(f.path)+'">Aperçu</button>':'')
+  +(f.exists?'<button class="btn" data-dl-run="'+esc(v.run_id)+'" data-dl-path="'+esc(f.path)+'">⬇︎</button>':'')+'</div></div>'}
  h+='</div>';
- h+='<div class="deliv-h">Fichiers livrés (servis depuis l\\'évidence)</div><div class="files">';
- for(const f of s.files){h+='<div class="file"><div><div class="fname">'+esc(f.path)+'</div>'
-  +'<div class="fmeta">'+(f.exists?f.bytes+' o · '+(f.is_text?'texte':'binaire'):'<span class="err">introuvable</span>')+'</div></div>'
-  +'<div class="actions">'+(f.exists&&f.is_text?'<button class="btn ghost" data-res="preview" data-run="'+esc(v.run_id)+'" data-path="'+esc(f.path)+'">Aperçu</button>':'')
-  +(f.exists?'<button class="btn" data-res="download" data-run="'+esc(v.run_id)+'" data-path="'+esc(f.path)+'">⬇︎</button>':'')+'</div></div>'}
- h+='</div>';
- if(c.preview!=null)h+='<div class="muted" style="margin-top:8px">aperçu: '+esc(c.preview)+'</div><pre>'+esc(c.previewData==null?'chargement…':c.previewData)+'</pre>';
- h+='<div class="zipbar">📦 Bundle complet (livrables + diff + résumé) <button class="btn primary" style="margin-left:auto" data-res="zip" data-run="'+esc(v.run_id)+'">Télécharger tout (zip)</button></div>';
- h+='<div class="deliv-h">Aperçu du diff <button class="btn ghost" data-res="diff" data-run="'+esc(v.run_id)+'">'+(c.diffOpen===false?'Afficher':'Masquer')+'</button></div>';
- if(c.diffOpen!==false)h+='<div class="diff">'+esc(c.diff==null?'chargement…':c.diff)+'</div>';
+ h+='<div class="zipbar">📦 Bundle complet (livrables + diff + résumé) <button class="btn primary" style="margin-left:auto" data-zip="'+esc(v.run_id)+'">Télécharger (zip)</button></div>';
+ const fb=c.feedback;
+ h+='<div class="feedbk">Ce résultat te convient ? <span class="fb-btn" data-fb="up" data-fb-run="'+esc(v.run_id)+'">👍</span>'
+  +'<span class="fb-btn" data-fb="down" data-fb-run="'+esc(v.run_id)+'">👎</span>'
+  +'<span class="fb-btn" data-refaire="'+esc(v.run_id)+'">↻ Refaire</span>'+(fb?'<span class="muted">'+esc(fb)+'</span>':'')+'</div>';
  return h+'</div>'}
-function timelineBlock(v){const c=C(v.run_id);
- let h='<details'+(c.tlOpen?' open':'')+' data-tl="'+esc(v.run_id)+'"><summary>Ce qui s\\'est passé</summary><div class="timeline">';
- if(!c.timeline)h+='<div class="muted">chargement…</div>';
- else for(const s of c.timeline)h+='<div class="tstep"><span>'+esc(s.label)+'</span>'
-  +'<span class="tdur">'+(s.duration_seconds!=null?fmt(s.duration_seconds):'')+'</span></div>';
- return h+'</div></details>'}
-function card(s){const c=C(s.run_id);const d=c.detail;const v=d||s;
- let h='<div class="runcard">';
- h+='<div class="run-head" data-toggle="'+esc(s.run_id)+'">'
-  +'<span class="st '+(STCLASS[v.status]||'off')+'">'+esc(v.status)+'</span>'
-  +'<span class="runid">'+esc(s.run_id.slice(-12))+'</span>'+labels(v)
-  +(d?gates(d):'')
-  +'<span class="run-meta">'+esc(v.builder_name||'?')+' · review '+esc(v.review_policy||'none')
-  +(d?' · '+fmt(d.elapsed_seconds):'')+'</span></div>';
- if(!c.open)return h+'</div>';
- h+='<div class="run-body">';
- h+='<div class="asked"><b>Tu as demandé :</b> '+esc(s.mission_excerpt||(d&&d.mission_display)||'')+'</div>';
- h+=narration(d);
- if(d&&d.block_cause){h+='<div class="blockbox">Cause: '+esc(d.block_cause)
-  +'<div class="hint2">Déblocage: '+esc(d.unblock_hint)+'</div></div>'}
+function card(v){
+ let h='<div class="runcard" id="rc-'+esc(v.run_id)+'">';
+ h+='<div class="run-head"><span class="st '+stClass(v)+'">'+esc(v.phase_label||v.status)+'</span>'+labels(v)+gatesBar(v)
+  +'<span class="run-meta">'+esc(v.builder_provider||v.builder_name)+' · review '+esc(v.review_policy||'none')+' · '+fmt(v.elapsed_seconds)+'</span></div>';
+ h+='<div class="run-body"><div class="narr">'+esc(v.narration||v.current_step||'')
+  +'<span class="steptime">étape '+fmt(v.step_elapsed_seconds)+'</span>';
+ if(v.eta&&v.eta.eta_seconds!=null){const rest=v.eta.eta_seconds-v.elapsed_seconds;
+  h+='<span class="eta">'+(rest>15?'résultat estimé dans ~'+fmt(rest):'imminent')+' (base '+v.eta.based_on_runs+' run'+(v.eta.based_on_runs>1?'s':'')+')</span>'}
+ h+='</div>';
+ if(v.block_cause){h+='<div class="blockbox"><b>'+esc(v.block_cause)+'</b>';
+  if(v.block_verdicts&&v.block_verdicts.length)h+='<details><summary>Verdict complet du reviewer</summary><pre>'+esc(v.block_verdicts.map(x=>'['+x.stage+'/'+(x.reviewer||'?')+' '+(x.verdict||'')+'] '+x.finding).join("\\n\\n"))+'</pre></details>';
+  if(v.unblock_hint)h+='<div class="hint2">'+esc(v.unblock_hint)+'</div>';h+='</div>'}
  h+=resultBlock(v);
- h+='<div class="ctrls">'+buttons(v)+'</div>';
- if(v.status==='needs_approval')h+='<div class="consequence">Approve : résultat conservé, run archivé accepté · Reject : résultat écarté, run archivé rejeté</div>';
- h+='<div class="feedback '+((c.fb||{}).ok?'ok':'err')+'">'+esc((c.fb||{}).text||'')+'</div>';
- h+=timelineBlock(v);
- if(d)h+='<details><summary>Évidence JSON (replié)</summary><pre>'+esc(JSON.stringify(d,null,2))+'</pre></details>'
-  +'<div class="muted">Evidence: '+esc(d.evidence_directory||'')+'</div>';
+ const acts=(v.phase_label&&v.phase_label.startsWith('running'));
+ if(acts)h+='<div style="margin-top:9px"><button class="btn ghost" data-stop="'+esc(v.run_id)+'">Stop</button></div>';
+ h+='<details><summary>Évidence '+esc(v.evidence_directory||'')+'</summary><pre>'+esc(JSON.stringify(v,null,2))+'</pre></details>';
  return h+'</div></div>'}
-function render(){if(!LIST.length)return;
- el('runs').innerHTML=LIST.map(card).join('')}
-async function hydrate(s){const c=C(s.run_id);
- const active=!['accepted','stopped','blocked','failed'].includes(s.status);
- if(s.status==='needs_approval'&&!c.userClosed&&!c.open){c.open=true}
- if(!(active||c.open))return;
- try{c.detail=await req('/runs/'+s.run_id)}catch(_){return}
- const d=c.detail;
- if(['needs_approval','accepted'].includes(d.status)&&d.result_available){
-  if(!c.sum||c.sumStatus!==d.status){
-   try{c.sum=await req('/runs/'+s.run_id+'/result');c.sumStatus=d.status;c.sumError=null}
-   catch(e){c.sumError=e.message}}
-  if(c.diff==null&&!c.diffLoading&&c.diffOpen!==false){c.diffLoading=true;
-   req('/runs/'+s.run_id+'/final-diff').then(x=>{c.diff=x.diff_content!=null?x.diff_content:(x.error||'(diff vide)');render()})
-    .catch(()=>{c.diff='(diff indisponible)';c.diffLoading=false;render()})}}
- if(c.tlOpen&&(!c.timeline||active)){
-  try{c.timeline=(await req('/runs/'+s.run_id+'/timeline')).steps}catch(_){}}}
+function feedItem(v){let h='<div class="msg-user"><div class="who">Toi</div><div class="txt">'+esc(v.mission_display||'')+'</div>';
+ for(const a of (v.attachments||[]))h+='<span class="att">📎 '+esc(a.name)+'</span>';
+ h+='</div>';return h+card(v)}
+function render(){const conv=activeConvObj();const ids=conv?conv.runs:[];
+ const runs=ids.map(id=>LIST.find(r=>r.run_id===id)).filter(Boolean);
+ const feed=el('feed');
+ if(!runs.length&&!pending.length){feed.innerHTML='<div class="empty">Écris une demande en bas pour lancer une mission.<br>JOÃO construit, teste, review, et te montre le résultat directement.</div>';return}
+ let h=runs.map(feedItem).join('');
+ for(const p of pending)h+='<div class="msg-user"><div class="who">Toi</div><div class="txt">'+esc(p)+'</div></div><div class="runcard"><div class="run-body muted">Lancement…</div></div>';
+ feed.innerHTML=h}
+// ---------- artifacts panel ----------
+function renderMd(t){return esc(t).replace(/^### (.*)$/gm,'<h3>$1</h3>').replace(/^## (.*)$/gm,'<h2>$1</h2>').replace(/^# (.*)$/gm,'<h1>$1</h1>')
+ .replace(/\\*\\*([^*]+)\\*\\*/g,'<b>$1</b>').replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\\n/g,'<br>')}
+async function openArtifact(run,path){artifact={run,path};el('artifacts').classList.add('open');el('art-name').textContent=path;
+ const body=el('art-body');body.innerHTML='<pre>chargement…</pre>';
+ try{const d=await req('/runs/'+run+'/result/file?path='+encodeURIComponent(path));artifact.text=d.content;
+  const lower=path.toLowerCase();
+  if(d.content==null){const url=api('/runs/'+run+'/result/file?path='+encodeURIComponent(path)+'&download=1');body.innerHTML='<img src="'+url+'">'}
+  else if(lower.endsWith('.md'))body.innerHTML='<div class="md">'+renderMd(d.content)+'</div>';
+  else if(lower.endsWith('.html')||lower.endsWith('.htm')){const f=document.createElement('iframe');f.setAttribute('sandbox','allow-same-origin');body.innerHTML='';body.appendChild(f);f.srcdoc=d.content}
+  else body.innerHTML='<pre></pre>',body.querySelector('pre').textContent=d.content;
+ }catch(e){body.innerHTML='<pre>'+esc(e.message)+'</pre>'}}
+function api(u){return u}
+function tokenFetch(url){return fetch(url,{headers:{'X-JOAO-Token':TOKEN}})}
+async function download(url,filename){const r=await tokenFetch(url);if(!r.ok)throw Error('téléchargement refusé ('+r.status+')');
+ const blob=await r.blob();const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),9000)}
+// image src needs the token; use a blob URL
+async function hydrateImages(){document.querySelectorAll('.art-body img[src^="/runs"]').forEach(async img=>{
+ if(img.dataset.done)return;img.dataset.done=1;const r=await tokenFetch(img.src);const b=await r.blob();img.src=URL.createObjectURL(b)})}
+// ---------- refresh loop ----------
 async function refresh(){try{const v=await req('/runs');LIST=v.runs||[];
- await Promise.all(LIST.slice(0,12).map(hydrate));render()}catch(_){}}
-document.addEventListener('click',async e=>{const t=e.target;
- if(t.closest&&!t.dataset.act&&!t.dataset.res){const head=t.closest('.run-head');
-  if(head){const c=C(head.dataset.toggle);c.open=!c.open;c.userClosed=!c.open;render();
-   if(c.open)refresh();return}
-  const tl=t.closest('details[data-tl]');
-  if(tl&&t.tagName==='SUMMARY'){const c=C(tl.dataset.tl);c.tlOpen=!tl.open;
-   if(c.tlOpen&&!c.timeline)req('/runs/'+tl.dataset.tl+'/timeline').then(x=>{c.timeline=x.steps;render()}).catch(()=>{});
-   return}}
- if(t.dataset&&t.dataset.res){resultAction(t.dataset.res,t.dataset.run,t.dataset.path);return}
- if(!(t.dataset&&t.dataset.act))return;
- t.disabled=true;
- try{const r=await req('/runs/'+t.dataset.run+'/'+t.dataset.act,{method:'POST'});
-  C(t.dataset.run).fb={ok:r.accepted,text:(r.accepted?'✓ '+t.dataset.act+' acceptée — ':'✗ '+t.dataset.act+' refusée — ')+r.reason};
- }catch(err){C(t.dataset.run).fb={ok:false,text:'✗ '+t.dataset.act+' — '+err.message}}
- refresh()});
-async function download(url,filename){const r=await fetch(url,{headers:{'X-JOAO-Token':TOKEN}});
- if(!r.ok)throw Error('téléchargement refusé ('+r.status+')');
- const blob=await r.blob();const a=document.createElement('a');
- a.href=URL.createObjectURL(blob);a.download=filename;a.click();
- setTimeout(()=>URL.revokeObjectURL(a.href),10000)}
-async function resultAction(kind,run,path){const c=C(run);
- try{
-  if(kind==='diff'){c.diffOpen=c.diffOpen===false?true:false;
-   if(c.diffOpen!==false&&c.diff==null){const d=await req('/runs/'+run+'/final-diff');
-    c.diff=d.diff_content!=null?d.diff_content:(d.error||'(diff vide)')}}
-  else if(kind==='zip'){await download('/runs/'+run+'/result/zip',run+'-result.zip')}
-  else if(kind==='preview'){c.preview=path;c.previewData=null;render();
-   const d=await req('/runs/'+run+'/result/file?path='+encodeURIComponent(path));
-   c.previewData=d.content==null?'(fichier binaire — utilise télécharger)':d.content}
-  else if(kind==='download'){await download('/runs/'+run+'/result/file?path='+encodeURIComponent(path)+'&download=1',path.split('/').pop())}
- }catch(err){c.fb={ok:false,text:'✗ résultat — '+err.message}}
- render()}
+ // hydrate details + result summaries for the active conversation's runs
+ const conv=activeConvObj();const ids=conv?conv.runs:[];
+ await Promise.all(LIST.filter(r=>ids.includes(r.run_id)).map(async s=>{const idx=LIST.indexOf(s);
+  try{const d=await req('/runs/'+s.run_id);LIST[idx]=d;
+   if(d.phase_label==='done'&&d.result_available&&!d.nothing_produced){const c=C(s.run_id);
+    if(!c.sum||c.sumStatus!==d.status){try{c.sum=await req('/runs/'+s.run_id+'/result');c.sumStatus=d.status}catch(_){}}}
+  }catch(_){}}));
+ // auto-title conversation from its first mission
+ if(conv&&conv.runs.length){const first=LIST.find(r=>r.run_id===conv.runs[0]);
+  if(first&&first.mission_display&&(conv.title==='Nouvelle conversation'||!conv.title)){conv.title=first.mission_display.slice(0,42);saveConvs(CONVS)}}
+ render();renderConvs();hydrateImages()}catch(_){}}
+// ---------- send ----------
+function fileToB64(file){return new Promise((res,rej)=>{const r=new FileReader();
+ r.onload=()=>res(r.result.split(',')[1]);r.onerror=rej;r.readAsDataURL(file)})}
+function renderAttach(){el('attachrow').innerHTML=pendingAtt.map((a,i)=>
+ '<span class="attchip">📎 '+esc(a.name)+' <span class="x" data-rmatt="'+i+'">✕</span></span>').join('')}
+let pendingAtt=[];
+async function addFiles(files){for(const f of files){if(f.size>8*1024*1024){alert('Fichier trop volumineux (>8 Mo): '+f.name);continue}
+ pendingAtt.push({name:f.name,b64:await fileToB64(f)})}renderAttach()}
 async function send(){const mission=el('prompt').value.trim();if(!mission)return;
- el('launch-feedback').textContent='';
- try{const v=await req('/quick-missions',{method:'POST',body:JSON.stringify({mission,builder_name:selected('builder'),review_mode:selected('review')})});
-  C(v.run_id).open=true;el('prompt').value='';
-  el('launch-feedback').innerHTML='<span class="ok">✓ run lancé: '+esc(v.run_id)+'</span>';refresh()}
- catch(e){el('launch-feedback').innerHTML='<span class="err">✗ lancement refusé — '+esc(e.message)+'</span>'}}
-el('prompt').addEventListener('keydown',e=>{
- if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(!el('start-btn').disabled)send()}});
-function enableChoice(name,value,enabled){const input=document.querySelector('input[name="'+name+'"][value="'+value+'"]');
- input.disabled=!enabled}
-function ensureChoice(name){const current=document.querySelector('input[name="'+name+'"]:checked');
- if(!current||current.disabled){const fallback=document.querySelector('input[name="'+name+'"]:not(:disabled)');if(fallback)fallback.checked=true}}
-function quotaDoomed(){if(!CAPS||!CAPS.codex.quota_warning)return false;
- const b=selected('builder'),r=selected('review');return b==='codex'||reviewParts(r).includes('codex')}
-function updateSafety(){if(!CAPS)return;const v=CAPS;const parts=[];
- const b=selected('builder'),r=selected('review');
- if(reviewParts(r).includes(b))
-  parts.push('<span class="warn">AVERTISSEMENT: self-review — '+b+' construit ET review</span>');
- if(r==='none')parts.push('<span class="err">NO REVIEW — approbation humaine seule</span>');
- el('safety-summary').innerHTML=parts.join(' · ');
- const q=el('quota-warning');
- if(quotaDoomed()){q.style.display='block';
-  q.textContent='⚠ Quota Codex épuisé ('+(v.codex.quota_warning.at||'récemment')+') — si tu lances quand même, le run se bloquera à la première gate Codex; utilise alors Reject pour le terminer, ou choisis une review sans Codex.'}
- else q.style.display='none';
- let valid=el('prompt').value.trim().length>0&&v[b].available;
- for(const name of reviewParts(r))if(!v[name].reviewer_available)valid=false;
- el('start-btn').disabled=!valid}
+ const payload={mission,builder_name:selected('builder'),review_mode:selected('review'),
+  attachments:pendingAtt.map(a=>({name:a.name,content_b64:a.b64}))};
+ el('prompt').value='';const att=pendingAtt.slice();pendingAtt=[];renderAttach();pending.push(mission);render();
+ try{const v=await req('/quick-missions',{method:'POST',body:JSON.stringify(payload)});
+  const conv=activeConvObj();conv.runs.push(v.run_id);saveConvs(CONVS);
+  pending=pending.filter(m=>m!==mission);refresh()}
+ catch(e){pending=pending.filter(m=>m!==mission);alert('Lancement refusé — '+e.message);render()}}
+// ---------- capabilities ----------
+function updateSafety(){if(!CAPS)return;const b=selected('builder'),r=selected('review');
+ let valid=el('prompt').value.trim().length>0&&CAPS[b]&&CAPS[b].available;
+ for(const name of reviewParts(r))if(!CAPS[name]||!CAPS[name].reviewer_available)valid=false;
+ el('send-btn').disabled=!valid;
+ const q=el('quota-warning');const doomed=CAPS.codex&&CAPS.codex.quota_warning&&(b==='codex'||reviewParts(r).includes('codex'));
+ if(doomed){q.style.display='block';q.textContent='⚠ Quota Codex épuisé ('+(CAPS.codex.quota_warning.at||'récemment')+') — le run se bloquera à la gate Codex; choisis une review sans Codex.'}else q.style.display='none'}
+function enableChoice(name,value,enabled){const i=document.querySelector('input[name="'+name+'"][value="'+value+'"]');if(i)i.disabled=!enabled}
+function ensureChoice(name){const cur=document.querySelector('input[name="'+name+'"]:checked');if(!cur||cur.disabled){const f=document.querySelector('input[name="'+name+'"]:not(:disabled)');if(f)f.checked=true}}
 async function caps(){try{CAPS=await req('/capabilities');const v=CAPS;
- enableChoice('builder','glm',v.glm.available);enableChoice('builder','codex',v.codex.available);
- enableChoice('builder','claude',v.claude.available);
- document.querySelectorAll('input[name="review"]').forEach(i=>{
-  enableChoice('review',i.value,reviewParts(i.value).every(n=>v[n].reviewer_available))});
+ enableChoice('builder','glm',v.glm.available);enableChoice('builder','codex',v.codex.available);enableChoice('builder','claude',v.claude.available);
+ document.querySelectorAll('input[name="review"]').forEach(i=>enableChoice('review',i.value,reviewParts(i.value).every(n=>v[n]&&v[n].reviewer_available)));
  ensureChoice('builder');ensureChoice('review');
- el('capabilities').innerHTML=['glm','codex','claude'].map(n=>'<span class="chip '+(v[n].available?'ok':'err')+'">'
-  +n.toUpperCase()+' '+(v[n].available?'prêt':'indisponible')+'</span>').join('')
-  +(v.codex.quota_warning?'<span class="chip warn">Codex — quota · reset annoncé</span>':'');
- updateSafety()}catch(_){el('start-btn').disabled=true}}
+ el('capabilities').innerHTML=['glm','codex','claude'].map(n=>'<span class="chip '+(v[n].available?'ok':'err')+'">'+n.toUpperCase()+' '+(v[n].available?'prêt':'indispo')+'</span>').join('')
+  +(v.codex.quota_warning?'<span class="chip warn">Codex quota</span>':'');updateSafety()}catch(_){el('send-btn').disabled=true}}
+// ---------- events ----------
+el('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(!el('send-btn').disabled)send()}});
+el('prompt').addEventListener('input',()=>{updateSafety();el('prompt').style.height='auto';el('prompt').style.height=Math.min(180,el('prompt').scrollHeight)+'px'});
 document.querySelectorAll('input[name="builder"],input[name="review"]').forEach(i=>i.addEventListener('change',updateSafety));
-el('prompt').addEventListener('input',updateSafety);
-setInterval(refresh,2500);setInterval(caps,30000);caps();refresh();
+el('send-btn').onclick=send;el('new-conv').onclick=()=>{newConversation();render();renderConvs()};
+el('search').addEventListener('input',renderConvs);
+el('attach-btn').onclick=()=>el('file-input').click();
+el('file-input').addEventListener('change',e=>{addFiles(e.target.files);e.target.value=''});
+const ibox=el('inputbox');
+;['dragenter','dragover'].forEach(ev=>ibox.addEventListener(ev,e=>{e.preventDefault();ibox.classList.add('drag')}));
+;['dragleave','drop'].forEach(ev=>ibox.addEventListener(ev,e=>{e.preventDefault();ibox.classList.remove('drag')}));
+ibox.addEventListener('drop',e=>{if(e.dataTransfer&&e.dataTransfer.files.length)addFiles(e.dataTransfer.files)});
+el('prompt').addEventListener('paste',e=>{const items=(e.clipboardData||{}).items||[];for(const it of items){if(it.kind==='file'){const f=it.getAsFile();if(f)addFiles([f])}}});
+document.addEventListener('click',e=>{const t=e.target;
+ if(t.dataset.conv){activeConv=t.dataset.conv;localStorage.setItem('joao_active',activeConv);render();renderConvs();refresh();return}
+ if(t.dataset.rmatt!=null){pendingAtt.splice(+t.dataset.rmatt,1);renderAttach();return}
+ const openR=t.dataset.openRun||t.closest('[data-open-run]')&&t.closest('[data-open-run]').dataset.openRun;
+ const openP=t.dataset.openPath||t.closest('[data-open-path]')&&t.closest('[data-open-path]').dataset.openPath;
+ if(openR&&openP){openArtifact(openR,openP);return}
+ if(t.dataset.dlRun)return download('/runs/'+t.dataset.dlRun+'/result/file?path='+encodeURIComponent(t.dataset.dlPath)+'&download=1',t.dataset.dlPath.split('/').pop());
+ if(t.dataset.zip)return download('/runs/'+t.dataset.zip+'/result/zip',t.dataset.zip+'-result.zip');
+ if(t.dataset.stop){req('/runs/'+t.dataset.stop+'/stop',{method:'POST'}).then(refresh).catch(()=>{});return}
+ if(t.dataset.fbRun){C(t.dataset.fbRun).feedback=t.dataset.fb==='up'?'👍 merci':'👎 noté — relance ou reformule';
+  if(t.dataset.fb==='down')req('/runs/'+t.dataset.fbRun+'/feedback',{method:'POST',body:JSON.stringify({vote:'down'})}).catch(()=>{});render();return}
+ if(t.dataset.refaire){const r=LIST.find(x=>x.run_id===t.dataset.refaire);if(r){el('prompt').value=r.mission_display||'';updateSafety();el('prompt').focus()}return}
+});
+el('art-close').onclick=()=>el('artifacts').classList.remove('open');
+el('art-copy').onclick=()=>{if(artifact&&artifact.text!=null)navigator.clipboard.writeText(artifact.text)};
+el('art-dl').onclick=()=>{if(artifact)download('/runs/'+artifact.run+'/result/file?path='+encodeURIComponent(artifact.path)+'&download=1',artifact.path.split('/').pop())};
+renderConvs();caps();refresh();setInterval(refresh,2500);setInterval(caps,30000);
 </script>"""
+
 
 
 class LocalAPIServer:
@@ -401,6 +429,17 @@ class LocalAPIServer:
                         return self.send(403, {"error": "invalid Host header"})
                     if path == "/":
                         return self.send(200, HTML.replace("__JOAO_TOKEN__", outer.token), "text/html; charset=utf-8")
+                    # Static brand assets (mascot, favicon) — public like the page itself.
+                    if path in ASSET_ROUTES:
+                        raw, kind = outer._asset(ASSET_ROUTES[path])
+                        if raw is None:
+                            return self.send(404, {"error": "asset not found"})
+                        self.send_response(200)
+                        self.send_header("Content-Type", kind)
+                        self.send_header("Content-Length", str(len(raw)))
+                        self.send_header("Cache-Control", "max-age=86400")
+                        self.end_headers()
+                        return self.wfile.write(raw)
                     if not self.authorized():
                         return self.send(401, {"error": "missing or invalid local session token"})
                     if path == "/capabilities":
@@ -457,6 +496,14 @@ class LocalAPIServer:
                     self.send(409, {"error": str(exc)})
 
         self.server = ThreadingHTTPServer((host, port), Handler)
+
+    def _asset(self, spec):
+        """Read a bundled brand asset (confined to the assets directory)."""
+        filename, kind = spec
+        path = (ASSETS_DIR / filename).resolve()
+        if ASSETS_DIR not in path.parents or not path.is_file():
+            return None, None
+        return path.read_bytes(), kind
 
     def capabilities(self):
         def preflight(adapter, unavailable_reason):
@@ -598,13 +645,41 @@ class LocalAPIServer:
             raise ValueError("test command must not use a shell")
         return argv
 
-    def _start(self, project, workspace, mission, paths, full, target, builder_name, reviewer_names, review_policy, generated_paths=None):
+    def _start(self, project, workspace, mission, paths, full, target, builder_name, reviewer_names, review_policy, generated_paths=None, attachments_manifest=None):
         profile = ProjectProfile(project_id=project, display_name=project, repository_root=str(workspace), allowed_write_paths=paths, forbidden_paths=[], generated_paths=list(generated_paths or []), approval_required=True)
         run = self.runtime.start(project_id=project, workspace=workspace, mission=mission, targeted_tests=[target] if target else [], full_tests=[full], profile=profile, builder_name=builder_name, reviewer_names=reviewer_names, review_policy=review_policy)
+        if attachments_manifest:
+            self.runtime.record_attachments(run, attachments_manifest)
         self.drive(run)
-        return {"run_id": run, "status": "queued"}
+        return {"run_id": run, "status": "queued", "attachments": attachments_manifest or []}
 
-    def quick_sandbox(self):
+    MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
+
+    @staticmethod
+    def _decode_attachments(raw_attachments):
+        """Validate + decode composer attachments (BLOC E). Fail loud, never silent."""
+        attachments = []
+        for entry in raw_attachments or []:
+            name = str((entry or {}).get("name", "")).strip()
+            safe = Path(name).name  # strip any directory component / traversal
+            if not safe or safe in {".", ".."} or "/" in name or "\\" in name or safe.startswith("."):
+                raise ValueError(f"nom de pièce jointe invalide: {name!r}")
+            payload = (entry or {}).get("content_b64") or ""
+            try:
+                data = base64.b64decode(payload, validate=True)
+            except (binascii.Error, ValueError):
+                raise ValueError(f"pièce jointe illisible (base64 invalide): {safe}")
+            if not data:
+                raise ValueError(f"pièce jointe vide: {safe}")
+            if len(data) > LocalAPIServer.MAX_ATTACHMENT_BYTES:
+                raise ValueError(f"pièce jointe trop volumineuse (> 8 Mo): {safe}")
+            attachments.append((safe, data))
+        names = [name for name, _ in attachments]
+        if len(set(names)) != len(names):
+            raise ValueError("noms de pièces jointes en double")
+        return attachments
+
+    def quick_sandbox(self, attachments=None):
         root = self.runtime.root / "sandboxes" / ("quick-" + secrets.token_hex(5))
         (root / "src").mkdir(parents=True)
         (root / "tests").mkdir()
@@ -616,9 +691,20 @@ class LocalAPIServer:
             "    def test_identity(self):\n"
             "        self.assertEqual(identity('joao'), 'joao')\n"
         )
+        # BLOC E: attachments land in inputs/ inside the run workspace and are
+        # committed to the baseline (so they are available to the builder but do
+        # not count as builder output). Their SHA-256 is recorded as evidence.
+        manifest = []
+        if attachments:
+            (root / "inputs").mkdir()
+            for name, data in attachments:
+                (root / "inputs" / name).write_bytes(data)
+                manifest.append({"name": name, "bytes": len(data),
+                                 "sha256": hashlib.sha256(data).hexdigest(),
+                                 "path": f"inputs/{name}"})
         for argv in (["git", "init", "-q"], ["git", "config", "user.email", "joao-sandbox@example.invalid"], ["git", "config", "user.name", "JOAO Sandbox"], ["git", "add", "."], ["git", "commit", "-qm", "sandbox baseline"]):
             subprocess.run(argv, cwd=str(root), check=True)
-        return root
+        return root, manifest
 
     def _quick_configuration(self, data):
         builder = str(data.get("builder_name", "glm"))
@@ -679,6 +765,7 @@ class LocalAPIServer:
         text_intent = not CODE_INTENT_RE.search(mission)
         if text_intent and not any(p.endswith(".md") for p in derived):
             derived.add("output.md")
+        attachments = self._decode_attachments(data.get("attachments"))
         requested_paths = data.get("allowed_paths")
         if requested_paths is not None:
             requested = [str(path).strip() for path in requested_paths if str(path).strip()]
@@ -690,7 +777,7 @@ class LocalAPIServer:
             allowed = sorted(derived)
         if not allowed or len(set(allowed)) != len(allowed):
             raise ValueError("quick sandbox allowed_paths must be a non-empty unique set")
-        root = self.quick_sandbox()
+        root, attachments_manifest = self.quick_sandbox(attachments)
         contract = (
             "Work only inside this disposable Git sandbox. Do not install packages, commit, "
             "push, access external paths, or modify the sandbox policy. Use only Python's "
@@ -700,6 +787,10 @@ class LocalAPIServer:
             "siblings) must be removed before delivery. You MUST create at least one real "
             "deliverable file; an empty result is rejected.\n\n"
         )
+        if attachments_manifest:
+            names = ", ".join(item["name"] for item in attachments_manifest)
+            contract += (f"The user attached input file(s) available in the read-only inputs/ "
+                         f"directory: {names}. Read them as needed for the task.\n\n")
         if text_intent:
             contract += (
                 "This is a text/writing request (no code required). Deliver the full result as a "
@@ -710,7 +801,7 @@ class LocalAPIServer:
         full_test = ["python3", "-m", "unittest", "discover", "-s", ".", "-p", "test*.py"]
         generated = [path for path in ("todo.json", "test_tasks.json",
                                        "todo.json.tmp", "test_tasks.json.tmp") if path in allowed]
-        return self._start("quick-sandbox", root, contract, allowed, full_test, [], builder_name, reviewer_names, review_policy, generated)
+        return self._start("quick-sandbox", root, contract, allowed, full_test, [], builder_name, reviewer_names, review_policy, generated, attachments_manifest)
 
     def launch(self, data):
         root = Path(data["workspace"]).expanduser().resolve()

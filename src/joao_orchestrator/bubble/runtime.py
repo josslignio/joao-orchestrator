@@ -1111,6 +1111,12 @@ class RunRuntime:
         run["mission_display"] = self.user_mission(run.get("mission"))
         run["narration"] = self.narrate(run)
         run["phase_label"] = self.phase_label(run)
+        attach_path = folder / "attachments.json"
+        if attach_path.is_file():
+            try:
+                run["attachments"] = json.loads(attach_path.read_text()).get("attachments", [])
+            except (OSError, json.JSONDecodeError):
+                run["attachments"] = []
         if run["status"] not in {"accepted", "stopped", "blocked", "failed"}:
             run["eta"] = self.estimate_eta(run.get("builder_name"), run.get("review_policy"),
                                            len(run["mission_display"]))
@@ -1489,6 +1495,10 @@ class RunRuntime:
                              "sha256": digest(target), "is_text": b"\0" not in head})
         atomic_write_json(folder / "deliverables-manifest.json",
                           {"schema_version": 1, "captured_at": now(), "files": manifest})
+    def record_attachments(self, run_id: str, manifest: list[dict[str, Any]]) -> None:
+        """Persist the composer attachments manifest as run evidence (BLOC E)."""
+        atomic_write_json(self._dir(run_id) / "attachments.json",
+                          {"schema_version": 1, "recorded_at": now(), "attachments": manifest})
     def _delivered_count(self, folder: Path) -> int:
         """Number of real deliverable files persisted for this run (A1 gate)."""
         manifest_path = folder / "deliverables-manifest.json"

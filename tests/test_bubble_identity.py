@@ -19,7 +19,11 @@ def test_ui_page_is_branded_joao_ai(tmp_path):
         with urllib.request.urlopen(urllib.request.Request(api.url), timeout=10) as response:
             page = response.read().decode()
         assert "<title>JOÃO.AI</title>" in page
-        assert 'class="wordmark">JOÃO<small>.AI</small>' in page
+        # A1 wordmark + bloom doux (locked brand decision)
+        assert 'class="a1">JOÃO<small>.AI</small>' in page
+        assert 'class="bloomD">JOÃO<small>.AI</small>' in page
+        # neon mascot served in the header
+        assert "/assets/mascot.png" in page
         assert "<title>JOAO</title>" not in page
     finally:
         api.close()
