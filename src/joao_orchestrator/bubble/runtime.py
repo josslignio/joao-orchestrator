@@ -1411,7 +1411,7 @@ class RunRuntime:
                 self._transition(run, RunStatus.NEEDS_APPROVAL, "reviewer disagreement at plan gate")
                 self._finalize(run); return run
             if not plan_review.get("ok"):
-                self._transition(run, RunStatus.BLOCKED, "Codex plan review blocked"); self._finalize(run); return run
+                self._transition(run, RunStatus.BLOCKED, "plan review blocked"); self._finalize(run); return run
             run["plan_review_completed"] = True
             self._write(run)
         if self._apply_control(run):
@@ -1490,12 +1490,12 @@ class RunRuntime:
             return run
         if build_review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]:
             self._request_repair(run, build_review, "build")
-            self._transition(run, RunStatus.CORRECTING, "Codex build review P1; one repair permitted"); return run
+            self._transition(run, RunStatus.CORRECTING, "build review P1; one repair permitted"); return run
         if build_review.get("decision") == "disagreement":
             self._transition(run, RunStatus.NEEDS_APPROVAL, "reviewer disagreement at build gate")
             self._finalize(run); return run
         if not build_review.get("ok"):
-            self._transition(run, RunStatus.BLOCKED, "Codex build review blocked"); self._finalize(run); return run
+            self._transition(run, RunStatus.BLOCKED, "build review blocked"); self._finalize(run); return run
         self._transition(run, RunStatus.TESTING, "targeted and full tests")
         results = [self.tests.run(argv, workspace, profile.command_timeout_seconds) for argv in run["targeted_tests"] + run["full_tests"]]; atomic_write_json(folder / "test-results.json", {"results": results, "all_passed": all(item["ok"] for item in results)})
         if self._apply_control(run):
