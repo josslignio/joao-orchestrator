@@ -1172,20 +1172,63 @@ class RunRuntime:
         if target == workspace:
             raise RuntimeStateError("result path must name a file, not the workspace root")
         return target
+    def _deliverable_copy(self, run_id: str, relative: str) -> Path:
+        """Resolve a persistent evidence copy, confined to the deliverables dir."""
+        root = (self._dir(run_id) / "deliverables").resolve()
+        target = (root / relative).resolve()
+        if target != root and root not in target.parents:
+            raise RuntimeStateError("result path escapes the evidence deliverables: " + relative)
+        if target == root:
+            raise RuntimeStateError("result path must name a file, not the deliverables root")
+        return target
+    def _persist_deliverables(self, run: dict[str, Any], workspace: Path, folder: Path) -> None:
+        """F4: results are served from the run's evidence directory forever,
+        never from the disposable sandbox. Called at every final-diff capture,
+        so repair loops refresh the copy."""
+        target_root = folder / "deliverables"
+        if target_root.exists():
+            shutil.rmtree(target_root)
+        manifest: list[dict[str, Any]] = []
+        for relative in self._paths(workspace):
+            source = workspace / relative
+            if not source.is_file():
+                continue
+            target = target_root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            with source.open("rb") as handle:
+                head = handle.read(8192)
+            manifest.append({"path": relative, "bytes": target.stat().st_size,
+                             "sha256": digest(target), "is_text": b"\0" not in head})
+        atomic_write_json(folder / "deliverables-manifest.json",
+                          {"schema_version": 1, "captured_at": now(), "files": manifest})
     def list_result_files(self, run_id: str) -> list[dict[str, Any]]:
-        """Deliverable files produced by the builder, with existence and hashes."""
+        """Deliverable files, from the persistent evidence copy when it exists."""
         run = self._read(run_id)
-        changed_path = self._dir(run_id) / "changed-paths.json"
+        folder = self._dir(run_id)
+        manifest_path = folder / "deliverables-manifest.json"
+        if manifest_path.is_file():
+            try:
+                manifest = json.loads(manifest_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                manifest = {"files": []}
+            files = []
+            for entry in manifest.get("files", []):
+                copy = folder / "deliverables" / entry.get("path", "")
+                files.append({**entry, "exists": copy.is_file(), "source": "evidence"})
+            return files
+        # Legacy runs recorded before deliverable persistence: fall back to the sandbox.
+        changed_path = folder / "changed-paths.json"
         if not changed_path.is_file():
             return []
         try:
             changed = json.loads(changed_path.read_text())
         except (OSError, json.JSONDecodeError):
             return []
-        files: list[dict[str, Any]] = []
+        files = []
         for relative in changed.get("after", []):
-            entry: dict[str, Any] = {"path": relative, "exists": False,
-                                     "bytes": None, "sha256": None, "is_text": False}
+            entry: dict[str, Any] = {"path": relative, "exists": False, "bytes": None,
+                                     "sha256": None, "is_text": False, "source": "workspace"}
             try:
                 target = self._result_file_target(run, relative)
             except RuntimeStateError as exc:
@@ -1233,17 +1276,22 @@ class RunRuntime:
                 summary["tests"] = {"error": "cannot read test-results.json"}
         return summary
     def read_result_file(self, run_id: str, relative: str) -> dict[str, Any]:
-        """Raw bytes of one deliverable, path-checked against the workspace."""
+        """Raw bytes of one deliverable — evidence copy first, sandbox fallback."""
         run = self._read(run_id)
-        target = self._result_file_target(run, relative)
-        if not target.is_file():
-            raise RuntimeStateError("result file not found: " + relative)
-        raw = target.read_bytes()
+        copy = self._deliverable_copy(run_id, relative)
+        if copy.is_file():
+            raw = copy.read_bytes()
+        else:
+            target = self._result_file_target(run, relative)
+            if not target.is_file():
+                raise RuntimeStateError(
+                    "résultat introuvable: " + relative
+                    + " (ni copie d'évidence, ni fichier de sandbox)")
+            raw = target.read_bytes()
         return {"path": relative, "bytes": len(raw), "is_text": b"\0" not in raw[:8192],
                 "sha256": hashlib.sha256(raw).hexdigest(), "content": raw}
     def build_result_zip(self, run_id: str) -> dict[str, Any]:
         """Bundle the deliverables, final diff and summary for one-click download."""
-        run = self._read(run_id)
         folder = self._dir(run_id)
         if not (folder / "final-diff.patch").is_file():
             raise RuntimeStateError("aucun diff final enregistré pour ce run")
@@ -1253,8 +1301,8 @@ class RunRuntime:
             for entry in summary["files"]:
                 if not entry.get("exists"):
                     continue
-                target = self._result_file_target(run, entry["path"])
-                bundle.write(target, "deliverables/" + entry["path"])
+                record = self.read_result_file(run_id, entry["path"])
+                bundle.writestr("deliverables/" + entry["path"], record["content"])
             bundle.write(folder / "final-diff.patch", "final-diff.patch")
             bundle.writestr("result-summary.json",
                             json.dumps(summary, indent=2, sort_keys=True))
@@ -1532,6 +1580,7 @@ class RunRuntime:
             self._transition(run, RunStatus.BLOCKED, "builder failed or outside scope"); self._finalize(run); return run
         patch = self._git_diff(workspace)
         atomic_write_text(folder / "final-diff.patch", patch.decode(errors="replace")); run["final_diff_sha256"] = digest(folder / "final-diff.patch"); run["tasks"][1]["status"] = "completed"; self._write(run)
+        self._persist_deliverables(run, workspace, folder)
         build_review = self._review_gate(run, "build")
         if self._apply_control(run):
             return run
