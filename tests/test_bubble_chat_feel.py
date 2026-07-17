@@ -44,6 +44,10 @@ def test_chat_feel_behaviors_are_wired(tmp_path):
     assert "openArtifact" in page and 'id="artifacts"' in page and "art-body" in page
     # A1/A6: honest empty result + real reviewer verdict surfaced.
     assert "nothing_produced" in page and "block_verdicts" in page
+    # Self-review fixes: run attaches to the conversation captured BEFORE the
+    # await; un-threaded persisted runs are adopted into a default history.
+    assert "const conv=activeConvObj();\n try{const v=await req" in page
+    assert "c-history" in page and "orphans" in page
 
 
 def test_token_page_refuses_foreign_host_headers(tmp_path):

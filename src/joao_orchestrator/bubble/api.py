@@ -283,7 +283,9 @@ async function openArtifact(run,path){artifact={run,path};el('artifacts').classL
  const body=el('art-body');body.innerHTML='<pre>chargement…</pre>';
  try{const d=await req('/runs/'+run+'/result/file?path='+encodeURIComponent(path));artifact.text=d.content;
   const lower=path.toLowerCase();
-  if(d.content==null){const url=api('/runs/'+run+'/result/file?path='+encodeURIComponent(path)+'&download=1');body.innerHTML='<img src="'+url+'">'}
+  if(d.content==null){body.innerHTML='<img>';const im=body.querySelector('img');
+   const r=await tokenFetch('/runs/'+run+'/result/file?path='+encodeURIComponent(path)+'&download=1');
+   im.src=URL.createObjectURL(await r.blob())}
   else if(lower.endsWith('.md'))body.innerHTML='<div class="md">'+renderMd(d.content)+'</div>';
   else if(lower.endsWith('.html')||lower.endsWith('.htm')){const f=document.createElement('iframe');f.setAttribute('sandbox','allow-same-origin');body.innerHTML='';body.appendChild(f);f.srcdoc=d.content}
   else body.innerHTML='<pre></pre>',body.querySelector('pre').textContent=d.content;
@@ -297,6 +299,13 @@ async function hydrateImages(){document.querySelectorAll('.art-body img[src^="/r
  if(img.dataset.done)return;img.dataset.done=1;const r=await tokenFetch(img.src);const b=await r.blob();img.src=URL.createObjectURL(b)})}
 // ---------- refresh loop ----------
 async function refresh(){try{const v=await req('/runs');LIST=v.runs||[];
+ // Adopt any persisted run not yet threaded into a default 'Historique'
+ // conversation, so a returning user always sees their past runs.
+ const known=new Set(CONVS.flatMap(c=>c.runs));
+ const orphans=LIST.map(r=>r.run_id).filter(id=>!known.has(id));
+ if(orphans.length){let hist=CONVS.find(c=>c.id==='c-history');
+  if(!hist){hist={id:'c-history',title:'Historique',runs:[]};CONVS.push(hist)}
+  orphans.forEach(id=>hist.runs.push(id));saveConvs(CONVS)}
  // hydrate details + result summaries for the active conversation's runs
  const conv=activeConvObj();const ids=conv?conv.runs:[];
  await Promise.all(LIST.filter(r=>ids.includes(r.run_id)).map(async s=>{const idx=LIST.indexOf(s);
@@ -320,8 +329,11 @@ async function send(){const mission=el('prompt').value.trim();if(!mission)return
  const payload={mission,builder_name:selected('builder'),review_mode:selected('review'),
   attachments:pendingAtt.map(a=>({name:a.name,content_b64:a.b64}))};
  el('prompt').value='';const att=pendingAtt.slice();pendingAtt=[];renderAttach();pending.push(mission);render();
+ // Capture the target conversation BEFORE the await so a mid-launch switch
+ // cannot attach the run to the wrong thread.
+ const conv=activeConvObj();
  try{const v=await req('/quick-missions',{method:'POST',body:JSON.stringify(payload)});
-  const conv=activeConvObj();conv.runs.push(v.run_id);saveConvs(CONVS);
+  conv.runs.push(v.run_id);saveConvs(CONVS);
   pending=pending.filter(m=>m!==mission);refresh()}
  catch(e){pending=pending.filter(m=>m!==mission);alert('Lancement refusé — '+e.message);render()}}
 // ---------- capabilities ----------
