@@ -83,7 +83,7 @@ const PILL={pending:"run",planning:"run",ready:"run",building:"run",testing:"run
  correcting:"run",needs_approval:"wait",paused:"wait",blocked:"bad",failed:"bad",accepted:"good",stopped:"off"};
 async function req(url,opt={}){opt.headers={...(opt.headers||{}),'X-JOAO-Token':TOKEN};
  const r=await fetch(url,opt),v=await r.json();if(!r.ok)throw Error(v.error||'requête refusée');return v}
-function esc(s){const n=document.createElement('span');n.textContent=s==null?'':s;return n.innerHTML}
+function esc(s){const n=document.createElement('span');n.textContent=s==null?'':s;return n.innerHTML.replace(/"/g,'&quot;')}
 function selected(name){return document.querySelector('input[name="'+name+'"]:checked').value}
 function labels(v){let out='';if(v.no_review_label)out+='<span class="label no-review">NO REVIEW — HUMAN APPROVAL REQUIRED</span>';
  else if(v.is_self_review)out+='<span class="label self-review">SELF-REVIEW — NON INDÉPENDANTE</span>';
