@@ -1165,7 +1165,8 @@ class RunRuntime:
                 files.append(entry)
                 continue
             if target.is_file():
-                head = target.open("rb").read(8192)
+                with target.open("rb") as handle:
+                    head = handle.read(8192)
                 entry.update({"exists": True, "bytes": target.stat().st_size,
                               "sha256": digest(target), "is_text": b"\0" not in head})
             files.append(entry)
