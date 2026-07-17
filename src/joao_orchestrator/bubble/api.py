@@ -76,11 +76,11 @@ const TOKEN="__JOAO_TOKEN__";const el=id=>document.getElementById(id);
 let CAPS=null,expanded=null,detail=null;const feedback={};
 const ACTIONS={pending:["pause","stop"],planning:["pause","stop"],ready:["pause","stop"],
  building:["pause","stop"],testing:["pause","stop"],reviewing:["pause","stop"],
- needs_approval:["approve","reject","stop"],paused:["resume","stop"],
+ needs_approval:["approve","reject","stop"],paused:["resume","stop"],correcting:["stop"],
  blocked:["retry","reject"],failed:["retry","reject"],accepted:[],stopped:[]};
 const ALL=["pause","resume","stop","retry","approve","reject"];
 const PILL={pending:"run",planning:"run",ready:"run",building:"run",testing:"run",reviewing:"run",
- needs_approval:"wait",paused:"wait",blocked:"bad",failed:"bad",accepted:"good",stopped:"off"};
+ correcting:"run",needs_approval:"wait",paused:"wait",blocked:"bad",failed:"bad",accepted:"good",stopped:"off"};
 async function req(url,opt={}){opt.headers={...(opt.headers||{}),'X-JOAO-Token':TOKEN};
  const r=await fetch(url,opt),v=await r.json();if(!r.ok)throw Error(v.error||'requête refusée');return v}
 function esc(s){const n=document.createElement('span');n.textContent=s==null?'':s;return n.innerHTML}
@@ -307,7 +307,8 @@ class LocalAPIServer:
         "testing": {"pause", "stop"}, "reviewing": {"pause", "stop"},
         "needs_approval": {"approve", "reject", "stop"},
         "paused": {"resume", "stop"}, "blocked": {"retry", "reject"},
-        "failed": {"retry", "reject"}, "accepted": set(), "stopped": set(),
+        "failed": {"retry", "reject"}, "correcting": {"stop"},
+        "accepted": set(), "stopped": set(),
     }
 
     def control(self, run_id, action):
