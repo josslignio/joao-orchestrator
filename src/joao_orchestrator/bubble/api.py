@@ -264,8 +264,8 @@ async function hydrate(s){const c=C(s.run_id);
    try{c.sum=await req('/runs/'+s.run_id+'/result');c.sumStatus=d.status;c.sumError=null}
    catch(e){c.sumError=e.message}}
   if(c.diff==null&&!c.diffLoading&&c.diffOpen!==false){c.diffLoading=true;
-   req('/runs/'+s.run_id+'/final-diff').then(x=>{c.diff=x.diff_content||x.error;render()})
-    .catch(()=>{c.diff='(diff indisponible)';render()})}}
+   req('/runs/'+s.run_id+'/final-diff').then(x=>{c.diff=x.diff_content!=null?x.diff_content:(x.error||'(diff vide)');render()})
+    .catch(()=>{c.diff='(diff indisponible)';c.diffLoading=false;render()})}}
  if(c.tlOpen&&(!c.timeline||active)){
   try{c.timeline=(await req('/runs/'+s.run_id+'/timeline')).steps}catch(_){}}}
 async function refresh(){try{const v=await req('/runs');LIST=v.runs||[];
@@ -293,7 +293,8 @@ async function download(url,filename){const r=await fetch(url,{headers:{'X-JOAO-
 async function resultAction(kind,run,path){const c=C(run);
  try{
   if(kind==='diff'){c.diffOpen=c.diffOpen===false?true:false;
-   if(c.diffOpen!==false&&c.diff==null){const d=await req('/runs/'+run+'/final-diff');c.diff=d.diff_content||d.error}}
+   if(c.diffOpen!==false&&c.diff==null){const d=await req('/runs/'+run+'/final-diff');
+    c.diff=d.diff_content!=null?d.diff_content:(d.error||'(diff vide)')}}
   else if(kind==='zip'){await download('/runs/'+run+'/result/zip',run+'-result.zip')}
   else if(kind==='preview'){c.preview=path;c.previewData=null;render();
    const d=await req('/runs/'+run+'/result/file?path='+encodeURIComponent(path));
