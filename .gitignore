@@ -4,6 +4,7 @@ __pycache__/
 .DS_Store
 *.jsonl
 !program/joao/master-run/RUN_JOURNAL.jsonl
+!memory/lessons.jsonl
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
