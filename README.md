@@ -8,6 +8,7 @@ This repository is the **Option C** split (C7) of the generic orchestration core
 
 | Field | Value |
 |---|---|
+| Release stage | **ALPHA** — see `SYSTEM_CONSTITUTION_V4.md` §4 (proof levels P0→P7) and `ROADMAP_V4.md` (12-item GA checklist, no date). Never GA/stable/production-ready on the basis of a test count alone (D-043). |
 | Visibility | PRIVATE (intended) |
 | Autonomy | L0-SHADOW |
 | Canonical package | `joao_orchestrator` |

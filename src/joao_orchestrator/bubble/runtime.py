@@ -215,7 +215,10 @@ class GLMBuilder(BuilderAdapter):
 
 
 class CodexEvidenceReviewer(ReviewerAdapter):
-    provider = "codex"; model = "independent-exact-sha"
+    # M0 safe-stop (D-043/C-3): "exact-SHA" is an unqualified claim — the label now states
+    # exactly what is proven: a worktree SHA at review time, NOT yet an immutable candidate
+    # (that guarantee is RI-3, delivered by A0/M1-A — see SYSTEM_CONSTITUTION_V4.md §4).
+    provider = "codex"; model = "worktree-sha-at-review-time (non-immuable — candidat immuable = A0/RI-3)"
     def review(self, run, run_dir):
         proof = run_dir / "review-import.json"
         if not proof.exists(): return {"ok": True, "decision": "approval", "required": True, "expected_diff_sha256": run.get("final_diff_sha256")}

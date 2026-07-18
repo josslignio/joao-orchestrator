@@ -89,11 +89,14 @@ class LocalAPIServer:
 
     def capabilities(self):
         import shutil
+        # M0 safe-stop (D-043): release_stage is stated structurally, never inferred by a caller
+        # from a test count — see SYSTEM_CONSTITUTION_V4.md §4, ROADMAP_V4.md GA checklist.
         return {"glm": {"available": bool(shutil.which("opencode"))},
                 "codex": {"available": bool(shutil.which("codex"))},
                 "claude": claude_capability(),
                 "chat": chatmod.available_brains(),
-                "web_search": {"available": False, "reason": "recherche web non branchée (annoncé honnêtement)"}}
+                "web_search": {"available": False, "reason": "recherche web non branchée (annoncé honnêtement)"},
+                "release_stage": "ALPHA"}
 
     @staticmethod
     def command(text):

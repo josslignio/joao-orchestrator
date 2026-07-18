@@ -34,7 +34,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(c.to_dict(), indent=2))
         return 0
     if args.cmd == "version":
-        print("JOÃO.AI joao-orchestrator (canonical); technical_id=joao")
+        # M0 safe-stop (D-043): the release stage is stated honestly, never inferred from a
+        # test count or a run report — see SYSTEM_CONSTITUTION_V4.md §4, checklist ROADMAP_V4.md.
+        print("JOÃO.AI joao-orchestrator (canonical); technical_id=joao; release_stage=ALPHA")
         return 0
     if args.cmd == "ui":
         from joao_orchestrator.bubble.api import LocalAPIServer
