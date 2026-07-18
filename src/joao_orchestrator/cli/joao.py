@@ -39,7 +39,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "ui":
         from joao_orchestrator.bubble.api import LocalAPIServer
         from joao_orchestrator.bubble.runtime import CodexCLIReviewer, GLMBuilder, RunRuntime
-        server = LocalAPIServer(RunRuntime(Path(args.state_root).expanduser(), builder=GLMBuilder(), reviewer=CodexCLIReviewer()))
+        state_root = Path(args.state_root).expanduser()
+        server = LocalAPIServer(RunRuntime(state_root, builder=GLMBuilder(), reviewer=CodexCLIReviewer(),
+                                           enforce_phase0=True, projects_root=state_root / "projects"))
         print(server.url)
         if not args.no_open:
             webbrowser.open(server.url, new=2)

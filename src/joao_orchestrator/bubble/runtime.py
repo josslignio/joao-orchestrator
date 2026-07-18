@@ -267,10 +267,12 @@ def claude_capability() -> dict[str, Any]:
 
 class RunRuntime:
     """Persistent CP2 state machine, evidence writer and bounded repair loop."""
-    def __init__(self, state_root: Path, *, builder: BuilderAdapter, reviewer: ReviewerAdapter | None = None, tests: TestRunnerAdapter | None = None, memory: MemoryAdapter | None = None, profiles: ProjectProfileAdapter | None = None):
+    def __init__(self, state_root: Path, *, builder: BuilderAdapter, reviewer: ReviewerAdapter | None = None, tests: TestRunnerAdapter | None = None, memory: MemoryAdapter | None = None, profiles: ProjectProfileAdapter | None = None, enforce_phase0: bool = False, projects_root: Path | None = None):
         self.root = Path(state_root).expanduser(); self.builder = builder
         self.reviewer = reviewer or CodexEvidenceReviewer(); self.tests = tests or LocalTestRunner()
         self.memory = memory or LocalMemoryAdapter(self.root / "memory"); self.profiles = profiles or LocalProfileAdapter()
+        self.enforce_phase0 = enforce_phase0
+        self.projects_root = Path(projects_root).expanduser() if projects_root else self.root / "projects"
     def _dir(self, run_id: str) -> Path: return self.root / "runs" / run_id
     def _inject(self, run: dict[str, Any], role: str, *, files_touched: list[str] | None = None, stage: str | None = None):
         """Compose the role's RÈGLES ACTIVES block, persist it as evidence, log the ids.
@@ -314,6 +316,10 @@ class RunRuntime:
         run.update({"status": target.value, "updated_at": now(), "current_step": reason}); self._write(run)
         self._event(run, "state_changed", from_status=old.value, to_status=target.value, reason=reason); self._checkpoint(run)
     def start(self, *, project_id: str, workspace: Path, mission: str, targeted_tests: list[list[str]], full_tests: list[list[str]], profile: ProjectProfile | None = None) -> str:
+        if self.enforce_phase0:
+            from .kickoff import spec_is_signed  # noqa: PLC0415
+            if not spec_is_signed(self.projects_root, project_id):
+                raise RuntimeStateError("Phase 0 non faite — lance le Kickoff")
         workspace = Path(workspace).resolve()
         if not workspace.is_dir() or not (workspace / ".git").exists(): raise RuntimeStateError("workspace must be a local Git worktree")
         if not mission.strip(): raise RuntimeStateError("mission cannot be empty")
