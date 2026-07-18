@@ -3,6 +3,19 @@
 **RISK_BOUNDARY : gouvernance documentaire uniquement — AUCUN code runtime modifié hors flags de safe-stop (§4 ci-dessous).**
 **SOURCE D'AUTORITÉ : `~/Claude-HQ/RAPPORT_OPTIMISATION_V4_GPT.md` (validé GO Boss le 18/07) + `~/Claude-HQ/DEFECTS_LEDGER.md` (D-001→D-043).**
 
+> **ADDENDUM M0.1 (patch, 2026-07-18, suite contre-review externe — intégrité PASS, cohérence
+> sémantique FAIL, activation NO-GO)** : ce rapport est un enregistrement HISTORIQUE, non
+> réécrit. Deux corrections à lire avec lui, pas dans lui : (1) la ligne SOURCE D'AUTORITÉ
+> ci-dessus dit « validé GO Boss le 18/07 » sans préciser QUOI — le GO du 18/07 portait sur la
+> DIRECTION (utiliser le rapport GPT comme source pour M0), jamais sur le contenu précis de
+> `SYSTEM_CONSTITUTION_V4.md`/`SPEC_INDEX_V4.json` produits par CE run ; voir
+> `SYSTEM_CONSTITUTION_V4.md` (patch M0.1) pour la formulation corrigée. (2) `SPEC_INDEX_V4.json`
+> cité tout au long de ce rapport est SUPERSEDED par `SPEC_BUNDLE_MANIFEST_V4.json` +
+> `ACTIVATION_RECORD_V4.json` (M0.1 deliverable 1 — fin de la circularité d'activation,
+> `DECISION_LOG.jsonl` sorti du bundle) ; `specs/cv_bot.yaml` cité ici a déménagé vers
+> `~/job-opportunity-radar/governance/PROJECT_SPEC_V4.yaml` (deliverable 4). Détails complets :
+> `M0.1_PATCH_REPORT.md`.
+
 Le Boss juge sur la lecture de la Constitution + l'index (~10 min), pas sur ce rapport.
 **Chaque gate ci-dessous est une commande EXÉCUTÉE avec sa sortie réelle**, pas une déclaration.
 

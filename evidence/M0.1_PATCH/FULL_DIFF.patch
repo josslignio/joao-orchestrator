@@ -1,0 +1,1861 @@
+diff --git a/ACTIVATION_RECORD_V4.json b/ACTIVATION_RECORD_V4.json
+new file mode 100644
+index 0000000..b115c11
+--- /dev/null
++++ b/ACTIVATION_RECORD_V4.json
+@@ -0,0 +1,16 @@
++{
++  "schema_version": 1,
++  "activation_id": "ACT-V4-PENDING",
++  "bundle_version": "4.0.0",
++  "bundle_sha256_at_generation": "9560d7400d1a5ccaec881e089725e9f85d3fde62ebd6e477fbbe5505b06a71db",
++  "generated_at": "2026-07-18T15:27:51Z",
++  "boss_go": {
++    "given": false,
++    "identity": null,
++    "date": null,
++    "hash_confirmed": null,
++    "version_confirmed": null
++  },
++  "runtime_authority": false,
++  "note": "Enregistrement SÉPARÉ du bundle (fin de la circularité d'activation, patch M0.1 deliverable 1). Le bundle ne s'auto-déclare jamais signé (C-1/C-2, D-038) — silence ≠ GO. `runtime_authority` ne passe à `true` que si un GO Boss explicite (identité + hash + version) remplit `boss_go` ci-dessus ET que `boss_go.hash_confirmed` == `bundle_sha256_at_generation` du bundle SIGNÉ (pas d'un bundle regénéré depuis). DECISION_LOG.jsonl reste hors bundle et hors de ce record : c'est un journal vivant, jamais une autorité machine (Constitution §1.6)."
++}
+diff --git a/M0.1_PATCH_REPORT.md b/M0.1_PATCH_REPORT.md
+new file mode 100644
+index 0000000..ccaca9b
+--- /dev/null
++++ b/M0.1_PATCH_REPORT.md
+@@ -0,0 +1,214 @@
++# RAPPORT — M0.1 « PATCH FINAL AVANT GO » (correctif documentaire)
++
++**RUN_ID: M0.1 · MILESTONE_ID: M0 · RISK_BOUNDARY: gouvernance documentaire uniquement (+ 1
++fichier de spec déplacé vers `~/job-opportunity-radar`) · repos `~/joao-orchestrator`
++(principal) + `~/job-opportunity-radar` · branche `docs/m0-authority-v4` (joao-orchestrator)
++· 2026-07-18 · Sonnet · autonome.**
++
++**SOURCE** : contre-review externe du package M0 (verdict : intégrité PASS · cohérence
++sémantique FAIL · activation NO-GO). Carte : `~/Claude-HQ/JOAO_RUN_CARD_M01_PATCH_ACTIVATION.md`.
++**Aucun code A0/CV-SEC dans ce run. Ni merge, ni push.**
++
++---
++
++## 1. LES 8 CORRECTIFS — LIVRÉS
++
++### D1 — Fin de la circularité d'activation
++`SPEC_INDEX_V4.json` (qui incluait `DECISION_LOG.jsonl` dans son propre ensemble hashé — la
++circularité : un document qui grossit avec l'historique de sa propre validation) est
++**remplacé** par deux fichiers séparés :
++- `SPEC_BUNDLE_MANIFEST_V4.json` — bundle IMMUABLE : Constitution + 7 specs locales +
++  roadmap + traçabilité + références externes typées. **SANS** `DECISION_LOG.jsonl`.
++  `bundle_sha256 = 9560d7400d1a5ccaec881e089725e9f85d3fde62ebd6e477fbbe5505b06a71db`.
++- `ACTIVATION_RECORD_V4.json` — enregistrement SÉPARÉ du GO Boss, référence
++  `bundle_sha256_at_generation`. Émis avec `boss_go.given: false` / `runtime_authority: false`
++  (jamais auto-signé, D-038).
++- `DECISION_LOG.jsonl` devient un journal VIVANT, hors bundle, lu directement par
++  `spec_loader.py` (non sha256-vérifié — c'est le point : il peut recevoir de nouvelles
++  entrées sans jamais invalider le hash du bundle).
++
++**Preuve adversariale EXÉCUTÉE réellement** (pas seulement affirmée) : une décision test a
++été ajoutée à `DECISION_LOG.jsonl` APRÈS génération du bundle, `load_active_specs('.')`
++re-exécuté avec succès, `bundle_sha256` relu identique avant/après, puis le fichier restauré
++(`git diff DECISION_LOG.jsonl` confirmé vide) :
++```
++loaded OK after decision log mutation — 9 decisions
++bundle_sha256 unchanged: YES
++```
++`governance/spec_loader.py` réécrit en conséquence (`_VerifiedBundle`, lecture directe de
++`DECISION_LOG.jsonl`, `LoadedSpecs.runtime_authority` qui ne lit QUE `ACTIVATION_RECORD_V4.json`,
++jamais le bundle). `scripts/build_spec_index.py` retiré, remplacé par
++`scripts/build_spec_bundle.py` + `scripts/build_activation_record.py`.
++
++### D2 — Statut corrigé dans la Constitution
++`SYSTEM_CONSTITUTION_V4.md` : `STATUS: CANDIDATE · RUNTIME_AUTHORITY: false ·
++SOURCE_STATUS: proposed_not_signed`. La phrase source reformulée explicite que le GO du 18/07
++portait sur la **DIRECTION** (utiliser le rapport GPT comme source pour M0, DEC-008) — **pas**
++sur le contenu précis de la Constitution ni du bundle. La formulation ambiguë du rapport M0
++(« validé GO Boss le 18/07 » appliquée à CE document) est retirée ; un addendum non-destructif
++a été ajouté en tête de `M0_AUTORITE_V4_REPORT.md` (enregistrement historique non réécrit)
++pointant vers cette correction.
++
++### D3 — Roadmap M0 honnête (D-043)
++`ROADMAP_V4.md`, section M0 : la claim « `/pkg/` bloqué » retirée du périmètre M0. M0 prouve
++exactement : ALPHA affiché · Apply Assist suspendu (hérité) · claims trompeuses retirées ·
++documents candidats générés ET vérifiés en lecture (G1+G2). Le blocage `/pkg/` est explicitement
++attribué à CV-SEC/M1-B (`governance/PROJECT_SPEC_V4.yaml` CV-3) — aucun code produit CV bot
++n'est touché par `joao-orchestrator`.
++
++### D4 — Isolation produit restaurée
++`tests/test_project_isolation.py::test_no_product_repository_files` : l'exception `specs/`
++introduite par M0 est **retirée**. `specs/cv_bot.yaml` déplacé vers
++`~/job-opportunity-radar/governance/PROJECT_SPEC_V4.yaml` (contenu inchangé — CV-1→CV-10
++identiques). JOÃO référence ce fichier comme une **référence externe typée**
++(`{project_id: cv-bot, repository, spec_path, version, sha256}`) dans
++`SPEC_BUNDLE_MANIFEST_V4.json/external_spec_references`, vérifiée par
++`governance/spec_loader.py::_verify_external_reference`. **4 tests d'attaque exécutés** (+ 1
++test symlink supplémentaire) — `tests/test_m0_spec_loader.py` :
++- référence valide → acceptée (`test_external_reference_valid_is_accepted`)
++- fichier absent → refusé (`test_external_reference_missing_file_refused`, `SpecIntegrityError: missing on disk`)
++- mauvais hash → refusé (`test_external_reference_wrong_hash_refused`, `SpecIntegrityError: sha256 mismatch`)
++- path traversal (`../secret_outside_repo.yaml`) → refusé (`test_external_reference_path_traversal_refused`)
++- symlink hors repo → refusé (`test_external_reference_symlink_escape_refused`)
++
++Effet de bord découvert EN COURS DE ROUTE (pas anticipé par la carte) : `spec_loader.py`
++nommait littéralement `job-opportunity-radar` dans son docstring — `tests/test_package_boundaries.py::test_no_concrete_product_identifiers_in_canonical_package`
++(test PRÉEXISTANT, non modifié par ce run) l'a détecté et fait échouer la suite. Corrigé en
++généralisant le docstring (aucun identifiant produit concret dans `src/joao_orchestrator` —
++le nom du repo référencé vit uniquement dans les données du manifest, jamais dans le code).
++C'est exactement la classe de bug que D4 devait éliminer, et le filet existant l'a attrapé.
++
++### D5 — Specs interprétées : validation explicite demandée
++`specs/product_ui.yaml` et `specs/operations.yaml` **restent DANS le bundle** (choix par
++défaut de la carte). Chaque fichier porte désormais `boss_validation_requested: true` et un
++`boss_summary` (10 lignes, une par groupe d'exigences) pour une lecture rapide. Le GO Boss
++portera sur le bundle **COMPLET** (C-2 : rien d'implicite) — ces résumés ne remplacent pas la
++lecture des 18 exigences (UI-1→9, OPS-1→9), ils la préparent.
++
++### D6 — Spec métier CV bot (0 UNMAPPED)
++`~/job-opportunity-radar/governance/cv_bot_business_rules.yaml` créé : 11 exigences
++CVBIZ-1→CVBIZ-11, une par défaut UNMAPPED (D-005, D-006, D-012, D-013, D-017, D-022, D-025,
++D-026, D-027, D-033, D-040), chacune avec statement/gate/`roadmap_milestone` (`M5` pour 10
++d'entre elles — graduation métier vers le code, cf. `ROADMAP_V4.md` M5 ; `CV-SEC` pour
++CVBIZ-9/D-027, liée au filet Apply Assist)/status transcrit du ledger (`FIXÉ`→`SATISFIED`,
++`OUVERT`→`PLANNED`, `LARGEMENT FIXÉ`→`IN_PROGRESS`). `scripts/build_traceability.py` étendu
++pour lire les specs externes (`governance/PROJECT_SPEC_V4.yaml` +
++`governance/cv_bot_business_rules.yaml`) en plus de `specs/*.yaml` local.
++**Résultat mesuré** :
++```
++$ python3 scripts/build_traceability.py
++wrote TRACEABILITY_V4.jsonl — 84 rows (84 mapped, 0 UNMAPPED_PENDING_SPEC)
++```
++0/84 `UNMAPPED_PENDING_SPEC` (était 11/84 avant ce patch).
++
++### D7 — Dépendances reproductibles
++`requirements.txt` : `PyYAML>=6.0` → `PyYAML==6.0.3` (version réellement testée, `python3 -c
++"import yaml; print(yaml.__version__)"` → `6.0.3`). `requirements.lock.txt` créé : 73 hashes
++sha256 (72 wheels + 1 sdist, TOUS les artefacts publiés de cette release exacte, récupérés via
++`https://pypi.org/pypi/PyYAML/6.0.3/json`, jamais tapés à la main). **Installation vérifiée
++réellement** dans un venv jetable :
++```
++$ python3 -m pip install --require-hashes -r requirements.lock.txt
++Successfully installed PyYAML-6.0.3
++```
++
++### D8 — Package de preuve v2
++Voir `evidence/M0.1_PATCH/` (créé par ce run) : `FULL_DIFF.patch` (diff complet, fichier),
++`PYTEST_FULL_OUTPUT.txt` (sortie brute de la suite complète re-exécutée), `PYTEST_ISOLATION_OUTPUT.txt`
++(sortie brute de `test_project_isolation.py -v`), `SUPERSEDED_LIST.txt` (7/7 re-vérifiés),
++`ROLLBACK_COMMAND.txt` (commande, non exécutée — voir NON VÉRIFIÉ point 3), et
++`MANIFEST.json` calculé APRÈS création des artefacts ci-dessus (sha256 de chacun).
++
++---
++
++## 2. TESTS — RÉ-EXÉCUTÉS RÉELLEMENT
++
++```
++$ python3 -m pytest tests/ -q
++287 passed, 2 warnings in 19.11s
++```
++280 (baseline M0) + 7 nouveaux : 1 (decision-log-mutation-ne-casse-rien) + 5 (les attaques
++référence externe D4) + 1 (0 UNMAPPED intégration D6). Aucune régression sur les 280
++existants.
++
++## 3. HASHES À SIGNER (patch M0.1)
++
++| Document | sha256 |
++|---|---|
++| `SPEC_BUNDLE_MANIFEST_V4.json` (bundle entier) | `9560d7400d1a5ccaec881e089725e9f85d3fde62ebd6e477fbbe5505b06a71db` |
++| `SYSTEM_CONSTITUTION_V4.md` | `138280b6352b04314cc2a31494d1a3fe4a333b9ce2388b66f65424f162a1543e` |
++| `ROADMAP_V4.md` | `e6c659de4fdeb65e45d8c4994b0ba5821c864a303303c1a4999a304ca9bf3cb4` |
++| `TRACEABILITY_V4.jsonl` | `6b44db4a1a98c2c1a90c4e685b745719face518dd01fcc41dfb048d3a24040bc` |
++| référence externe `cv-bot` (`~/job-opportunity-radar/governance/PROJECT_SPEC_V4.yaml`) | `c99669d3cbd1ef19252876cb747a9f7c3f7cc7a4b4189b92947efbaecc8cec6b` |
++
++**Statut des specs interprétées** : `specs/product_ui.yaml` et `specs/operations.yaml` restent
++DANS le bundle ci-dessus (leurs hashes sont inclus dans `bundle_sha256`), `boss_validation_requested: true`
++sur les deux, résumés 10 lignes fournis (§D5). Aucune n'est retirée ni marquée DRAFT.
++
++## 4. BOSS_DECISION ATTENDUE
++
++« J'approuve ce bundle documentaire (hash `9560d7400d1a5ccaec881e089725e9f85d3fde62ebd6e477fbbe5505b06a71db`)
++comme baseline de construction pour A0 et CV-SEC. Il ne constitue pas encore une activation
++technique dans RunRuntime. »
++
++## ROLLBACK
++`git reset --hard 45e8986` sur `docs/m0-authority-v4` (joao-orchestrator, checkpoint pré-patch)
++· `git revert 81026ec` sur `~/job-opportunity-radar` (commit `governance(M0.1): add
++PROJECT_SPEC_V4.yaml + cv_bot_business_rules.yaml`, branche `feat/jc-m6-pilote` — jamais
++`reset --hard` : ce repo a un travail en cours non lié qu'un reset détruirait, voir NON VÉRIFIÉ
++point 5). Commande donnée, **non exécutée** en pratique (voir NON VÉRIFIÉ point 3).
++
++---
++
++## NON VÉRIFIÉ / LIMITES (obligatoire — son absence invalide ce rapport, D-035)
++
++1. **`ACTIVATION_RECORD_V4.json` n'a, à ce jour, aucun GO Boss** — `boss_go.given: false`,
++   `runtime_authority: false`. Ce patch ne demande PAS l'activation elle-même ; il corrige le
++   package pour la rendre demandable proprement (voir BOSS_DECISION §4, formulation imposée
++   par la contre-review — c'est un GO sur le bundle comme baseline, explicitement PAS une
++   activation runtime).
++
++2. **`bundle_sha256` n'est pas re-vérifié par `load_active_specs()` lui-même** — le loader
++   vérifie chaque document individuellement (sha256 par fichier) mais ne recalcule pas le
++   hash composite du bundle pour le comparer au champ `bundle_sha256` stocké dans le même
++   fichier (auto-référence : le recalculer changerait la valeur qu'on compare, même problème
++   que `SPEC_INDEX_V4.json` non hashé dans M0). C'est un choix de conception documenté, pas un
++   gap silencieux — le hash affiché sert de référence humaine pour le GO Boss (§4), la
++   protection machine reste le sha256 par document.
++
++3. **`ROLLBACK` n'a pas été exécuté en pratique** dans ce run — même limite que M0 (§NON
++   VÉRIFIÉ point 8 du rapport M0) : ce patch n'a produit aucun état destructeur nécessitant un
++   test réel, et exécuter `git reset --hard` sur une branche qui contient AUSSI le travail non
++   commité de ce patch aurait effacé le travail en cours pour le prouver — jugé non justifié
++   ici. Ne pas confondre avec la preuve de rollback RÉELLEMENT exécutée qu'exigera A0 (OPS-1).
++
++4. **`specs/product_ui.yaml` et `specs/operations.yaml` restent des INTERPRÉTATIONS** — les
++   résumés 10 lignes (D5) ne substituent pas un arbitrage Boss ligne-à-ligne ; ils sont un
++   raccourci de lecture, pas une validation. Le GO demandé (§4) couvre le bundle complet, mais
++   le Boss reste libre d'amender UI-*/OPS-* séparément après lecture (aucune de leurs 18
++   exigences n'a de source V4-report dédiée).
++
++5. **`~/job-opportunity-radar` avait un travail en cours non lié à ce patch** (branche
++   `feat/jc-m6-pilote`, nombreux fichiers modifiés/untracked — pipeline sourcing v2, dashboard,
++   assets cover-letter) au moment où ce run a créé
++   `governance/{PROJECT_SPEC_V4,cv_bot_business_rules}.yaml`. Ce run n'a touché AUCUN de ces
++   fichiers (vérifié : seuls les 2 nouveaux fichiers `governance/` sont ajoutés au commit de ce
++   patch dans ce repo) — mais cela signifie que le rollback y est un `git revert` du commit
++   précis, jamais un `reset --hard` (qui détruirait ce travail en cours).
++
++6. **La sha256 du bundle change dès que N'IMPORTE QUEL document du bundle change** — y compris
++   un futur amendement mineur de `specs/product_ui.yaml`. C'est voulu (immutabilité, D1) mais
++   signifie qu'un GO Boss donné sur le hash ci-dessus (§3) devient caduc à la moindre
++   modification ultérieure d'un document du bundle, même non liée — jamais un GO qui « suit »
++   silencieusement une évolution du contenu.
++
++7. **Ce rapport ne re-valide pas les 8 items déjà signalés NON VÉRIFIÉS dans
++   `M0_AUTORITE_V4_REPORT.md`** (ex. loader non câblé dans `RunRuntime`, discrepancies d'ID
++   CAS-1→6/7 et SEC-1→4/5 non résolues) — ils restent ouverts, non touchés par ce patch,
++   toujours signalés dans le rapport M0 (désormais avec l'addendum M0.1 en tête).
++
++8. **`requirements.lock.txt` couvre tous les artefacts PUBLIÉS de PyYAML==6.0.3** (72 wheels +
++   1 sdist, toutes plateformes/versions Python confondues) — mais ce repo n'a, à ce jour, été
++   testé QUE sous Python 3.12 macOS arm64 (l'unique interpréteur disponible dans cet
++   environnement). Les hashes des autres plateformes n'ont pas été vérifiés par une
++   installation réelle sur ces plateformes, seulement récupérés depuis l'API PyPI officielle.
+diff --git a/M0_AUTORITE_V4_REPORT.md b/M0_AUTORITE_V4_REPORT.md
+index 0ab9128..7214a90 100644
+--- a/M0_AUTORITE_V4_REPORT.md
++++ b/M0_AUTORITE_V4_REPORT.md
+@@ -3,6 +3,19 @@
+ **RISK_BOUNDARY : gouvernance documentaire uniquement — AUCUN code runtime modifié hors flags de safe-stop (§4 ci-dessous).**
+ **SOURCE D'AUTORITÉ : `~/Claude-HQ/RAPPORT_OPTIMISATION_V4_GPT.md` (validé GO Boss le 18/07) + `~/Claude-HQ/DEFECTS_LEDGER.md` (D-001→D-043).**
+ 
++> **ADDENDUM M0.1 (patch, 2026-07-18, suite contre-review externe — intégrité PASS, cohérence
++> sémantique FAIL, activation NO-GO)** : ce rapport est un enregistrement HISTORIQUE, non
++> réécrit. Deux corrections à lire avec lui, pas dans lui : (1) la ligne SOURCE D'AUTORITÉ
++> ci-dessus dit « validé GO Boss le 18/07 » sans préciser QUOI — le GO du 18/07 portait sur la
++> DIRECTION (utiliser le rapport GPT comme source pour M0), jamais sur le contenu précis de
++> `SYSTEM_CONSTITUTION_V4.md`/`SPEC_INDEX_V4.json` produits par CE run ; voir
++> `SYSTEM_CONSTITUTION_V4.md` (patch M0.1) pour la formulation corrigée. (2) `SPEC_INDEX_V4.json`
++> cité tout au long de ce rapport est SUPERSEDED par `SPEC_BUNDLE_MANIFEST_V4.json` +
++> `ACTIVATION_RECORD_V4.json` (M0.1 deliverable 1 — fin de la circularité d'activation,
++> `DECISION_LOG.jsonl` sorti du bundle) ; `specs/cv_bot.yaml` cité ici a déménagé vers
++> `~/job-opportunity-radar/governance/PROJECT_SPEC_V4.yaml` (deliverable 4). Détails complets :
++> `M0.1_PATCH_REPORT.md`.
++
+ Le Boss juge sur la lecture de la Constitution + l'index (~10 min), pas sur ce rapport.
+ **Chaque gate ci-dessous est une commande EXÉCUTÉE avec sa sortie réelle**, pas une déclaration.
+ 
+diff --git a/ROADMAP_V4.md b/ROADMAP_V4.md
+index 6b70d7f..4f1a694 100644
+--- a/ROADMAP_V4.md
++++ b/ROADMAP_V4.md
+@@ -13,13 +13,21 @@ celles qui restent à écrire sont marquées `(à écrire)`.
+ ---
+ 
+ ## M0 — SAFE STOP + AUTORITÉ DOCUMENTAIRE
+-**Carte** : `~/Claude-HQ/JOAO_RUN_CARD_M0_AUTORITE_V4.md` (ce run). **Dépend de** : rien (racine).
+-**Livre** : les 6 autorités (§1 de la Constitution) + safe-stop (Apply Assist désactivé, `/pkg/`
+-bloqué, promotions automatiques désactivées, statut `ALPHA`, claims exact-SHA retirées).
++**Carte** : `~/Claude-HQ/JOAO_RUN_CARD_M0_AUTORITE_V4.md` (M0) + `~/Claude-HQ/JOAO_RUN_CARD_M01_PATCH_ACTIVATION.md`
++(M0.1, correctif documentaire suite contre-review externe : intégrité PASS, cohérence
++sémantique FAIL). **Dépend de** : rien (racine).
++**Livre (périmètre RÉEL, corrigé D-043)** : les 7 autorités du bundle + l'activation record
++(§1 de la Constitution) · statut `ALPHA` affiché (README/CLI/UI/api.py) · Apply Assist
++SUSPENDU (hérité, non réactivé par ce run) · claims trompeuses retirées (exact-SHA,
++« validé GO Boss » sur les mauvais documents) · documents candidats générés ET vérifiés en
++lecture (loader G1 + traçabilité G2). **M0 ne bloque PAS `/pkg/`** — le blocage de l'accès
++brut `/pkg/` est une exigence CV-SEC (`governance/PROJECT_SPEC_V4.yaml` CV-3, M1-B), pas une
++livraison de M0 : aucun code produit CV bot n'est touché par ce dépôt.
+ **Exigences touchées** : UI-9, OPS-9 (product_ui.yaml, operations.yaml).
+ **Gate** : une seule roadmap active, aucune ancienne spec chargée par le loader (G1), GO Boss.
+-**Décision Boss** : GO sur `SYSTEM_CONSTITUTION_V4.md` + `SPEC_INDEX_V4.json` — c'est LA
+-signature qui active V4 (fait passer `RUNTIME_AUTHORITY` à `true`).
++**Décision Boss** : GO sur `SYSTEM_CONSTITUTION_V4.md` + `SPEC_BUNDLE_MANIFEST_V4.json` — c'est
++LA signature, enregistrée dans `ACTIVATION_RECORD_V4.json` (jamais dans le bundle lui-même),
++qui active V4 (fait passer `runtime_authority` à `true`).
+ 
+ ## VAGUE 1 — PARALLÈLE (repos distincts, reviews et promotions séparées)
+ 
+@@ -34,8 +42,10 @@ review→approbation→promotion→rollback sur une mission jouet, MÊME hash de
+ ### M1-B — CV-SEC V4 « sécurité du produit utilisé »
+ **Carte** : `~/Claude-HQ/CV_BOT_RUN_CARD_CVSEC_V4.md`. **Dépend de** : rien (repo distinct,
+ parallèle à M1-A). **Repo** : `~/job-opportunity-radar`.
+-**Exigences** : `specs/cv_bot.yaml` CV-1→CV-10 · `specs/security.yaml` SEC-1, SEC-2, SEC-4 ·
+-`specs/product_ui.yaml` UI-4, UI-8.
++**Exigences** : `governance/PROJECT_SPEC_V4.yaml` (ce repo, ex-`specs/cv_bot.yaml` — déplacé
++par le patch M0.1 D4) CV-1→CV-10 · `governance/cv_bot_business_rules.yaml` (ce repo, patch
++M0.1 D6) CVBIZ-1→CVBIZ-11 · JOÃO `specs/security.yaml` SEC-1, SEC-2, SEC-4 ·
++JOÃO `specs/product_ui.yaml` UI-4, UI-8.
+ **Gate** : les 10 attaques rouge→vert · parcours réel complet (offre→CV→lettre→download→
+ Apply Assist en DONNÉES DE TEST→revue humaine) · preuve que le flux quotidien du Boss est inchangé.
+ **Décision Boss** : GO sur le parcours + levée de la suspension Apply Assist (CV-10) — APRÈS
+@@ -73,7 +83,8 @@ utilisables au premier jugement · médiane ≤1 boucle de réparation · aucune
+ ## M5 — CLIQUET DÉTERMINISTE
+ **Carte** : (à écrire, dépend de M4 = poursuivre). Outils avec contrat, version, health
+ check, tests, mutation tests, fallback. **Aucune autonomie nocturne à ce stade.**
+-**Exigences** : `specs/memory.yaml` MEM-7 (graduation vers le code) · `specs/cv_bot.yaml`
++**Exigences** : `specs/memory.yaml` MEM-7 (graduation vers le code) ·
++`~/job-opportunity-radar/governance/cv_bot_business_rules.yaml` CVBIZ-1→CVBIZ-11
+ et `specs/product_ui.yaml` (règles CV/UX graduées hors prompt une fois couvertes par une gate technique).
+ 
+ ## M6 — CHAT CORE MINIMAL
+diff --git a/SPEC_INDEX_V4.json b/SPEC_BUNDLE_MANIFEST_V4.json
+similarity index 56%
+rename from SPEC_INDEX_V4.json
+rename to SPEC_BUNDLE_MANIFEST_V4.json
+index 98ed909..bd7d601 100644
+--- a/SPEC_INDEX_V4.json
++++ b/SPEC_BUNDLE_MANIFEST_V4.json
+@@ -1,15 +1,16 @@
+ {
+   "schema_version": 1,
+-  "version": "4.0.0",
+-  "generated_at": "2026-07-18T14:24:47Z",
+-  "runtime_authority": false,
+-  "active_documents": [
++  "bundle_version": "4.0.0",
++  "generated_at": "2026-07-18T15:27:46Z",
++  "immutable": true,
++  "immutability_note": "Ce manifest ne change JAMAIS après signature (ACTIVATION_RECORD_V4.json). DECISION_LOG.jsonl est un journal vivant HORS bundle (voir docstring) — il peut recevoir de nouvelles entrées sans jamais invalider bundle_sha256.",
++  "bundle_documents": [
+     {
+       "path": "SYSTEM_CONSTITUTION_V4.md",
+       "type": "constitution",
+       "version": "4.0.0",
+-      "sha256": "1324dac7f68304122b39efc6e25872de4bb33ba679987761d1fc41f92e46ad20",
+-      "bytes": 9321
++      "sha256": "138280b6352b04314cc2a31494d1a3fe4a333b9ce2388b66f65424f162a1543e",
++      "bytes": 12870
+     },
+     {
+       "path": "specs/runtime_integrity.yaml",
+@@ -46,47 +47,43 @@
+       "sha256": "c1278941ba7265fbfc5d2b24659a929e4e31bf814774f6ea57caf8b4d7b4cd68",
+       "bytes": 4598
+     },
+-    {
+-      "path": "specs/cv_bot.yaml",
+-      "type": "spec",
+-      "version": "4.0.0",
+-      "sha256": "920315f5589a7b224483ccf8793003e80630c50183fd4b34b117a6e0c02463cf",
+-      "bytes": 6408
+-    },
+     {
+       "path": "specs/product_ui.yaml",
+       "type": "spec",
+       "version": "4.0.0",
+-      "sha256": "3cff02e0a4cc8d5961f5a59870ad6f79043180509136ca82158a445999a01fa6",
+-      "bytes": 5772
++      "sha256": "fc15639987b5ec1d273ed7e633bb1250212a21e2a22eb0eab93af0b8ddce495a",
++      "bytes": 6755
+     },
+     {
+       "path": "specs/operations.yaml",
+       "type": "spec",
+       "version": "4.0.0",
+-      "sha256": "53ffb2e311da6e2a930f4fda36b6d3b9aa6f9284df7d3b0d1aea406000c6cf7b",
+-      "bytes": 5814
++      "sha256": "783911458777e08ea99e383bed83ae0034a963a092350ae075c820eb701160c0",
++      "bytes": 6914
+     },
+     {
+       "path": "ROADMAP_V4.md",
+       "type": "roadmap",
+       "version": "4.0.0",
+-      "sha256": "06ef5af883ba57e94caab59c081cf5dd6f4aca44db0c013457e331eb7b415851",
+-      "bytes": 8411
++      "sha256": "e6c659de4fdeb65e45d8c4994b0ba5821c864a303303c1a4999a304ca9bf3cb4",
++      "bytes": 9352
+     },
+     {
+       "path": "TRACEABILITY_V4.jsonl",
+       "type": "traceability",
+       "version": "4.0.0",
+-      "sha256": "35e0676af81a3450b95765a9b3776cfcbd81867d8268a3e8beb68314137590c3",
+-      "bytes": 20156
+-    },
++      "sha256": "6b44db4a1a98c2c1a90c4e685b745719face518dd01fcc41dfb048d3a24040bc",
++      "bytes": 18696
++    }
++  ],
++  "external_spec_references": [
+     {
+-      "path": "DECISION_LOG.jsonl",
+-      "type": "decision_log",
++      "project_id": "cv-bot",
++      "repository": "~/job-opportunity-radar",
++      "spec_path": "governance/PROJECT_SPEC_V4.yaml",
+       "version": "4.0.0",
+-      "sha256": "6cbdb9f3ba1647156e191f94771cae496601bc0b1c54cd3703d408d95539b5bc",
+-      "bytes": 4571
++      "sha256": "c99669d3cbd1ef19252876cb747a9f7c3f7cc7a4b4189b92947efbaecc8cec6b"
+     }
+-  ]
++  ],
++  "bundle_sha256": "9560d7400d1a5ccaec881e089725e9f85d3fde62ebd6e477fbbe5505b06a71db"
+ }
+diff --git a/SYSTEM_CONSTITUTION_V4.md b/SYSTEM_CONSTITUTION_V4.md
+index 67bf131..bff202d 100644
+--- a/SYSTEM_CONSTITUTION_V4.md
++++ b/SYSTEM_CONSTITUTION_V4.md
+@@ -1,25 +1,30 @@
+ # SYSTEM CONSTITUTION V4 — JOÃO.AI (autorité documentaire unique)
+-**STATUS: PROMOTED_PENDING_GO_BOSS · VERSION: 4.0.0 · DATE: 2026-07-18 · RUNTIME_AUTHORITY: intended-once-signed**
+-**SOURCE: transcription fidèle du rapport d'audit externe GPT (`~/Claude-HQ/RAPPORT_OPTIMISATION_V4_GPT.md`, §6-7), validé GO Boss le 18/07 comme source d'autorité du run M0. Ce document devient l'autorité RUNTIME du système au moment où le Boss dit GO explicitement sur CE document + `SPEC_INDEX_V4.json` (voir §9 — c'est la signature qui active V4).**
++**STATUS: CANDIDATE · VERSION: 4.0.0 · DATE: 2026-07-18 (patch M0.1) · RUNTIME_AUTHORITY: false · SOURCE_STATUS: proposed_not_signed**
++**SOURCE : transcription fidèle du rapport d'audit externe GPT (`~/Claude-HQ/RAPPORT_OPTIMISATION_V4_GPT.md`, §6-7). Le 18/07, le Boss a donné GO sur la DIRECTION uniquement — utiliser ce rapport externe comme source d'autorité pour le run M0 (voir `DECISION_LOG.jsonl` DEC-008) — PAS sur le contenu de CE document ni sur `SPEC_BUNDLE_MANIFEST_V4.json`. À ce jour, AUCUN GO Boss n'a jamais été donné sur ce document précis ou sur son hash : la formulation « validé GO Boss » utilisée par le rapport de run M0 pour CE document était trop large et a été retirée par le patch M0.1 (contre-review, cohérence sémantique FAIL). Ce document devient l'autorité RUNTIME du système SEULEMENT au moment où le Boss dit GO explicitement, par identité + hash + version (C-2 : silence ≠ GO), sur CE document + `SPEC_BUNDLE_MANIFEST_V4.json` — voir §8/§9 et `ACTIVATION_RECORD_V4.json`, où cette signature est enregistrée SÉPARÉMENT du bundle qu'elle valide.**
+ 
+-Le runtime ne parcourt jamais librement les anciens Markdown. Un document actif est un document listé dans `SPEC_INDEX_V4.json`, avec un sha256 vérifié — jamais « le dernier document en date ».
++Le runtime ne parcourt jamais librement les anciens Markdown. Un document actif est un document listé dans `SPEC_BUNDLE_MANIFEST_V4.json` (`bundle_documents`), avec un sha256 vérifié — jamais « le dernier document en date ». `DECISION_LOG.jsonl` n'est PAS un document du bundle : c'est un journal vivant, lu directement, qui continue de recevoir des décisions sans jamais invalider le hash du bundle (§1.7, fin de la circularité d'activation — patch M0.1 deliverable 1).
+ 
+ ---
+ 
+-## 1. LES 6 AUTORITÉS (l'architecture documentaire, rapport §5)
++## 1. LES 7 AUTORITÉS (l'architecture documentaire, rapport §5 — révisée par le patch M0.1 deliverable 1)
+ 
+ Les anciens documents restent dans l'historique, marqués `STATUS: SUPERSEDED / REPLACED_BY: MASTER_SPEC_V4 / RUNTIME_AUTHORITY: false` — leur contenu de fond survit **à l'intérieur** des specs V4, il n'est pas perdu, seulement plus une autorité d'exécution directe.
+ 
++**M0.1 a scindé l'ancien couple « index + décisions » en deux pièces distinctes pour tuer la circularité d'activation** (contre-review : un document qui grossit avec l'historique de ses propres validations ne peut jamais être une preuve stable de CE qu'il valide) :
++
+ 1. **`SYSTEM_CONSTITUTION_V4.md`** (ce document) — invariants universels : frontières de confiance, interdits, promotion, rôles, statuts, portée des preuves.
+-2. **`SPEC_INDEX_V4.json`** — index machine des documents actifs (versions + sha256 réels). Un document hors index n'est pas actif.
+-3. **`specs/*.yaml`** — 8 specs typées (`runtime_integrity`, `security`, `memory`, `phase0`, `provider_cascade`, `cv_bot`, `product_ui`, `operations`) ; chaque exigence porte : id immuable, statement, severity, verification_gate, roadmap_milestone, owner, status.
+-4. **`ROADMAP_V4.md`** — ne recopie jamais les specs ; référence leurs IDs, les dépendances, les gates, les décisions Boss.
+-5. **`TRACEABILITY_V4.jsonl`** — défaut → exigence → code → test → attaque → preuve → milestone → statut. Une exigence sans test/preuve/milestone est **invalide** (le générateur refuse de l'émettre — voir G2).
+-6. **`DECISION_LOG.jsonl`** — décisions Boss : décision, portée, date, version, hash, preuve, supersession. Le Markdown est une VUE humaine, jamais une autorité machine.
++2. **`SPEC_BUNDLE_MANIFEST_V4.json`** — le bundle IMMUABLE : Constitution + les 7 specs locales + roadmap + traçabilité (versions + sha256 réels), plus les références externes typées (`external_spec_references`). Un document hors bundle n'est pas actif. **Ne contient jamais `DECISION_LOG.jsonl`** (voir point 7) — et ne change plus jamais après signature : toute évolution est un nouveau bundle (v4.0.1, ...) avec un nouvel `ACTIVATION_RECORD_V4.json`.
++3. **`ACTIVATION_RECORD_V4.json`** — l'enregistrement SÉPARÉ du GO Boss : référence le hash du bundle signé (`bundle_sha256_at_generation`), porte `boss_go` (identité + date + hash confirmé + version confirmée) et `runtime_authority`. Le bundle ne s'auto-déclare JAMAIS signé (D-038, LOI 1) ; c'est ce fichier, et lui seul, qui peut affirmer `runtime_authority: true`, et seulement après un GO explicite dont le hash confirmé correspond exactement au bundle signé.
++4. **`specs/*.yaml`** — 7 specs locales typées (`runtime_integrity`, `security`, `memory`, `phase0`, `provider_cascade`, `product_ui`, `operations`) ; chaque exigence porte : id immuable, statement, severity, verification_gate, roadmap_milestone, owner, status. La 8ᵉ spec du rapport (`cv_bot`) n'est plus locale (voir point 6).
++5. **`ROADMAP_V4.md`** — ne recopie jamais les specs ; référence leurs IDs, les dépendances, les gates, les décisions Boss.
++6. **Référence externe typée `cv-bot`** (`SPEC_BUNDLE_MANIFEST_V4.json/external_spec_references`) — pointe vers `~/job-opportunity-radar/governance/PROJECT_SPEC_V4.yaml` (project_id, repository, spec_path, version, sha256), vérifiée par `governance/spec_loader.py::_verify_external_reference` (fichier absent, sha256 erroné, ou `spec_path` qui échappe au repo référencé — traversal/symlink — tous refusés). Le contenu (CV-1→CV-10) n'a pas changé depuis M0, seul son emplacement a bougé (isolation produit, patch M0.1 deliverable 4) ; les 11 défauts métier qu'il ne couvre pas sont désormais dans `~/job-opportunity-radar/governance/cv_bot_business_rules.yaml` (deliverable 6).
++7. **`TRACEABILITY_V4.jsonl`** — défaut → exigence → code → test → attaque → preuve → milestone → statut. Une exigence sans test/preuve/milestone est **invalide** (le générateur refuse de l'émettre — voir G2).
++
++**`DECISION_LOG.jsonl`** (décisions Boss : décision, portée, date, version, hash, preuve, supersession) reste un document du repo, mais **N'EST PLUS une des 7 autorités du bundle** — c'est un journal VIVANT, hors bundle, jamais sha256-vérifié contre le bundle, lu directement par `spec_loader.py`. Le Markdown est une VUE humaine, jamais une autorité machine. C'est précisément le fait qu'il vivait À L'INTÉRIEUR de l'ancien `SPEC_INDEX_V4.json` (M0) qui créait la circularité d'activation corrigée ici.
+ 
+ ## 2. LES 7 LOIS (C-1 → C-7, verbatim rapport §6)
+ 
+-**C-1 — Une seule autorité.** Le runtime charge exclusivement `SPEC_INDEX_V4.json` — jamais « le dernier document ».
++**C-1 — Une seule autorité.** Le runtime charge exclusivement `SPEC_BUNDLE_MANIFEST_V4.json` — jamais « le dernier document ».
+ 
+ **C-2 — Silence ≠ GO.** Sont INVALIDES comme validation : l'absence d'opposition, une demande de lancement, l'ouverture d'un rendu, un message ambigu, l'approbation d'un autre artefact. Un GO exige : identité + hash + version + rendu si visuel.
+ 
+@@ -80,7 +85,7 @@ SUITE-A monolithique · SUITE-B immédiatement après CV-SEC · Chat Era avant l
+ 
+ ## 8. CE DOCUMENT N'EST PAS ENCORE UNE AUTORITÉ RUNTIME
+ 
+-Conformément à C-2 et à la carte de run M0 (`~/Claude-HQ/JOAO_RUN_CARD_M0_AUTORITE_V4.md`), ce document et `SPEC_INDEX_V4.json` sont produits en statut `CANDIDATE`. Ils deviennent l'autorité (`RUNTIME_AUTHORITY: true`) au moment — et seulement au moment — où le Boss donne un GO explicite (identité + hash + version, C-2) sur leur lecture. Ce GO est demandé dans `BOSS_DECISION` du rapport de ce run — il n'est jamais auto-déclaré par la tour de contrôle (LOI 1, D-038).
++Conformément à C-2 et à la carte de run M0.1 (`~/Claude-HQ/JOAO_RUN_CARD_M01_PATCH_ACTIVATION.md`, correctif de `~/Claude-HQ/JOAO_RUN_CARD_M0_AUTORITE_V4.md`), ce document et `SPEC_BUNDLE_MANIFEST_V4.json` sont produits en statut `CANDIDATE`. Ils deviennent l'autorité (`runtime_authority: true`) au moment — et seulement au moment — où le Boss donne un GO explicite (identité + hash + version, C-2) sur leur lecture, GO qui est enregistré dans `ACTIVATION_RECORD_V4.json` — jamais dans le bundle lui-même. Ce GO est demandé dans `BOSS_DECISION` du rapport de ce run (`M0.1_PATCH_REPORT.md`) — il n'est jamais auto-déclaré par la tour de contrôle (LOI 1, D-038). Avant ce GO, `ACTIVATION_RECORD_V4.json` existe déjà sur disque avec `boss_go.given: false` et `runtime_authority: false` — sa présence ne préjuge en rien de la décision.
+ 
+ ## NON VÉRIFIÉ / LIMITES DE CE DOCUMENT
+ - C'est une **transcription** des §6-7 du rapport V4, pas une réinterprétation : les 7 lois et le vocabulaire sont repris texte-pour-texte quand le rapport les formule explicitement.
+diff --git a/TRACEABILITY_V4.jsonl b/TRACEABILITY_V4.jsonl
+index 6ca5c3d..96bfc80 100644
+--- a/TRACEABILITY_V4.jsonl
++++ b/TRACEABILITY_V4.jsonl
+@@ -1,18 +1,3 @@
+-{"defect": "D-021", "gate": "CVSEC-V4 BOSS_DECISION (parcours réel offre→CV→lettre dérivé du master, revue humaine du rendu)", "milestone": "M1-B", "requirement": "CV-1", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": "D-042", "gate": "CVSEC-V4 BOSS_DECISION (parcours réel offre→CV→lettre dérivé du master, revue humaine du rendu)", "milestone": "M1-B", "requirement": "CV-1", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": "D-009", "gate": "CVSEC-V4 deliverable 2 (extraction déterministe des champs avant tout LLM)", "milestone": "M1-B", "requirement": "CV-2", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": "D-014", "gate": "CVSEC-V4 deliverable 2 (extraction déterministe des champs avant tout LLM)", "milestone": "M1-B", "requirement": "CV-2", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": "D-030", "gate": "CVSEC-V4 ATTACK_TEST 6 (accès brut ex-/pkg/ → 404/403)", "milestone": "M1-B", "requirement": "CV-3", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": "D-008", "gate": "CVSEC-V4 ATTACK_TESTS 4 (PDF substitué → ⬇ bloqué) + 5 (manifest forgé → ⬇ bloqué)", "milestone": "M1-B", "requirement": "CV-4", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": "D-023", "gate": "CVSEC-V4 ATTACK_TESTS 4 (PDF substitué → ⬇ bloqué) + 5 (manifest forgé → ⬇ bloqué)", "milestone": "M1-B", "requirement": "CV-4", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": "D-028", "gate": "CVSEC-V4 ATTACK_TESTS 4 (PDF substitué → ⬇ bloqué) + 5 (manifest forgé → ⬇ bloqué)", "milestone": "M1-B", "requirement": "CV-4", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": null, "gate": "CVSEC-V4 ATTACK_TESTS 1 (faux domaine « greenhouse.evil.com ») + 2 (redirection externe) + 3 (localhost/IP privée)", "milestone": "M1-B", "requirement": "CV-5", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": "D-010", "gate": "CVSEC-V4 ATTACK_TEST 9 (question « détectée » non remplie → requires_human, jamais filled)", "milestone": "M1-B", "requirement": "CV-6", "severity": 2, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": "D-011", "gate": "CVSEC-V4 ATTACK_TEST 9 (question « détectée » non remplie → requires_human, jamais filled)", "milestone": "M1-B", "requirement": "CV-6", "severity": 2, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": "D-039", "gate": "CVSEC-V4 ATTACK_TEST 10 (lancement sans TTY → fenêtre reste ouverte, statut visible, D-039 re-vérifié)", "milestone": "M1-B", "requirement": "CV-7", "severity": 2, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": null, "gate": "CVSEC-V4 ATTACK_TEST 8 (accès screenshot PII sans token → refusé)", "milestone": "M1-B", "requirement": "CV-8", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": null, "gate": "CVSEC-V4 deliverable 7 (dates dynamiques, horloge système injectable en test)", "milestone": "M1-B", "requirement": "CV-9", "severity": 1, "spec": "cv_bot", "status": "PLANNED"}
+-{"defect": "D-039", "gate": "CVSEC-V4 BOSS_DECISION (GO sur le parcours + levée explicite de la suspension Apply Assist)", "milestone": "M1-B", "requirement": "CV-10", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
+ {"defect": "D-029", "gate": "A2 ATTACK_TEST 1 (leçon empoisonnée dans le ledger → reste quarantined, jamais injectée)", "milestone": "M2", "requirement": "MEM-1", "severity": 3, "spec": "memory", "status": "PLANNED"}
+ {"defect": null, "gate": "A2 deliverable 2 (bloc injecté [APPROVED_STRUCTURED_RULES], distinct de [UNTRUSTED_EXTERNAL_DATA])", "milestone": "M2", "requirement": "MEM-2", "severity": 3, "spec": "memory", "status": "PLANNED"}
+ {"defect": "D-029", "gate": "A2 ATTACK_TEST 5 (deux écritures concurrentes au journal → zéro collision, verrou)", "milestone": "M2", "requirement": "MEM-3", "severity": 3, "spec": "memory", "status": "PLANNED"}
+@@ -71,14 +56,29 @@
+ {"defect": null, "gate": "A0 ATTACK_TEST 6 (lecture secret ~/.config planté → bloqué)", "milestone": "M1-A", "requirement": "SEC-3", "severity": 3, "spec": "security", "status": "PLANNED"}
+ {"defect": null, "gate": "CVSEC-V4 ATTACK_TESTS 6 (accès brut ex-/pkg/) + 7 (cross-origin forgé) + 8 (screenshot PII sans token)", "milestone": "M1-B", "requirement": "SEC-4", "severity": 3, "spec": "security", "status": "PLANNED"}
+ {"defect": "D-038", "gate": "A2 ATTACK_TEST 2 (fausse ligne « GO Boss » écrite par un process → signature invalide, refusée)", "milestone": "M2", "requirement": "SEC-5", "severity": 3, "spec": "security", "status": "PLANNED"}
+-{"defect": "D-005", "gate": null, "milestone": null, "note": "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ.", "requirement": null, "spec": null, "status": "UNMAPPED_PENDING_SPEC"}
+-{"defect": "D-006", "gate": null, "milestone": null, "note": "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ.", "requirement": null, "spec": null, "status": "UNMAPPED_PENDING_SPEC"}
+-{"defect": "D-012", "gate": null, "milestone": null, "note": "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ.", "requirement": null, "spec": null, "status": "UNMAPPED_PENDING_SPEC"}
+-{"defect": "D-013", "gate": null, "milestone": null, "note": "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ.", "requirement": null, "spec": null, "status": "UNMAPPED_PENDING_SPEC"}
+-{"defect": "D-017", "gate": null, "milestone": null, "note": "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ.", "requirement": null, "spec": null, "status": "UNMAPPED_PENDING_SPEC"}
+-{"defect": "D-022", "gate": null, "milestone": null, "note": "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ.", "requirement": null, "spec": null, "status": "UNMAPPED_PENDING_SPEC"}
+-{"defect": "D-025", "gate": null, "milestone": null, "note": "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ.", "requirement": null, "spec": null, "status": "UNMAPPED_PENDING_SPEC"}
+-{"defect": "D-026", "gate": null, "milestone": null, "note": "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ.", "requirement": null, "spec": null, "status": "UNMAPPED_PENDING_SPEC"}
+-{"defect": "D-027", "gate": null, "milestone": null, "note": "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ.", "requirement": null, "spec": null, "status": "UNMAPPED_PENDING_SPEC"}
+-{"defect": "D-033", "gate": null, "milestone": null, "note": "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ.", "requirement": null, "spec": null, "status": "UNMAPPED_PENDING_SPEC"}
+-{"defect": "D-040", "gate": null, "milestone": null, "note": "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ.", "requirement": null, "spec": null, "status": "UNMAPPED_PENDING_SPEC"}
++{"defect": "D-021", "gate": "CVSEC-V4 BOSS_DECISION (parcours réel offre→CV→lettre dérivé du master, revue humaine du rendu)", "milestone": "M1-B", "requirement": "CV-1", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": "D-042", "gate": "CVSEC-V4 BOSS_DECISION (parcours réel offre→CV→lettre dérivé du master, revue humaine du rendu)", "milestone": "M1-B", "requirement": "CV-1", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": "D-009", "gate": "CVSEC-V4 deliverable 2 (extraction déterministe des champs avant tout LLM)", "milestone": "M1-B", "requirement": "CV-2", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": "D-014", "gate": "CVSEC-V4 deliverable 2 (extraction déterministe des champs avant tout LLM)", "milestone": "M1-B", "requirement": "CV-2", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": "D-030", "gate": "CVSEC-V4 ATTACK_TEST 6 (accès brut ex-/pkg/ → 404/403)", "milestone": "M1-B", "requirement": "CV-3", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": "D-008", "gate": "CVSEC-V4 ATTACK_TESTS 4 (PDF substitué → ⬇ bloqué) + 5 (manifest forgé → ⬇ bloqué)", "milestone": "M1-B", "requirement": "CV-4", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": "D-023", "gate": "CVSEC-V4 ATTACK_TESTS 4 (PDF substitué → ⬇ bloqué) + 5 (manifest forgé → ⬇ bloqué)", "milestone": "M1-B", "requirement": "CV-4", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": "D-028", "gate": "CVSEC-V4 ATTACK_TESTS 4 (PDF substitué → ⬇ bloqué) + 5 (manifest forgé → ⬇ bloqué)", "milestone": "M1-B", "requirement": "CV-4", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": null, "gate": "CVSEC-V4 ATTACK_TESTS 1 (faux domaine « greenhouse.evil.com ») + 2 (redirection externe) + 3 (localhost/IP privée)", "milestone": "M1-B", "requirement": "CV-5", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": "D-010", "gate": "CVSEC-V4 ATTACK_TEST 9 (question « détectée » non remplie → requires_human, jamais filled)", "milestone": "M1-B", "requirement": "CV-6", "severity": 2, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": "D-011", "gate": "CVSEC-V4 ATTACK_TEST 9 (question « détectée » non remplie → requires_human, jamais filled)", "milestone": "M1-B", "requirement": "CV-6", "severity": 2, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": "D-039", "gate": "CVSEC-V4 ATTACK_TEST 10 (lancement sans TTY → fenêtre reste ouverte, statut visible, D-039 re-vérifié)", "milestone": "M1-B", "requirement": "CV-7", "severity": 2, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": null, "gate": "CVSEC-V4 ATTACK_TEST 8 (accès screenshot PII sans token → refusé)", "milestone": "M1-B", "requirement": "CV-8", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": null, "gate": "CVSEC-V4 deliverable 7 (dates dynamiques, horloge système injectable en test)", "milestone": "M1-B", "requirement": "CV-9", "severity": 1, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": "D-039", "gate": "CVSEC-V4 BOSS_DECISION (GO sur le parcours + levée explicite de la suspension Apply Assist)", "milestone": "M1-B", "requirement": "CV-10", "severity": 3, "spec": "cv_bot", "status": "PLANNED"}
++{"defect": "D-005", "gate": "test géo 11/11 (test_geo_v2.py)", "milestone": "M5", "requirement": "CVBIZ-1", "severity": 2, "spec": "cv_bot_business_rules", "status": "SATISFIED"}
++{"defect": "D-006", "gate": "test_geo_v2.py", "milestone": "M5", "requirement": "CVBIZ-2", "severity": 2, "spec": "cv_bot_business_rules", "status": "SATISFIED"}
++{"defect": "D-012", "gate": "test_company_discipline", "milestone": "M5", "requirement": "CVBIZ-3", "severity": 2, "spec": "cv_bot_business_rules", "status": "SATISFIED"}
++{"defect": "D-013", "gate": "mesure par run : 499 slugs probés / 178 actifs, 14k offres brutes (résolution partielle, voir CVBIZ-7/D-025)", "milestone": "M5", "requirement": "CVBIZ-4", "severity": 1, "spec": "cv_bot_business_rules", "status": "IN_PROGRESS"}
++{"defect": "D-017", "gate": "parse_salary réel (Ashby $115-162k confirmé, DEC-006)", "milestone": "M5", "requirement": "CVBIZ-5", "severity": 2, "spec": "cv_bot_business_rules", "status": "SATISFIED"}
++{"defect": "D-022", "gate": "fix transplant XML appliqué et re-testé sur le master réel", "milestone": "M5", "requirement": "CVBIZ-6", "severity": 2, "spec": "cv_bot_business_rules", "status": "SATISFIED"}
++{"defect": "D-025", "gate": "bucket to_resolve mesuré vide sur un run complet", "milestone": "M5", "requirement": "CVBIZ-7", "severity": 1, "spec": "cv_bot_business_rules", "status": "PLANNED"}
++{"defect": "D-026", "gate": "registre vérifié identique/étendu sur 2 runs consécutifs", "milestone": "M5", "requirement": "CVBIZ-8", "severity": 1, "spec": "cv_bot_business_rules", "status": "PLANNED"}
++{"defect": "D-027", "gate": "documenté acceptable étage 1 ; re-testé à chaque évolution de CV-5 (Apply Assist)", "milestone": "CV-SEC", "requirement": "CVBIZ-9", "severity": 2, "spec": "cv_bot_business_rules", "status": "SATISFIED"}
++{"defect": "D-033", "gate": "tableau de rendement par plateforme présent dans chaque rapport de run de sourcing", "milestone": "M5", "requirement": "CVBIZ-10", "severity": 1, "spec": "cv_bot_business_rules", "status": "PLANNED"}
++{"defect": "D-040", "gate": "tests géo v3", "milestone": "M5", "requirement": "CVBIZ-11", "severity": 2, "spec": "cv_bot_business_rules", "status": "PLANNED"}
+diff --git a/evidence/M0.1_PATCH/PYTEST_FULL_OUTPUT.txt b/evidence/M0.1_PATCH/PYTEST_FULL_OUTPUT.txt
+new file mode 100644
+index 0000000..140311c
+--- /dev/null
++++ b/evidence/M0.1_PATCH/PYTEST_FULL_OUTPUT.txt
+@@ -0,0 +1,16 @@
++........................................................................ [ 25%]
++........................................................................ [ 50%]
++........................................................................ [ 75%]
++.......................................................................  [100%]
++=============================== warnings summary ===============================
++tests/failure_injection_test.py:14
++  /Users/jocelyngrosjean/joao-orchestrator/tests/failure_injection_test.py:14: PytestCollectionWarning: cannot collect test class 'TestResult' because it has a __init__ constructor (from: tests/failure_injection_test.py)
++    class TestResult(Enum):
++
++tests/test_package_boundaries.py::test_joss_compatibility_shim_exists
++  /Users/jocelyngrosjean/joao-orchestrator/tests/test_package_boundaries.py:27: DeprecationWarning: joss_orchestrator is a compatibility shim; import from joao_orchestrator.
++    import joss_orchestrator
++
++-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
++287 passed, 2 warnings in 17.61s
++exit=0
+diff --git a/evidence/M0.1_PATCH/PYTEST_ISOLATION_OUTPUT.txt b/evidence/M0.1_PATCH/PYTEST_ISOLATION_OUTPUT.txt
+new file mode 100644
+index 0000000..f7790a2
+--- /dev/null
++++ b/evidence/M0.1_PATCH/PYTEST_ISOLATION_OUTPUT.txt
+@@ -0,0 +1,24 @@
++============================= test session starts ==============================
++platform darwin -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0 -- /Library/Frameworks/Python.framework/Versions/3.12/bin/python3
++cachedir: .pytest_cache
++rootdir: /Users/jocelyngrosjean/joao-orchestrator
++configfile: setup.cfg
++collecting ... collected 5 items
++
++tests/test_project_isolation.py::test_no_product_repository_files ✓ No product repository files in JOÃO (specs/ exception retired, M0.1 D4)
++PASSED
++tests/test_project_isolation.py::test_git_ignores_product_repos ⚠ Warning: Product pattern 'weekly-trading-radar' not in .gitignore
++⚠ Warning: Product pattern 'job-cv-auto' not in .gitignore
++⚠ Warning: Product pattern 'trading-radar' not in .gitignore
++⚠ Warning: Product pattern 'cv-bot' not in .gitignore
++✓ .gitignore configured for project isolation
++PASSED
++tests/test_project_isolation.py::test_no_cross_product_git_modules ✓ No cross-product git modules
++PASSED
++tests/test_project_isolation.py::test_documentation_mentions_isolation ⚠ Warning: README.md does not mention project isolation
++PASSED
++tests/test_project_isolation.py::test_runtime_configuration_isolation ✓ Runtime configuration has governance policies: ['context', 'quota', 'governor', 'limit', 'policy']
++PASSED
++
++============================== 5 passed in 0.12s ===============================
++exit=0
+diff --git a/evidence/M0.1_PATCH/ROLLBACK_COMMAND.txt b/evidence/M0.1_PATCH/ROLLBACK_COMMAND.txt
+new file mode 100644
+index 0000000..8275d4a
+--- /dev/null
++++ b/evidence/M0.1_PATCH/ROLLBACK_COMMAND.txt
+@@ -0,0 +1,14 @@
++ROLLBACK — M0.1 patch (never executed live — see M0.1_PATCH_REPORT.md NON VÉRIFIÉ point 3/5)
++
++joao-orchestrator (this repo), branch docs/m0-authority-v4:
++  git reset --hard 45e8986
++  # 45e8986 = "docs(M0): end-of-run report — gates G1-G4 executed, safe-stop applied, NON VÉRIFIÉ"
++  # (the pre-M0.1 checkpoint; HEAD was already at this commit when M0.1 started, nothing
++  # else committed on top before this patch)
++
++~/job-opportunity-radar, branch feat/jc-m6-pilote (has unrelated in-progress work — see
++NON VÉRIFIÉ point 5 — NEVER use reset --hard here, it would destroy that work):
++  git revert 81026ec
++  # 81026ec = "governance(M0.1): add PROJECT_SPEC_V4.yaml + cv_bot_business_rules.yaml"
++  # reverts ONLY governance/PROJECT_SPEC_V4.yaml + governance/cv_bot_business_rules.yaml,
++  # leaves every other pending change in the branch untouched
+diff --git a/evidence/M0.1_PATCH/SUPERSEDED_LIST.txt b/evidence/M0.1_PATCH/SUPERSEDED_LIST.txt
+new file mode 100644
+index 0000000..c3728e9
+--- /dev/null
++++ b/evidence/M0.1_PATCH/SUPERSEDED_LIST.txt
+@@ -0,0 +1,9 @@
++SUPERSEDED header check — 7 legacy docs in ~/Claude-HQ (re-verified, unchanged by M0.1)
++$ for f in ...; do head -3 "$f" | grep -q SUPERSEDED && echo OK || echo MISSING; done
++OK  JOAO_MASTER_ROADMAP_20260717.md
++OK  JOAO_RUN_CARD_SUITE_A.md
++OK  JOAO_RUN_CARD_SUITE_B.md
++OK  JOAO_RUN_CARD_BIGRUN_SUITE.md
++OK  JOAO_SYNTHESE_DEUX_PANELS_20260718.md
++OK  JOAO_RAPPORT_OPTIMISATION_PANEL_20260718.md
++OK  JOAO_PHASE0_PROTOCOL.md
+diff --git a/requirements.lock.txt b/requirements.lock.txt
+new file mode 100644
+index 0000000..485210b
+--- /dev/null
++++ b/requirements.lock.txt
+@@ -0,0 +1,79 @@
++# Lock file — hashes for PyYAML==6.0.3 (M0.1 patch, deliverable 7).
++# Generated from https://pypi.org/pypi/PyYAML/6.0.3/json — every published artifact
++# (wheels + sdist) of the exact pinned version, sha256 as published by PyPI.
++# Regenerate: fetch that URL again and re-emit if PyYAML is ever re-pinned.
++# Install with: python3 -m pip install --require-hashes -r requirements.lock.txt
++PyYAML==6.0.3 \
++    --hash=sha256:c2514fceb77bc5e7a2f7adfaa1feb2fb311607c9cb518dbc378688ec73d8292f \
++    --hash=sha256:9c57bb8c96f6d1808c030b1687b9b5fb476abaa47f0db9c0101f5e9f394e97f4 \
++    --hash=sha256:efd7b85f94a6f21e4932043973a7ba2613b059c4a000551892ac9f1d11f5baf3 \
++    --hash=sha256:22ba7cfcad58ef3ecddc7ed1db3409af68d023b7f940da23c6c2a1890976eda6 \
++    --hash=sha256:6344df0d5755a2c9a276d4473ae6b90647e216ab4757f8426893b5dd2ac3f369 \
++    --hash=sha256:3ff07ec89bae51176c0549bc4c63aa6202991da2d9a6129d7aef7f1407d3f295 \
++    --hash=sha256:5cf4e27da7e3fbed4d6c3d8e797387aaad68102272f8f9752883bc32d61cb87b \
++    --hash=sha256:214ed4befebe12df36bcc8bc2b64b396ca31be9304b8f59e25c11cf94a4c033b \
++    --hash=sha256:02ea2dfa234451bbb8772601d7b8e426c2bfa197136796224e50e35a78777956 \
++    --hash=sha256:b30236e45cf30d2b8e7b3e85881719e98507abed1011bf463a8fa23e9c3e98a8 \
++    --hash=sha256:66291b10affd76d76f54fad28e22e51719ef9ba22b29e1d7d03d6777a9174198 \
++    --hash=sha256:9c7708761fccb9397fe64bbc0395abcae8c4bf7b0eac081e12b809bf47700d0b \
++    --hash=sha256:418cf3f2111bc80e0933b2cd8cd04f286338bb88bdc7bc8e6dd775ebde60b5e0 \
++    --hash=sha256:5e0b74767e5f8c593e8c9b5912019159ed0533c70051e9cce3e8b6aa699fcd69 \
++    --hash=sha256:28c8d926f98f432f88adc23edf2e6d4921ac26fb084b028c733d01868d19007e \
++    --hash=sha256:bdb2c67c6c1390b63c6ff89f210c8fd09d9a1217a465701eac7316313c915e4c \
++    --hash=sha256:44edc647873928551a01e7a563d7452ccdebee747728c1080d881d68af7b997e \
++    --hash=sha256:652cb6edd41e718550aad172851962662ff2681490a8a711af6a4d288dd96824 \
++    --hash=sha256:10892704fc220243f5305762e276552a0395f7beb4dbf9b14ec8fd43b57f126c \
++    --hash=sha256:850774a7879607d3a6f50d36d04f00ee69e7fc816450e5f7e58d7f17f1ae5c00 \
++    --hash=sha256:b8bb0864c5a28024fac8a632c443c87c5aa6f215c0b126c449ae1a150412f31d \
++    --hash=sha256:1d37d57ad971609cf3c53ba6a7e365e40660e3be0e5175fa9f2365a379d6095a \
++    --hash=sha256:37503bfbfc9d2c40b344d06b2199cf0e96e97957ab1c1b546fd4f87e53e5d3e4 \
++    --hash=sha256:8098f252adfa6c80ab48096053f512f2321f0b998f98150cea9bd23d83e1467b \
++    --hash=sha256:9f3bfb4965eb874431221a3ff3fdcddc7e74e3b07799e0e84ca4a0f867d449bf \
++    --hash=sha256:7f047e29dcae44602496db43be01ad42fc6f1cc0d8cd6c83d342306c32270196 \
++    --hash=sha256:fc09d0aa354569bc501d4e787133afc08552722d3ab34836a80547331bb5d4a0 \
++    --hash=sha256:9149cad251584d5fb4981be1ecde53a1ca46c891a79788c0df828d2f166bda28 \
++    --hash=sha256:5fdec68f91a0c6739b380c83b951e2c72ac0197ace422360e6d5a959d8d97b2c \
++    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc \
++    --hash=sha256:8dc52c23056b9ddd46818a57b78404882310fb473d63f17b07d5c40421e47f8e \
++    --hash=sha256:41715c910c881bc081f1e8872880d3c650acf13dfa8214bad49ed4cede7c34ea \
++    --hash=sha256:96b533f0e99f6579b3d4d4995707cf36df9100d67e0c8303a0c55b27b5f99bc5 \
++    --hash=sha256:5fcd34e47f6e0b794d17de1b4ff496c00986e1c83f7ab2fb8fcfe9616ff7477b \
++    --hash=sha256:64386e5e707d03a7e172c0701abfb7e10f0fb753ee1d773128192742712a98fd \
++    --hash=sha256:8da9669d359f02c0b91ccc01cac4a67f16afec0dac22c2ad09f46bee0697eba8 \
++    --hash=sha256:2283a07e2c21a2aa78d9c4442724ec1eb15f5e42a723b99cb3d822d48f5f7ad1 \
++    --hash=sha256:ee2922902c45ae8ccada2c5b501ab86c36525b883eff4255313a253a3160861c \
++    --hash=sha256:a33284e20b78bd4a18c8c2282d549d10bc8408a2a7ff57653c0cf0b9be0afce5 \
++    --hash=sha256:0f29edc409a6392443abf94b9cf89ce99889a1dd5376d94316ae5145dfedd5d6 \
++    --hash=sha256:f7057c9a337546edc7973c0d3ba84ddcdf0daa14533c2065749c9075001090e6 \
++    --hash=sha256:eda16858a3cab07b80edaf74336ece1f986ba330fdb8ee0d6c0d68fe82bc96be \
++    --hash=sha256:d0eae10f8159e8fdad514efdc92d74fd8d682c933a6dd088030f3834bc8e6b26 \
++    --hash=sha256:79005a0d97d5ddabfeeea4cf676af11e647e41d81c9a7722a193022accdb6b7c \
++    --hash=sha256:5498cd1645aa724a7c71c8f378eb29ebe23da2fc0d7a08071d89469bf1d2defb \
++    --hash=sha256:8d1fab6bb153a416f9aeb4b8763bc0f22a5586065f86f7664fc23339fc1c1fac \
++    --hash=sha256:34d5fcd24b8445fadc33f9cf348c1047101756fd760b4dacb5c3e99755703310 \
++    --hash=sha256:501a031947e3a9025ed4405a168e6ef5ae3126c59f90ce0cd6f2bfc477be31b7 \
++    --hash=sha256:b3bc83488de33889877a0f2543ade9f70c67d66d9ebb4ac959502e12de895788 \
++    --hash=sha256:c458b6d084f9b935061bc36216e8a69a7e293a2f1e68bf956dcd9e6cbcd143f5 \
++    --hash=sha256:7c6610def4f163542a622a73fb39f534f8c101d690126992300bf3207eab9764 \
++    --hash=sha256:5190d403f121660ce8d1d2c1bb2ef1bd05b5f68533fc5c2ea899bd15f4399b35 \
++    --hash=sha256:4a2e8cebe2ff6ab7d1050ecd59c25d4c8bd7e6f400f5f82b96557ac0abafd0ac \
++    --hash=sha256:93dda82c9c22deb0a405ea4dc5f2d0cda384168e466364dec6255b293923b2f3 \
++    --hash=sha256:02893d100e99e03eda1c8fd5c441d8c60103fd175728e23e431db1b589cf5ab3 \
++    --hash=sha256:c1ff362665ae507275af2853520967820d9124984e0f7466736aea23d8611fba \
++    --hash=sha256:6adc77889b628398debc7b65c073bcb99c4a0237b248cacaf3fe8a557563ef6c \
++    --hash=sha256:a80cb027f6b349846a3bf6d73b5e95e782175e52f22108cfa17876aaeff93702 \
++    --hash=sha256:00c4bdeba853cc34e7dd471f16b4114f4162dc03e6b7afcc2128711f0eca823c \
++    --hash=sha256:66e1674c3ef6f541c35191caae2d429b967b99e02040f5ba928632d9a7f0f065 \
++    --hash=sha256:16249ee61e95f858e83976573de0f5b2893b3677ba71c9dd36b9cf8be9ac6d65 \
++    --hash=sha256:4ad1906908f2f5ae4e5a8ddfce73c320c2a1429ec52eafd27138b7f1cbe341c9 \
++    --hash=sha256:ebc55a14a21cb14062aa4162f906cd962b28e2e9ea38f9b4391244cd8de4ae0b \
++    --hash=sha256:b865addae83924361678b652338317d1bd7e79b1f4596f96b96c77a5a34b34da \
++    --hash=sha256:c3355370a2c156cffb25e876646f149d5d68f5e0a3ce86a5084dd0b64a994917 \
++    --hash=sha256:3c5677e12444c15717b902a5798264fa7909e41153cdf9ef7ad571b704a63dd9 \
++    --hash=sha256:5ed875a24292240029e4483f9d4a4b8a1ae08843b9c54f43fcc11e404532a8a5 \
++    --hash=sha256:0150219816b6a1fa26fb4699fb7daa9caf09eb1999f3b70fb6e786805e80375a \
++    --hash=sha256:fa160448684b4e94d80416c0fa4aac48967a969efe22931448d853ada8baf926 \
++    --hash=sha256:27c0abcb4a5dac13684a37f76e701e054692a9b2d3064b70f5e4eb54810553d7 \
++    --hash=sha256:1ebe39cb5fc479422b83de611d14e2c0d3bb2a18bbcb01f229ab3cfbd8fee7a0 \
++    --hash=sha256:2e71d11abed7344e42a8849600193d15b6def118602c4c176f748e4583246007 \
++    --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f
+diff --git a/requirements.txt b/requirements.txt
+index c1a201d..c1c1ffd 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1 +1,5 @@
+-PyYAML>=6.0
++PyYAML==6.0.3
++# Pinned exact version (M0.1 patch, deliverable 7 — was ">=6.0", never actually tested against
++# a range). See requirements.lock.txt for the full sha256 hash set (all published PyPI
++# artifacts of this exact release) — install reproducibly with:
++#   python3 -m pip install --require-hashes -r requirements.lock.txt
+diff --git a/scripts/build_activation_record.py b/scripts/build_activation_record.py
+new file mode 100644
+index 0000000..3aa74ac
+--- /dev/null
++++ b/scripts/build_activation_record.py
+@@ -0,0 +1,71 @@
++#!/usr/bin/env python3
++"""M0.1 — build ACTIVATION_RECORD_V4.json, the Boss GO record SEPARATE from the bundle.
++
++Deliverable 1 of the M0.1 patch (contre-review verdict: activation circularity FAIL).
++Before this patch, `SPEC_INDEX_V4.json` carried both the documents AND (implicitly, via
++DECISION_LOG.jsonl being one of its hashed entries) the record of decisions about them —
++a document that grows to record its own validation is circular. Now:
++
++  - `SPEC_BUNDLE_MANIFEST_V4.json` is the immutable, hash-verified bundle (never records
++    anything about ITS OWN validation).
++  - THIS file is where a Boss GO is recorded — it references the bundle's hash, it never
++    lives inside it. Regenerating this file never changes `bundle_sha256`.
++
++Until an explicit Boss GO is given (identity + hash + version — Constitution C-2), this
++file is emitted with `boss_go.given: false` and `runtime_authority: false`. It is NEVER
++self-signed by the control tower (D-038, LOI 1). Re-run this script to refresh
++`bundle_sha256_at_generation` if the bundle is regenerated (e.g. before a real GO).
++"""
++from __future__ import annotations
++
++import json
++import sys
++from datetime import datetime, timezone
++from pathlib import Path
++
++REPO = Path(__file__).resolve().parents[1]
++
++
++def build_activation_record(repo: Path = REPO, *, at: str | None = None) -> dict:
++    bundle_path = repo / "SPEC_BUNDLE_MANIFEST_V4.json"
++    if not bundle_path.is_file():
++        raise FileNotFoundError(
++            "ACTIVATION_RECORD_V4 build refused: SPEC_BUNDLE_MANIFEST_V4.json does not exist yet "
++            "— run scripts/build_spec_bundle.py first")
++    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
++    return {
++        "schema_version": 1,
++        "activation_id": "ACT-V4-PENDING",
++        "bundle_version": bundle["bundle_version"],
++        "bundle_sha256_at_generation": bundle["bundle_sha256"],
++        "generated_at": at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
++        "boss_go": {
++            "given": False,
++            "identity": None,
++            "date": None,
++            "hash_confirmed": None,
++            "version_confirmed": None,
++        },
++        "runtime_authority": False,
++        "note": (
++            "Enregistrement SÉPARÉ du bundle (fin de la circularité d'activation, patch M0.1 "
++            "deliverable 1). Le bundle ne s'auto-déclare jamais signé (C-1/C-2, D-038) — silence "
++            "≠ GO. `runtime_authority` ne passe à `true` que si un GO Boss explicite (identité + "
++            "hash + version) remplit `boss_go` ci-dessus ET que `boss_go.hash_confirmed` == "
++            "`bundle_sha256_at_generation` du bundle SIGNÉ (pas d'un bundle regénéré depuis). "
++            "DECISION_LOG.jsonl reste hors bundle et hors de ce record : c'est un journal vivant, "
++            "jamais une autorité machine (Constitution §1.6)."),
++    }
++
++
++def main() -> int:
++    record = build_activation_record()
++    out = REPO / "ACTIVATION_RECORD_V4.json"
++    out.write_text(json.dumps(record, indent=2, sort_keys=False, ensure_ascii=False) + "\n")
++    signed = "SIGNED" if record["boss_go"]["given"] else "NOT SIGNED (runtime_authority: false)"
++    print(f"wrote {out} — bundle_sha256_at_generation={record['bundle_sha256_at_generation'][:16]}… — {signed}")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/scripts/build_spec_bundle.py b/scripts/build_spec_bundle.py
+new file mode 100644
+index 0000000..d77ade4
+--- /dev/null
++++ b/scripts/build_spec_bundle.py
+@@ -0,0 +1,138 @@
++#!/usr/bin/env python3
++"""M0.1 — build SPEC_BUNDLE_MANIFEST_V4.json, the IMMUTABLE bundle of active V4 authorities.
++
++Supersedes `build_spec_index.py` / `SPEC_INDEX_V4.json` (M0.1 patch — ends the activation
++circularity, deliverable 1). Two changes from the retired index:
++
++1. `DECISION_LOG.jsonl` is NOT a bundle document. It is a living journal that keeps
++   accepting new entries after the bundle is signed — including it in the hashed set meant
++   a routine decision-log append would silently invalidate the Constitution's own signed
++   hash. It is read directly by the loader, unverified (see spec_loader.py docstring).
++2. `specs/cv_bot.yaml` is NOT a local document — the CV bot business spec now lives in its
++   own product repo (`~/job-opportunity-radar/governance/PROJECT_SPEC_V4.yaml`, moved by
++   this same patch to restore `test_project_isolation.py`). It is referenced here as a
++   TYPED EXTERNAL REFERENCE (project_id/repository/spec_path/version/sha256), verified by
++   `spec_loader.py::_verify_external_reference` at load time (missing file / wrong hash /
++   path escaping the referenced repo are all refused, never silently skipped).
++
++The bundle, once written and signed (ACTIVATION_RECORD_V4.json), NEVER changes in place.
++Any future correction to a bundle document is a new bundle version (v4.0.1, v4.0.2, ...)
++with a fresh ACTIVATION_RECORD_V4.json — never an edit-in-place of a signed manifest.
++
++Run: `python3 scripts/build_spec_bundle.py` from the repo root.
++"""
++from __future__ import annotations
++
++import hashlib
++import json
++import sys
++from datetime import datetime, timezone
++from pathlib import Path
++
++REPO = Path(__file__).resolve().parents[1]
++BUNDLE_VERSION = "4.0.0"
++
++# The CLOSED list of LOCAL bundle documents (C-1) — DECISION_LOG.jsonl deliberately excluded.
++BUNDLE_DOCUMENTS = [
++    ("SYSTEM_CONSTITUTION_V4.md", "constitution"),
++    ("specs/runtime_integrity.yaml", "spec"),
++    ("specs/security.yaml", "spec"),
++    ("specs/memory.yaml", "spec"),
++    ("specs/phase0.yaml", "spec"),
++    ("specs/provider_cascade.yaml", "spec"),
++    ("specs/product_ui.yaml", "spec"),
++    ("specs/operations.yaml", "spec"),
++    ("ROADMAP_V4.md", "roadmap"),
++    ("TRACEABILITY_V4.jsonl", "traceability"),
++]
++
++# Typed external references — a spec that lives in a sibling product repo, not copied in.
++EXTERNAL_SPEC_REFERENCES = [
++    {
++        "project_id": "cv-bot",
++        "repository": "~/job-opportunity-radar",
++        "spec_path": "governance/PROJECT_SPEC_V4.yaml",
++        "version": "4.0.0",
++    },
++]
++
++
++def sha256_of(path: Path) -> str:
++    value = hashlib.sha256()
++    with path.open("rb") as fh:
++        for block in iter(lambda: fh.read(1048576), b""):
++            value.update(block)
++    return value.hexdigest()
++
++
++def _resolve_external(ref: dict) -> Path:
++    repo_root = Path(ref["repository"]).expanduser().resolve()
++    candidate = (repo_root / ref["spec_path"]).resolve()
++    if repo_root not in candidate.parents and candidate != repo_root:
++        raise FileNotFoundError(
++            f"external reference {ref['project_id']!r} spec_path escapes its repository: {candidate}")
++    return candidate
++
++
++def build_bundle(repo: Path = REPO, *, at: str | None = None) -> dict:
++    documents = []
++    missing = []
++    for rel, doc_type in BUNDLE_DOCUMENTS:
++        path = repo / rel
++        if not path.is_file():
++            missing.append(rel)
++            continue
++        documents.append({
++            "path": rel,
++            "type": doc_type,
++            "version": BUNDLE_VERSION,
++            "sha256": sha256_of(path),
++            "bytes": path.stat().st_size,
++        })
++    if missing:
++        raise FileNotFoundError(f"SPEC_BUNDLE_MANIFEST_V4 build refused: missing bundle documents: {missing}")
++
++    external_refs = []
++    for ref in EXTERNAL_SPEC_REFERENCES:
++        path = _resolve_external(ref)
++        if not path.is_file():
++            raise FileNotFoundError(
++                f"external reference {ref['project_id']!r} missing on disk: {path}")
++        external_refs.append({**ref, "sha256": sha256_of(path)})
++
++    canonical = json.dumps(
++        {"bundle_documents": documents, "external_spec_references": external_refs},
++        sort_keys=True, ensure_ascii=False)
++    bundle_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
++
++    return {
++        "schema_version": 1,
++        "bundle_version": BUNDLE_VERSION,
++        "generated_at": at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
++        "immutable": True,
++        "immutability_note": (
++            "Ce manifest ne change JAMAIS après signature (ACTIVATION_RECORD_V4.json). "
++            "DECISION_LOG.jsonl est un journal vivant HORS bundle (voir docstring) — il "
++            "peut recevoir de nouvelles entrées sans jamais invalider bundle_sha256."),
++        "bundle_documents": documents,
++        "external_spec_references": external_refs,
++        "bundle_sha256": bundle_sha256,
++    }
++
++
++def main() -> int:
++    bundle = build_bundle()
++    out = REPO / "SPEC_BUNDLE_MANIFEST_V4.json"
++    out.write_text(json.dumps(bundle, indent=2, sort_keys=False, ensure_ascii=False) + "\n")
++    print(f"wrote {out} — {len(bundle['bundle_documents'])} bundle documents "
++          f"+ {len(bundle['external_spec_references'])} external reference(s)")
++    for doc in bundle["bundle_documents"]:
++        print(f"  {doc['path']:40s} {doc['sha256'][:16]}… ({doc['bytes']} bytes)")
++    for ref in bundle["external_spec_references"]:
++        print(f"  [external] {ref['repository']}/{ref['spec_path']:30s} {ref['sha256'][:16]}…")
++    print(f"bundle_sha256 = {bundle['bundle_sha256']}")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/scripts/build_spec_index.py b/scripts/build_spec_index.py
+deleted file mode 100644
+index 6c55165..0000000
+--- a/scripts/build_spec_index.py
++++ /dev/null
+@@ -1,85 +0,0 @@
+-#!/usr/bin/env python3
+-"""M0 — build SPEC_INDEX_V4.json, the machine index of active V4 documents (C-1).
+-
+-A document is "active" iff it is listed here, with a REAL sha256 computed at generation
+-time (never hand-typed — D-043: a claim must have exactly the scope of its proof). The
+-loader (`governance/spec_loader.py::load_active_specs`) refuses anything not in this index.
+-
+-Run: `python3 scripts/build_spec_index.py` from the repo root. Deterministic given the
+-same file contents (no clock/random in the hash computation itself; `generated_at` is the
+-only timestamp field and is NOT part of what the loader verifies).
+-"""
+-from __future__ import annotations
+-
+-import hashlib
+-import json
+-import sys
+-from datetime import datetime, timezone
+-from pathlib import Path
+-
+-REPO = Path(__file__).resolve().parents[1]
+-VERSION = "4.0.0"
+-
+-# (path relative to repo root, doc type) — the CLOSED list of active V4 authorities (C-1).
+-ACTIVE_DOCUMENTS = [
+-    ("SYSTEM_CONSTITUTION_V4.md", "constitution"),
+-    ("specs/runtime_integrity.yaml", "spec"),
+-    ("specs/security.yaml", "spec"),
+-    ("specs/memory.yaml", "spec"),
+-    ("specs/phase0.yaml", "spec"),
+-    ("specs/provider_cascade.yaml", "spec"),
+-    ("specs/cv_bot.yaml", "spec"),
+-    ("specs/product_ui.yaml", "spec"),
+-    ("specs/operations.yaml", "spec"),
+-    ("ROADMAP_V4.md", "roadmap"),
+-    ("TRACEABILITY_V4.jsonl", "traceability"),
+-    ("DECISION_LOG.jsonl", "decision_log"),
+-]
+-
+-
+-def sha256_of(path: Path) -> str:
+-    value = hashlib.sha256()
+-    with path.open("rb") as fh:
+-        for block in iter(lambda: fh.read(1048576), b""):
+-            value.update(block)
+-    return value.hexdigest()
+-
+-
+-def build_index(repo: Path = REPO, *, at: str | None = None) -> dict:
+-    documents = []
+-    missing = []
+-    for rel, doc_type in ACTIVE_DOCUMENTS:
+-        path = repo / rel
+-        if not path.is_file():
+-            missing.append(rel)
+-            continue
+-        documents.append({
+-            "path": rel,
+-            "type": doc_type,
+-            "version": VERSION,
+-            "sha256": sha256_of(path),
+-            "bytes": path.stat().st_size,
+-        })
+-    if missing:
+-        raise FileNotFoundError(f"SPEC_INDEX_V4 build refused: missing active documents: {missing}")
+-    return {
+-        "schema_version": 1,
+-        "version": VERSION,
+-        "generated_at": at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+-        "runtime_authority": False,  # flips to true only on an explicit Boss GO (C-2) — never self-declared
+-        "active_documents": documents,
+-    }
+-
+-
+-def main() -> int:
+-    index = build_index()
+-    out = REPO / "SPEC_INDEX_V4.json"
+-    out.write_text(json.dumps(index, indent=2, sort_keys=False, ensure_ascii=False) + "\n")
+-    print(f"wrote {out} — {len(index['active_documents'])} active documents, real sha256 computed")
+-    for doc in index["active_documents"]:
+-        print(f"  {doc['path']:40s} {doc['sha256'][:16]}… ({doc['bytes']} bytes)")
+-    return 0
+-
+-
+-if __name__ == "__main__":
+-    sys.exit(main())
+diff --git a/scripts/build_traceability.py b/scripts/build_traceability.py
+index df13e61..f2b9db0 100644
+--- a/scripts/build_traceability.py
++++ b/scripts/build_traceability.py
+@@ -26,6 +26,16 @@ import import_ledger  # noqa: E402  (reuse the existing, tested ledger parser)
+ 
+ DEFAULT_LEDGER = Path.home() / "Claude-HQ" / "DEFECTS_LEDGER.md"
+ 
++# M0.1 patch (deliverable 6): specs/cv_bot.yaml moved out of this repo (test_project_isolation
++# fix, deliverable 4) to ~/job-opportunity-radar/governance/PROJECT_SPEC_V4.yaml, referenced by
++# JOÃO only as a typed external reference (SPEC_BUNDLE_MANIFEST_V4.json). Its requirements (and
++# the new cv_bot_business_rules.yaml covering the 11 previously-UNMAPPED defects) still need to
++# appear in TRACEABILITY_V4.jsonl, so this generator reads them directly, same as any local spec.
++DEFAULT_EXTERNAL_SPECS = [
++    Path.home() / "job-opportunity-radar" / "governance" / "PROJECT_SPEC_V4.yaml",
++    Path.home() / "job-opportunity-radar" / "governance" / "cv_bot_business_rules.yaml",
++]
++
+ 
+ class TraceabilityError(RuntimeError):
+     """Raised when a requirement has no gate+milestone — an invalid, un-emittable exigence."""
+@@ -40,11 +50,17 @@ def all_ledger_defect_ids(ledger_path: Path = DEFAULT_LEDGER) -> list[str]:
+ 
+ 
+ def build_traceability(specs_dir: Path = REPO / "specs",
+-                       ledger_path: Path = DEFAULT_LEDGER) -> list[dict[str, Any]]:
++                       ledger_path: Path = DEFAULT_LEDGER,
++                       external_specs: list[Path] | None = None) -> list[dict[str, Any]]:
+     rows: list[dict[str, Any]] = []
+     mapped_defects: set[str] = set()
+ 
+-    for spec_file in sorted(specs_dir.glob("*.yaml")):
++    spec_files = sorted(specs_dir.glob("*.yaml"))
++    for ext in (DEFAULT_EXTERNAL_SPECS if external_specs is None else external_specs):
++        if ext.is_file():
++            spec_files.append(ext)
++
++    for spec_file in spec_files:
+         spec = yaml.safe_load(spec_file.read_text(encoding="utf-8"))
+         spec_name = spec.get("spec", spec_file.stem)
+         for req in spec.get("requirements", []):
+diff --git a/specs/cv_bot.yaml b/specs/cv_bot.yaml
+deleted file mode 100644
+index 4059b17..0000000
+--- a/specs/cv_bot.yaml
++++ /dev/null
+@@ -1,137 +0,0 @@
+-spec: cv_bot
+-version: "4.0.0"
+-risk_boundary: cv_security
+-roadmap_milestone_primary: M1-B
+-source: "RAPPORT_OPTIMISATION_V4_GPT.md §12 (verbatim) — run card ~/Claude-HQ/CV_BOT_RUN_CARD_CVSEC_V4.md"
+-description: >
+-  Sécurité du produit CV bot UTILISÉ (données personnelles). Autorités visuelles
+-  INTOUCHÉES par ce spec (CV master sha256 831a9215…c9b75, cover letter sha256
+-  c034573a…a7d3 — aucun changement visuel dans CV-SEC). Duplicate-and-edit strict,
+-  artefact routé (jamais /pkg/ brut), Apply Assist blindé (scheme+hostname+redirections),
+-  serveur durci, statuts honnêtes, PII confinée, dates dynamiques.
+-notes: >
+-  Onze défauts CV-bot (D-005, D-006, D-012, D-013, D-017, D-022, D-025, D-026, D-027,
+-  D-033, D-040 — sourcing/scoring/salaire/environnement) sont des règles MÉTIER, pas des
+-  exigences de sécurité/intégrité d'artefact : ils ne sont couverts par AUCUNE des 10
+-  exigences CV-x ci-dessous ni par aucune autre des 8 specs V4. Voir TRACEABILITY_V4.jsonl
+-  (status UNMAPPED_PENDING_SPEC) — ils attendent une spec dédiée (probablement livrée avec
+-  M5/M7), non inventée ici pour ne pas dépasser la portée du rapport V4 (C-3).
+-requirements:
+-  - id: CV-1
+-    statement: >
+-      Duplicate-and-edit strict : la mise en page n'est JAMAIS reconstruite en code.
+-      Zones personnalisables allowlistées uniquement (headline, compétences sélectionnées,
+-      paragraphe de correspondance, entreprise, rôle, date).
+-    severity: 3
+-    verification_gate: "CVSEC-V4 BOSS_DECISION (parcours réel offre→CV→lettre dérivé du master, revue humaine du rendu)"
+-    roadmap_milestone: M1-B
+-    owner: builder
+-    status: PLANNED
+-    source_defects: [D-021, D-042]
+-    derivation: verbatim
+-  - id: CV-2
+-    statement: >
+-      Personnalisation traçable : chaque affirmation cite un `fact_id` validé, l'extrait
+-      de l'offre (JD) source, et la transformation appliquée — aucune claim inventée.
+-      Un placeholder inconnu reste VIDE et surligné, jamais deviné.
+-    severity: 3
+-    verification_gate: "CVSEC-V4 deliverable 2 (extraction déterministe des champs avant tout LLM)"
+-    roadmap_milestone: M1-B
+-    owner: builder
+-    status: PLANNED
+-    source_defects: [D-009, D-014]
+-    derivation: verbatim
+-  - id: CV-3
+-    statement: >
+-      Artefact ID unique — aucun accès brut à `/pkg/`. Téléchargement UNIQUEMENT via
+-      `/artifacts/<artifact_id>/download`, le contrôleur vérifie autorité + provenance
+-      + type avant de servir.
+-    severity: 3
+-    verification_gate: "CVSEC-V4 ATTACK_TEST 6 (accès brut ex-/pkg/ → 404/403)"
+-    roadmap_milestone: M1-B
+-    owner: contrôleur
+-    status: PLANNED
+-    source_defects: [D-030]
+-    derivation: verbatim
+-  - id: CV-4
+-    statement: >
+-      Manifest calculé hors builder {master_sha, docx_sha, pdf_sha, job_key,
+-      generator_version, spec_hash, rendu, date, contrôleur}. Au téléchargement : hashes
+-      RECALCULÉS + type + autorité + manifest + statut vérifiés — jamais une confiance
+-      aveugle au fichier écrit par le processus qui l'a généré.
+-    severity: 3
+-    verification_gate: "CVSEC-V4 ATTACK_TESTS 4 (PDF substitué → ⬇ bloqué) + 5 (manifest forgé → ⬇ bloqué)"
+-    roadmap_milestone: M1-B
+-    owner: contrôleur
+-    status: PLANNED
+-    source_defects: [D-008, D-023, D-028]
+-    derivation: verbatim
+-  - id: CV-5
+-    statement: >
+-      Apply Assist blindé : HTTPS obligatoire, hostname EXACT allowlisté (jamais un
+-      `contains("greenhouse")`), blocage localhost/IP privées/`file:`/`data:`/scheme
+-      inconnu, re-validation après CHAQUE redirection (domaine final == domaine attendu),
+-      domaine final affiché + confirmation humaine AVANT tout remplissage, AUCUN upload
+-      avant cette confirmation.
+-    severity: 3
+-    verification_gate: "CVSEC-V4 ATTACK_TESTS 1 (faux domaine « greenhouse.evil.com ») + 2 (redirection externe) + 3 (localhost/IP privée)"
+-    roadmap_milestone: M1-B
+-    owner: contrôleur
+-    status: PLANNED
+-    source_defects: []
+-    derivation: verbatim
+-  - id: CV-6
+-    statement: >
+-      Statuts de question par champ : detected / supported / filled / requires_human /
+-      unsupported / failed. « Détecté » n'est JAMAIS enregistré « rempli ».
+-    severity: 2
+-    verification_gate: "CVSEC-V4 ATTACK_TEST 9 (question « détectée » non remplie → requires_human, jamais filled)"
+-    roadmap_milestone: M1-B
+-    owner: contrôleur
+-    status: PLANNED
+-    source_defects: [D-010, D-011]
+-    derivation: verbatim
+-  - id: CV-7
+-    statement: >
+-      File de jobs visible : queued → generating → validating → ready / failed:raison —
+-      aucune exception silencieuse.
+-    severity: 2
+-    verification_gate: "CVSEC-V4 ATTACK_TEST 10 (lancement sans TTY → fenêtre reste ouverte, statut visible, D-039 re-vérifié)"
+-    roadmap_milestone: M1-B
+-    owner: contrôleur
+-    status: PLANNED
+-    source_defects: [D-039]
+-    derivation: "verbatim (portée lue au sens large pour couvrir l'attack test 10 sans-TTY de CVSEC-V4, non explicitement énoncé par le texte CV-7 du rapport — signalé pour arbitrage Boss)"
+-  - id: CV-8
+-    statement: >
+-      PII : screenshots HORS racine HTTP, permissions 0700, rétention limitée, pas de
+-      PII dans les logs, consultation par token temporaire uniquement.
+-    severity: 3
+-    verification_gate: "CVSEC-V4 ATTACK_TEST 8 (accès screenshot PII sans token → refusé)"
+-    roadmap_milestone: M1-B
+-    owner: contrôleur
+-    status: PLANNED
+-    source_defects: []
+-    derivation: verbatim
+-  - id: CV-9
+-    statement: >
+-      Date système ou injectée — jamais hardcodée dans le code produit.
+-    severity: 1
+-    verification_gate: "CVSEC-V4 deliverable 7 (dates dynamiques, horloge système injectable en test)"
+-    roadmap_milestone: M1-B
+-    owner: builder
+-    status: PLANNED
+-    source_defects: []
+-    derivation: verbatim
+-  - id: CV-10
+-    statement: >
+-      Apply Assist reste SUSPENDU jusqu'à : toutes les gates CV-SEC vertes + test réel
+-      sur compte de test + revue humaine du domaine final + confirmation explicite au
+-      rapport. Décision Boss requise pour lever la suspension.
+-    severity: 3
+-    verification_gate: "CVSEC-V4 BOSS_DECISION (GO sur le parcours + levée explicite de la suspension Apply Assist)"
+-    roadmap_milestone: M1-B
+-    owner: boss
+-    status: PLANNED
+-    source_defects: [D-039]
+-    derivation: verbatim
+diff --git a/specs/operations.yaml b/specs/operations.yaml
+index 3c13f5c..2393dea 100644
+--- a/specs/operations.yaml
++++ b/specs/operations.yaml
+@@ -19,6 +19,18 @@ notes: >
+   dans IDEAS_BACKLOG.md (Supervisor digest, Regression sentinels) — transcrites, pas inventées
+   — mais leur formalisation en exigence testable EST une interprétation de la tour de contrôle.
+   À ARBITRER PAR LE BOSS.
++boss_validation_requested: true
++boss_summary: |-
++  Résumé Boss (patch M0.1 D5) — cette spec reste DANS le bundle : le GO portera sur ce contenu COMPLET (C-2).
++  OPS-1 : un rollback réellement EXÉCUTÉ (pas documenté) est exigé en preuve avant promotion.
++  OPS-2 : digest humain post-run auto-généré, jamais de logs bruts à fouiller.
++  OPS-3 : sentinels de non-régression re-testent les versions déjà promues après chaque livraison.
++  OPS-4 : budgets et kill-switch — un run qui dépasse s'arrête, jamais en silence.
++  OPS-5 : queue d'approbation Boss explicite avant toute action GitHub/publication.
++  OPS-6 : télémétrie CAS-7 consolidée en rapport ; valeur inconnue = UNKNOWN, jamais un proxy.
++  OPS-7 : nuits limitées (M10) — refresh/health-check/bench autorisés, merge/publication/promotion interdits.
++  OPS-8/9 : mission bornée (jamais saturation de contexte) ; NON VÉRIFIÉ/LIMITES obligatoire à chaque rapport — déjà SATISFIED.
++  Découpage entièrement interprété par la tour de contrôle — à valider ou amender explicitement (silence = pas de GO, C-2).
+ requirements:
+   - id: OPS-1
+     statement: >
+diff --git a/specs/product_ui.yaml b/specs/product_ui.yaml
+index 49a3d5c..7655616 100644
+--- a/specs/product_ui.yaml
++++ b/specs/product_ui.yaml
+@@ -22,6 +22,18 @@ notes: >
+   À ARBITRER PAR LE BOSS : cette spec entière (portée et découpage des 9 exigences)
+   n'a pas de validation explicite du panel V4 — seul son contenu SOURCE (les leçons/
+   décisions citées) est validé.
++boss_validation_requested: true
++boss_summary: |-
++  Résumé Boss (patch M0.1 D5) — cette spec reste DANS le bundle : le GO portera sur ce contenu COMPLET (C-2).
++  UI-1 : toute UI livrée a ses actions réellement câblées, prouvées par un clic E2E.
++  UI-2 : le vrai verdict du reviewer s'affiche toujours, jamais une carte générique.
++  UI-3 : un run n'est « DELIVERED » qu'avec un artefact promu, jamais avant.
++  UI-4 : tout rendu visuel est comparé à une référence Boss-validée dans l'évidence.
++  UI-5/6/7 : le chat (M6) route l'intention avant tout run, refuse une mission sans spec signée, reprend une session sans perte.
++  UI-8 : jamais de fermeture silencieuse faute de TTY.
++  UI-9 : label ALPHA tant que la checklist GA (12 critères) n'est pas complète — déjà SATISFIED.
++  Découpage entièrement interprété par la tour de contrôle, aucune section dédiée dans le rapport V4 source.
++  À valider ou amender explicitement — silence = pas de GO (C-2).
+ requirements:
+   - id: UI-1
+     statement: >
+diff --git a/src/joao_orchestrator/governance/spec_loader.py b/src/joao_orchestrator/governance/spec_loader.py
+index 1186684..a77375e 100644
+--- a/src/joao_orchestrator/governance/spec_loader.py
++++ b/src/joao_orchestrator/governance/spec_loader.py
+@@ -1,14 +1,36 @@
+-"""M0 — THE single loader authority for the V4 documentary constitution (C-1).
+-
+-`SPEC_INDEX_V4.json` is the ONLY list of active documents. This module is the ONE place
+-that reads them: every path it returns is verified present in the index AND its sha256
+-verified to match the file currently on disk — a document outside the index, or one whose
+-content drifted since the index was generated, is REFUSED, never silently served (G1).
++"""M0.1 — THE single loader authority for the V4 documentary bundle (C-1).
++
++`SPEC_BUNDLE_MANIFEST_V4.json` is the ONLY list of active bundle documents. This module is
++the ONE place that reads them: every path it returns is verified present in the bundle AND
++its sha256 verified to match the file currently on disk — a document outside the bundle, or
++one whose content drifted since the bundle was generated, is REFUSED, never silently served
++(G1). This supersedes the M0 `SPEC_INDEX_V4.json` / `load_active_specs` (M0.1 patch,
++deliverable 1 — ends the activation circularity, contre-review verdict FAIL on it).
++
++Two things are deliberately verified OUTSIDE the bundle's own hash set:
++
++  - `DECISION_LOG.jsonl` — a living journal, read directly and NOT sha256-verified against
++    the bundle. It keeps accepting new entries after the bundle is signed; folding it into
++    the hashed set (as M0 did) meant a routine decision-log append silently invalidated the
++    Constitution's own signed hash — that circularity is exactly what this patch kills.
++  - Typed EXTERNAL spec references (`external_spec_references` in the manifest — each entry
++    names a sibling product repository, never hardcoded here; see the manifest itself and
++    `scripts/build_spec_bundle.py` for which product repos are currently referenced) —
++    verified by `_verify_external_reference`, which refuses: a missing file, a sha256
++    mismatch, AND a `spec_path` that resolves (after following symlinks) outside the
++    referenced repository root (path traversal / symlink escape). This is precisely how
++    JOÃO stays isolated from product repos (`tests/test_project_isolation.py`,
++    `tests/test_package_boundaries.py`) while still governing them: it reads their spec
++    files by hash, at a path given entirely by manifest data, never by an identifier
++    embedded in JOÃO's own canonical package.
++
++`ACTIVATION_RECORD_V4.json`, if present, is loaded as `LoadedSpecs.activation` — it is NEVER
++required for the bundle itself to load (a bundle can be read, inspected, and hash-verified
++before any Boss GO exists), but `runtime_authority` should only ever be trusted from THIS
++record, never inferred from the bundle's own content (C-2: silence ≠ GO, D-038).
+ 
+ This is a READ gate, not yet a runtime enforcement gate: no mission-launch path calls this
+-today (that wiring is `RunRuntime`'s job under A0/M1-A, out of scope for M0 — see
+-SYSTEM_CONSTITUTION_V4.md §8). It exists so the constitution's C-1 has a real, testable
+-implementation from day one, and so A0 has something to wire into rather than starting cold.
++today (that wiring is `RunRuntime`'s job under A0/M1-A, out of scope for M0/M0.1).
+ 
+ Standard library only, except `yaml` (PyYAML — see requirements.txt) for the specs/*.yaml
+ parse. Deterministic: no clock, no randomness, in the verification path itself.
+@@ -44,88 +66,132 @@ def _sha256_of(path: Path) -> str:
+ 
+ @dataclass
+ class LoadedSpecs:
+-    """The verified, parsed V4 authority set. Every field was read through the index."""
++    """The verified, parsed V4 authority set. Every field was read through the bundle."""
+ 
+-    index: dict[str, Any]
++    bundle: dict[str, Any]
++    activation: dict[str, Any] | None
+     constitution_text: str
+     roadmap_text: str
+     specs: dict[str, dict[str, Any]]        # spec name (e.g. "runtime_integrity") -> parsed YAML
+     traceability: list[dict[str, Any]]      # parsed TRACEABILITY_V4.jsonl rows
+-    decisions: list[dict[str, Any]]         # parsed DECISION_LOG.jsonl rows
++    decisions: list[dict[str, Any]]         # parsed DECISION_LOG.jsonl rows — NOT hash-verified (living log)
++    external_specs: dict[str, dict[str, Any]]  # project_id -> parsed external spec YAML
+     verified_paths: list[str] = field(default_factory=list)
+ 
++    @property
++    def runtime_authority(self) -> bool:
++        """Never inferred from the bundle itself — only ACTIVATION_RECORD_V4.json can say true."""
++        if not self.activation:
++            return False
++        return bool(self.activation.get("runtime_authority")) and bool(
++            self.activation.get("boss_go", {}).get("given"))
++
+     def requirement(self, requirement_id: str) -> dict[str, Any] | None:
+         """Look up a single requirement by its immutable id across every loaded spec."""
+         for spec in self.specs.values():
+             for req in spec.get("requirements", []):
+                 if req.get("id") == requirement_id:
+                     return req
++        for spec in self.external_specs.values():
++            for req in spec.get("requirements", []):
++                if req.get("id") == requirement_id:
++                    return req
+         return None
+ 
+     def all_requirements(self) -> list[dict[str, Any]]:
+-        return [req for spec in self.specs.values() for req in spec.get("requirements", [])]
++        local = [req for spec in self.specs.values() for req in spec.get("requirements", [])]
++        external = [req for spec in self.external_specs.values() for req in spec.get("requirements", [])]
++        return local + external
+ 
+ 
+-class _VerifiedIndex:
+-    """Internal: the index plus a helper that refuses anything not listed + hash-matched."""
++class _VerifiedBundle:
++    """Internal: the bundle plus a helper that refuses anything not listed + hash-matched."""
+ 
+-    def __init__(self, repo_root: Path, index: dict[str, Any]):
++    def __init__(self, repo_root: Path, bundle: dict[str, Any]):
+         self.repo_root = repo_root
+-        self.index = index
+-        self._by_path = {doc["path"]: doc for doc in index.get("active_documents", [])}
++        self.bundle = bundle
++        self._by_path = {doc["path"]: doc for doc in bundle.get("bundle_documents", [])}
+ 
+     def is_active(self, rel_path: str) -> bool:
+         return rel_path in self._by_path
+ 
+     def read_active(self, rel_path: str) -> str:
+-        """Return the text of an active, hash-verified document — refuse anything else."""
++        """Return the text of a bundle, hash-verified document — refuse anything else."""
+         entry = self._by_path.get(rel_path)
+         if entry is None:
+             raise SpecIntegrityError(
+-                f"refused: {rel_path!r} is not listed in SPEC_INDEX_V4.json active_documents "
+-                f"— only indexed documents are an active authority (C-1)")
++                f"refused: {rel_path!r} is not listed in SPEC_BUNDLE_MANIFEST_V4.json "
++                f"bundle_documents — only bundled documents are an active authority (C-1)")
+         path = self.repo_root / rel_path
+         if not path.is_file():
+-            raise SpecIntegrityError(f"refused: indexed document missing on disk: {rel_path}")
++            raise SpecIntegrityError(f"refused: bundled document missing on disk: {rel_path}")
+         actual = _sha256_of(path)
+         if actual != entry.get("sha256"):
+             raise SpecIntegrityError(
+-                f"refused: {rel_path!r} sha256 mismatch — index has {entry.get('sha256', '')[:16]}…, "
+-                f"disk has {actual[:16]}… (content drifted since SPEC_INDEX_V4.json was generated; "
+-                f"re-run scripts/build_spec_index.py, or this is tampering)")
++                f"refused: {rel_path!r} sha256 mismatch — bundle has {entry.get('sha256', '')[:16]}…, "
++                f"disk has {actual[:16]}… (content drifted since SPEC_BUNDLE_MANIFEST_V4.json was "
++                f"generated; a signed bundle must never be regenerated in place — this is either "
++                f"tampering or a v4.0.1+ bundle that was never re-signed)")
+         return path.read_text(encoding="utf-8")
+ 
+ 
++def _verify_external_reference(ref: dict[str, Any]) -> str:
++    """Resolve, hash-verify, and return the text of one external_spec_references entry.
++
++    Refuses: missing file, sha256 mismatch, and a spec_path that (after resolving symlinks)
++    lands outside the referenced repository root — path traversal / symlink escape.
++    """
++    repo_root = Path(ref["repository"]).expanduser().resolve()
++    candidate = (repo_root / ref["spec_path"]).resolve()
++    if candidate != repo_root and repo_root not in candidate.parents:
++        raise SpecIntegrityError(
++            f"refused: external reference {ref.get('project_id')!r} spec_path "
++            f"{ref.get('spec_path')!r} resolves outside its repository {repo_root} "
++            f"(path traversal or symlink escape) — got {candidate}")
++    if not candidate.is_file():
++        raise SpecIntegrityError(
++            f"refused: external reference {ref.get('project_id')!r} spec_path missing on disk: {candidate}")
++    actual = _sha256_of(candidate)
++    if actual != ref.get("sha256"):
++        raise SpecIntegrityError(
++            f"refused: external reference {ref.get('project_id')!r} sha256 mismatch — "
++            f"manifest has {ref.get('sha256', '')[:16]}…, disk has {actual[:16]}… "
++            f"(content drifted or wrong file referenced)")
++    return candidate.read_text(encoding="utf-8")
++
++
+ def _find_repo_root(start: Path) -> Path:
+     for candidate in (start, *start.parents):
+-        if (candidate / "SPEC_INDEX_V4.json").is_file():
++        if (candidate / "SPEC_BUNDLE_MANIFEST_V4.json").is_file():
+             return candidate
+     return start
+ 
+ 
+ def load_active_specs(repo_root: Path | str | None = None) -> LoadedSpecs:
+-    """Load, hash-verify, and parse the full V4 authority set. Refuses anything not indexed.
++    """Load, hash-verify, and parse the full V4 bundle. Refuses anything not bundled.
+ 
+-    Raises SpecIntegrityError if SPEC_INDEX_V4.json is absent, malformed, references a
+-    missing file, or any file's content no longer matches its recorded sha256.
++    Raises SpecIntegrityError if SPEC_BUNDLE_MANIFEST_V4.json is absent, malformed,
++    references a missing file, any bundle document's content no longer matches its
++    recorded sha256, or an external_spec_references entry fails its own checks (missing /
++    hash mismatch / path escape).
+     """
+     root = Path(repo_root).expanduser().resolve() if repo_root else _find_repo_root(Path.cwd())
+-    index_path = root / "SPEC_INDEX_V4.json"
+-    if not index_path.is_file():
+-        raise SpecIntegrityError(f"refused: no SPEC_INDEX_V4.json at {root} — no active authority")
++    bundle_path = root / "SPEC_BUNDLE_MANIFEST_V4.json"
++    if not bundle_path.is_file():
++        raise SpecIntegrityError(f"refused: no SPEC_BUNDLE_MANIFEST_V4.json at {root} — no active bundle")
+     try:
+-        index = json.loads(index_path.read_text(encoding="utf-8"))
++        bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+     except json.JSONDecodeError as exc:
+-        raise SpecIntegrityError(f"refused: SPEC_INDEX_V4.json is not valid JSON: {exc}") from exc
+-    if not isinstance(index.get("active_documents"), list) or not index["active_documents"]:
+-        raise SpecIntegrityError("refused: SPEC_INDEX_V4.json has no active_documents list")
++        raise SpecIntegrityError(f"refused: SPEC_BUNDLE_MANIFEST_V4.json is not valid JSON: {exc}") from exc
++    if not isinstance(bundle.get("bundle_documents"), list) or not bundle["bundle_documents"]:
++        raise SpecIntegrityError("refused: SPEC_BUNDLE_MANIFEST_V4.json has no bundle_documents list")
+ 
+-    verified = _VerifiedIndex(root, index)
++    verified = _VerifiedBundle(root, bundle)
+ 
+-    constitution_path = next((d["path"] for d in index["active_documents"] if d["type"] == "constitution"), None)
+-    roadmap_path = next((d["path"] for d in index["active_documents"] if d["type"] == "roadmap"), None)
++    constitution_path = next((d["path"] for d in bundle["bundle_documents"] if d["type"] == "constitution"), None)
++    roadmap_path = next((d["path"] for d in bundle["bundle_documents"] if d["type"] == "roadmap"), None)
+     if not constitution_path or not roadmap_path:
+-        raise SpecIntegrityError("refused: index is missing a constitution or roadmap entry")
++        raise SpecIntegrityError("refused: bundle is missing a constitution or roadmap entry")
+ 
+     constitution_text = verified.read_active(constitution_path)
+     roadmap_text = verified.read_active(roadmap_path)
+@@ -134,7 +200,7 @@ def load_active_specs(repo_root: Path | str | None = None) -> LoadedSpecs:
+         raise SpecIntegrityError(f"refused: PyYAML is required to parse specs/*.yaml: {_YAML_IMPORT_ERROR}")
+ 
+     specs: dict[str, dict[str, Any]] = {}
+-    for doc in index["active_documents"]:
++    for doc in bundle["bundle_documents"]:
+         if doc["type"] != "spec":
+             continue
+         text = verified.read_active(doc["path"])
+@@ -143,8 +209,16 @@ def load_active_specs(repo_root: Path | str | None = None) -> LoadedSpecs:
+             raise SpecIntegrityError(f"refused: {doc['path']} does not parse to a valid spec document")
+         specs[parsed["spec"]] = parsed
+ 
++    external_specs: dict[str, dict[str, Any]] = {}
++    for ref in bundle.get("external_spec_references", []):
++        text = _verify_external_reference(ref)
++        parsed = yaml.safe_load(text)
++        if not isinstance(parsed, dict) or "spec" not in parsed:
++            raise SpecIntegrityError(f"refused: external reference {ref.get('project_id')} does not parse to a valid spec document")
++        external_specs[ref["project_id"]] = parsed
++
+     traceability = []
+-    trace_path = next((d["path"] for d in index["active_documents"] if d["type"] == "traceability"), None)
++    trace_path = next((d["path"] for d in bundle["bundle_documents"] if d["type"] == "traceability"), None)
+     if trace_path:
+         text = verified.read_active(trace_path)
+         for line in text.splitlines():
+@@ -152,17 +226,24 @@ def load_active_specs(repo_root: Path | str | None = None) -> LoadedSpecs:
+             if line:
+                 traceability.append(json.loads(line))
+ 
++    # DECISION_LOG.jsonl is a living journal OUTSIDE the bundle — read directly, unverified.
+     decisions = []
+-    decisions_path = next((d["path"] for d in index["active_documents"] if d["type"] == "decision_log"), None)
+-    if decisions_path:
+-        text = verified.read_active(decisions_path)
+-        for line in text.splitlines():
++    decisions_path = root / "DECISION_LOG.jsonl"
++    if decisions_path.is_file():
++        for line in decisions_path.read_text(encoding="utf-8").splitlines():
+             line = line.strip()
+             if line:
+                 decisions.append(json.loads(line))
+ 
++    activation = None
++    activation_path = root / "ACTIVATION_RECORD_V4.json"
++    if activation_path.is_file():
++        activation = json.loads(activation_path.read_text(encoding="utf-8"))
++
+     return LoadedSpecs(
+-        index=index, constitution_text=constitution_text, roadmap_text=roadmap_text,
++        bundle=bundle, activation=activation,
++        constitution_text=constitution_text, roadmap_text=roadmap_text,
+         specs=specs, traceability=traceability, decisions=decisions,
++        external_specs=external_specs,
+         verified_paths=sorted(verified._by_path),
+     )
+diff --git a/tests/test_m0_spec_loader.py b/tests/test_m0_spec_loader.py
+index 01505e1..ea5f618 100644
+--- a/tests/test_m0_spec_loader.py
++++ b/tests/test_m0_spec_loader.py
+@@ -1,4 +1,8 @@
+-"""M0 — G1: SPEC_INDEX_V4.json valid, sha256 verified, load_active_specs() refuses unlisted docs.
++"""M0.1 — G1: SPEC_BUNDLE_MANIFEST_V4.json valid, sha256 verified, load_active_specs() refuses
++unlisted docs. Supersedes the M0 SPEC_INDEX_V4.json test (deliverable 1: bundle/activation
++split ends the activation circularity) and adds deliverable 4's external-reference attack
++tests (valid ref accepted / missing file refused / wrong hash refused / path traversal or
++symlink escape refused).
+ 
+ Hermetic: builds a synthetic repo root under tmp_path (real files, real sha256, real YAML) so
+ this test never depends on the actual committed V4 authorities existing yet.
+@@ -7,6 +11,7 @@ from __future__ import annotations
+ 
+ import hashlib
+ import json
++import os
+ from pathlib import Path
+ 
+ import pytest
+@@ -18,7 +23,7 @@ def _sha256(text: str) -> str:
+     return hashlib.sha256(text.encode()).hexdigest()
+ 
+ 
+-def _build_repo(tmp_path: Path) -> Path:
++def _build_repo(tmp_path: Path, *, external_ref: dict | None = None) -> Path:
+     root = tmp_path / "repo"
+     (root / "specs").mkdir(parents=True)
+     constitution = "# SYSTEM CONSTITUTION V4\nC-1 Une seule autorité.\n"
+@@ -44,23 +49,35 @@ def _build_repo(tmp_path: Path) -> Path:
+     (root / "ROADMAP.md").write_text(roadmap)
+     (root / "specs" / "runtime_integrity.yaml").write_text(spec_yaml)
+     (root / "TRACEABILITY.jsonl").write_text(traceability)
+-    (root / "DECISIONS.jsonl").write_text(decisions)
++    (root / "DECISION_LOG.jsonl").write_text(decisions)  # living log — read by fixed name, not indexed
+ 
+-    index = {
+-        "schema_version": 1, "version": "4.0.0", "generated_at": "2026-07-18T00:00:00Z",
+-        "runtime_authority": False,
+-        "active_documents": [
++    bundle = {
++        "schema_version": 1, "bundle_version": "4.0.0", "generated_at": "2026-07-18T00:00:00Z",
++        "immutable": True,
++        "bundle_documents": [
+             {"path": "CONSTITUTION.md", "type": "constitution", "version": "4.0.0", "sha256": _sha256(constitution)},
+             {"path": "ROADMAP.md", "type": "roadmap", "version": "4.0.0", "sha256": _sha256(roadmap)},
+             {"path": "specs/runtime_integrity.yaml", "type": "spec", "version": "4.0.0", "sha256": _sha256(spec_yaml)},
+             {"path": "TRACEABILITY.jsonl", "type": "traceability", "version": "4.0.0", "sha256": _sha256(traceability)},
+-            {"path": "DECISIONS.jsonl", "type": "decision_log", "version": "4.0.0", "sha256": _sha256(decisions)},
+         ],
++        "external_spec_references": [external_ref] if external_ref else [],
+     }
+-    (root / "SPEC_INDEX_V4.json").write_text(json.dumps(index, indent=2))
++    (root / "SPEC_BUNDLE_MANIFEST_V4.json").write_text(json.dumps(bundle, indent=2))
+     return root
+ 
+ 
++def _make_external_repo(tmp_path: Path, name: str = "external_product") -> tuple[Path, str]:
++    ext_root = tmp_path / name
++    (ext_root / "governance").mkdir(parents=True)
++    text = "spec: product_x\nversion: \"4.0.0\"\nrequirements:\n  - id: PX-1\n    statement: x\n"
++    (ext_root / "governance" / "PROJECT_SPEC_V4.yaml").write_text(text)
++    return ext_root, _sha256(text)
++
++
++# ---------------------------------------------------------------------------
++# Baseline: bundle loads, decision log read as a living (unverified) log
++# ---------------------------------------------------------------------------
++
+ def test_happy_path_loads_and_parses_everything(tmp_path):
+     root = _build_repo(tmp_path)
+     loaded = load_active_specs(root)
+@@ -71,47 +88,117 @@ def test_happy_path_loads_and_parses_everything(tmp_path):
+     assert loaded.traceability[0]["defect"] == "D-001"
+     assert loaded.decisions[0]["decision"] == "test decision"
+     assert set(loaded.verified_paths) == {"CONSTITUTION.md", "ROADMAP.md", "specs/runtime_integrity.yaml",
+-                                          "TRACEABILITY.jsonl", "DECISIONS.jsonl"}
++                                          "TRACEABILITY.jsonl"}
++
++
++def test_decision_log_is_not_hash_verified_and_can_change_freely(tmp_path):
++    """The whole point of the bundle/activation split: appending to DECISION_LOG.jsonl never
++    invalidates the bundle — it isn't in bundle_documents and carries no recorded hash."""
++    root = _build_repo(tmp_path)
++    loaded_before = load_active_specs(root)
++    (root / "DECISION_LOG.jsonl").write_text(
++        (root / "DECISION_LOG.jsonl").read_text() + json.dumps({"decision": "a new one", "date": "2026-07-19"}) + "\n")
++    loaded_after = load_active_specs(root)  # must NOT raise
++    assert len(loaded_after.decisions) == len(loaded_before.decisions) + 1
+ 
+ 
+-def test_missing_index_refused(tmp_path):
+-    root = tmp_path / "no_index"
++def test_missing_bundle_refused(tmp_path):
++    root = tmp_path / "no_bundle"
+     root.mkdir()
+-    with pytest.raises(SpecIntegrityError, match="no SPEC_INDEX_V4.json"):
++    with pytest.raises(SpecIntegrityError, match="no SPEC_BUNDLE_MANIFEST_V4.json"):
+         load_active_specs(root)
+ 
+ 
+-def test_tampered_file_after_indexing_is_refused(tmp_path):
++def test_tampered_file_after_bundling_is_refused(tmp_path):
+     root = _build_repo(tmp_path)
+-    # simulate drift: the constitution changed AFTER the index was generated (or tampering)
++    # simulate drift: the constitution changed AFTER the bundle was generated (or tampering)
+     (root / "CONSTITUTION.md").write_text("# SYSTEM CONSTITUTION V4\nC-1 rewritten maliciously.\n")
+     with pytest.raises(SpecIntegrityError, match="sha256 mismatch"):
+         load_active_specs(root)
+ 
+ 
+-def test_doc_outside_index_is_refused_by_read_active(tmp_path):
++def test_doc_outside_bundle_is_refused_by_read_active(tmp_path):
+     root = _build_repo(tmp_path)
+-    # a rogue markdown NOT listed in the index must never be treated as active
+     (root / "ROGUE_UNLISTED_SPEC.md").write_text("# not an authority\n")
+-    from joao_orchestrator.governance.spec_loader import _VerifiedIndex
+-    index = json.loads((root / "SPEC_INDEX_V4.json").read_text())
+-    verified = _VerifiedIndex(root, index)
++    from joao_orchestrator.governance.spec_loader import _VerifiedBundle
++    bundle = json.loads((root / "SPEC_BUNDLE_MANIFEST_V4.json").read_text())
++    verified = _VerifiedBundle(root, bundle)
+     assert verified.is_active("CONSTITUTION.md") is True
+     assert verified.is_active("ROGUE_UNLISTED_SPEC.md") is False
+-    with pytest.raises(SpecIntegrityError, match="not listed in SPEC_INDEX_V4.json"):
++    with pytest.raises(SpecIntegrityError, match="not listed in SPEC_BUNDLE_MANIFEST_V4.json"):
+         verified.read_active("ROGUE_UNLISTED_SPEC.md")
+ 
+ 
+-def test_missing_indexed_file_on_disk_is_refused(tmp_path):
++def test_missing_bundled_file_on_disk_is_refused(tmp_path):
+     root = _build_repo(tmp_path)
+     (root / "ROADMAP.md").unlink()
+     with pytest.raises(SpecIntegrityError, match="missing on disk"):
+         load_active_specs(root)
+ 
+ 
+-def test_index_missing_active_documents_list_refused(tmp_path):
+-    root = tmp_path / "bad_index"
++def test_bundle_missing_bundle_documents_list_refused(tmp_path):
++    root = tmp_path / "bad_bundle"
+     root.mkdir()
+-    (root / "SPEC_INDEX_V4.json").write_text(json.dumps({"schema_version": 1}))
+-    with pytest.raises(SpecIntegrityError, match="no active_documents"):
++    (root / "SPEC_BUNDLE_MANIFEST_V4.json").write_text(json.dumps({"schema_version": 1}))
++    with pytest.raises(SpecIntegrityError, match="no bundle_documents"):
++        load_active_specs(root)
++
++
++# ---------------------------------------------------------------------------
++# Deliverable 4: typed external spec reference — the 4 required attack tests
++# ---------------------------------------------------------------------------
++
++def test_external_reference_valid_is_accepted(tmp_path):
++    ext_root, sha = _make_external_repo(tmp_path)
++    ref = {"project_id": "product-x", "repository": str(ext_root), "spec_path": "governance/PROJECT_SPEC_V4.yaml",
++           "version": "4.0.0", "sha256": sha}
++    root = _build_repo(tmp_path, external_ref=ref)
++    loaded = load_active_specs(root)
++    assert "product-x" in loaded.external_specs
++    assert loaded.requirement("PX-1")["statement"] == "x"
++
++
++def test_external_reference_missing_file_refused(tmp_path):
++    ext_root, sha = _make_external_repo(tmp_path)
++    (ext_root / "governance" / "PROJECT_SPEC_V4.yaml").unlink()
++    ref = {"project_id": "product-x", "repository": str(ext_root), "spec_path": "governance/PROJECT_SPEC_V4.yaml",
++           "version": "4.0.0", "sha256": sha}
++    root = _build_repo(tmp_path, external_ref=ref)
++    with pytest.raises(SpecIntegrityError, match="missing on disk"):
++        load_active_specs(root)
++
++
++def test_external_reference_wrong_hash_refused(tmp_path):
++    ext_root, sha = _make_external_repo(tmp_path)
++    ref = {"project_id": "product-x", "repository": str(ext_root), "spec_path": "governance/PROJECT_SPEC_V4.yaml",
++           "version": "4.0.0", "sha256": "0" * 64}
++    root = _build_repo(tmp_path, external_ref=ref)
++    with pytest.raises(SpecIntegrityError, match="sha256 mismatch"):
++        load_active_specs(root)
++
++
++def test_external_reference_path_traversal_refused(tmp_path):
++    ext_root, _sha = _make_external_repo(tmp_path)
++    secret = tmp_path / "secret_outside_repo.yaml"
++    secret.write_text("spec: leaked\nversion: \"4.0.0\"\nrequirements: []\n")
++    ref = {"project_id": "product-x", "repository": str(ext_root),
++           "spec_path": "../secret_outside_repo.yaml", "version": "4.0.0", "sha256": _sha256(secret.read_text())}
++    root = _build_repo(tmp_path, external_ref=ref)
++    with pytest.raises(SpecIntegrityError, match="path traversal or symlink escape"):
++        load_active_specs(root)
++
++
++def test_external_reference_symlink_escape_refused(tmp_path):
++    ext_root, _sha = _make_external_repo(tmp_path)
++    secret = tmp_path / "secret_target.yaml"
++    secret.write_text("spec: leaked\nversion: \"4.0.0\"\nrequirements: []\n")
++    link = ext_root / "governance" / "escape_link.yaml"
++    try:
++        os.symlink(secret, link)
++    except (OSError, NotImplementedError):
++        pytest.skip("symlinks not supported in this environment")
++    ref = {"project_id": "product-x", "repository": str(ext_root),
++           "spec_path": "governance/escape_link.yaml", "version": "4.0.0", "sha256": _sha256(secret.read_text())}
++    root = _build_repo(tmp_path, external_ref=ref)
++    with pytest.raises(SpecIntegrityError, match="path traversal or symlink escape"):
+         load_active_specs(root)
+diff --git a/tests/test_m0_traceability.py b/tests/test_m0_traceability.py
+index ef3d6e6..65311bc 100644
+--- a/tests/test_m0_traceability.py
++++ b/tests/test_m0_traceability.py
+@@ -9,7 +9,7 @@ import yaml
+ 
+ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+ sys.path.insert(0, str(SCRIPTS))
+-from build_traceability import TraceabilityError, build_traceability  # noqa: E402
++from build_traceability import DEFAULT_EXTERNAL_SPECS, TraceabilityError, build_traceability  # noqa: E402
+ 
+ 
+ def _write_spec(path: Path, requirements: list[dict]) -> None:
+@@ -23,7 +23,7 @@ def test_valid_requirement_produces_rows(tmp_path):
+         "roadmap_milestone": "M1-A", "owner": "contrôleur", "status": "PLANNED",
+         "source_defects": ["D-001"], "derivation": "verbatim",
+     }])
+-    rows = build_traceability(specs_dir=specs, ledger_path=tmp_path / "no-ledger.md")
++    rows = build_traceability(specs_dir=specs, ledger_path=tmp_path / "no-ledger.md", external_specs=[])
+     assert rows == [{"defect": "D-001", "requirement": "FX-1", "spec": "fixture",
+                      "gate": "attack test 1", "milestone": "M1-A", "status": "PLANNED", "severity": 3}]
+ 
+@@ -36,7 +36,7 @@ def test_requirement_missing_gate_is_refused(tmp_path):
+         "source_defects": [], "derivation": "verbatim",
+     }])
+     with pytest.raises(TraceabilityError, match="FX-ORPHAN.*verification_gate"):
+-        build_traceability(specs_dir=specs, ledger_path=tmp_path / "no-ledger.md")
++        build_traceability(specs_dir=specs, ledger_path=tmp_path / "no-ledger.md", external_specs=[])
+ 
+ 
+ def test_requirement_missing_milestone_is_refused(tmp_path):
+@@ -47,7 +47,7 @@ def test_requirement_missing_milestone_is_refused(tmp_path):
+         "owner": "contrôleur", "status": "PLANNED", "source_defects": [], "derivation": "verbatim",
+     }])
+     with pytest.raises(TraceabilityError, match="FX-ORPHAN2.*roadmap_milestone"):
+-        build_traceability(specs_dir=specs, ledger_path=tmp_path / "no-ledger.md")
++        build_traceability(specs_dir=specs, ledger_path=tmp_path / "no-ledger.md", external_specs=[])
+ 
+ 
+ def test_requirement_missing_both_is_refused(tmp_path):
+@@ -58,7 +58,7 @@ def test_requirement_missing_both_is_refused(tmp_path):
+         "owner": "contrôleur", "status": "PLANNED", "source_defects": [], "derivation": "verbatim",
+     }])
+     with pytest.raises(TraceabilityError, match="FX-ORPHAN3"):
+-        build_traceability(specs_dir=specs, ledger_path=tmp_path / "no-ledger.md")
++        build_traceability(specs_dir=specs, ledger_path=tmp_path / "no-ledger.md", external_specs=[])
+ 
+ 
+ def test_one_orphan_among_many_still_fails_the_whole_batch(tmp_path):
+@@ -73,7 +73,7 @@ def test_one_orphan_among_many_still_fails_the_whole_batch(tmp_path):
+          "source_defects": [], "derivation": "verbatim"},
+     ])
+     with pytest.raises(TraceabilityError, match="FX-BAD"):
+-        build_traceability(specs_dir=specs, ledger_path=tmp_path / "no-ledger.md")
++        build_traceability(specs_dir=specs, ledger_path=tmp_path / "no-ledger.md", external_specs=[])
+ 
+ 
+ def test_unmapped_ledger_defects_are_explicit_not_dropped(tmp_path):
+@@ -89,7 +89,7 @@ def test_unmapped_ledger_defects_are_explicit_not_dropped(tmp_path):
+         "| D-001 | x | mapped one | **CODE** | fixed | FIXÉ |\n"
+         "| D-999 | x | orphan defect not covered by any spec | **CODE** | tbd | OUVERT |\n"
+     )
+-    rows = build_traceability(specs_dir=specs, ledger_path=ledger)
++    rows = build_traceability(specs_dir=specs, ledger_path=ledger, external_specs=[])
+     unmapped = [r for r in rows if r["status"] == "UNMAPPED_PENDING_SPEC"]
+     assert any(r["defect"] == "D-999" for r in unmapped)
+ 
+@@ -102,3 +102,17 @@ def test_real_repo_specs_produce_no_orphans():
+     # every requirement-linked row has both gate and milestone (enforced by build_traceability
+     # not raising) — this assertion is redundant with "it didn't raise" but documents intent
+     assert all(r.get("gate") and r.get("milestone") for r in rows if r["status"] != "UNMAPPED_PENDING_SPEC")
++
++
++def test_real_repo_produces_zero_unmapped_with_cv_bot_specs():
++    """M0.1 patch (deliverable 6): with the external cv_bot specs included, 0 UNMAPPED_PENDING_SPEC.
++
++    Requires ~/job-opportunity-radar/governance/{PROJECT_SPEC_V4,cv_bot_business_rules}.yaml to
++    exist on disk (M0.1 deliverables 4 and 6) — skipped if that sibling repo isn't checked out.
++    """
++    repo = Path(__file__).resolve().parents[1]
++    if not all(p.is_file() for p in DEFAULT_EXTERNAL_SPECS):
++        pytest.skip("~/job-opportunity-radar governance specs not present in this environment")
++    rows = build_traceability(specs_dir=repo / "specs")
++    unmapped = [r for r in rows if r["status"] == "UNMAPPED_PENDING_SPEC"]
++    assert unmapped == [], f"expected 0 UNMAPPED_PENDING_SPEC, got: {unmapped}"
+diff --git a/tests/test_project_isolation.py b/tests/test_project_isolation.py
+index 635e1b1..97deaba 100644
+--- a/tests/test_project_isolation.py
++++ b/tests/test_project_isolation.py
+@@ -10,11 +10,13 @@ from pathlib import Path
+ def test_no_product_repository_files():
+     """Verify no product repository CODE is present in JOÃO (RULE 29 — no embedded product code).
+ 
+-    `specs/*.yaml` is excluded: since M0 (SYSTEM_CONSTITUTION_V4.md), JOÃO core deliberately
+-    holds GOVERNANCE specs that name the products it orchestrates (e.g. `specs/cv_bot.yaml` —
+-    security requirements CV-1..CV-10) — that is meta-level governance data, not embedded
+-    product implementation. This distinction (spec-about vs. code-of) is a judgment call of
+-    the M0 run, flagged in its NON VÉRIFIÉ / LIMITES section for Boss arbitration.
++    M0.1 patch (deliverable 4): the M0 exception for `specs/` is RETIRED. The contre-review
++    ruled it a restored-but-quiet isolation breach: `specs/cv_bot.yaml` named a product
++    (`cv_bot`) inside JOÃO's own tree, exactly what this test exists to catch. The CV bot
++    business/security spec now lives in its own product repo
++    (`~/job-opportunity-radar/governance/PROJECT_SPEC_V4.yaml`) and is referenced from JOÃO
++    only as a typed, hash-verified external reference in `SPEC_BUNDLE_MANIFEST_V4.json`
++    (see `governance/spec_loader.py::_verify_external_reference`) — never copied in.
+     """
+     project_root = Path(__file__).parent.parent
+ 
+@@ -29,12 +31,11 @@ def test_no_product_repository_files():
+     ]
+ 
+     for pattern in product_patterns:
+-        matching_files = [p for p in project_root.rglob(f"*{pattern}*")
+-                          if "specs" not in p.relative_to(project_root).parts]
++        matching_files = list(project_root.rglob(f"*{pattern}*"))
+         if matching_files:
+             raise AssertionError(f"Found product-specific files matching '{pattern}': {matching_files}")
+ 
+-    print("✓ No product repository files in JOÃO (governance specs/*.yaml excluded, see docstring)")
++    print("✓ No product repository files in JOÃO (specs/ exception retired, M0.1 D4)")
+ 
+ def test_git_ignores_product_repos():
+     """Verify .gitignore excludes product repositories"""

@@ -19,6 +19,18 @@ notes: >
   dans IDEAS_BACKLOG.md (Supervisor digest, Regression sentinels) — transcrites, pas inventées
   — mais leur formalisation en exigence testable EST une interprétation de la tour de contrôle.
   À ARBITRER PAR LE BOSS.
+boss_validation_requested: true
+boss_summary: |-
+  Résumé Boss (patch M0.1 D5) — cette spec reste DANS le bundle : le GO portera sur ce contenu COMPLET (C-2).
+  OPS-1 : un rollback réellement EXÉCUTÉ (pas documenté) est exigé en preuve avant promotion.
+  OPS-2 : digest humain post-run auto-généré, jamais de logs bruts à fouiller.
+  OPS-3 : sentinels de non-régression re-testent les versions déjà promues après chaque livraison.
+  OPS-4 : budgets et kill-switch — un run qui dépasse s'arrête, jamais en silence.
+  OPS-5 : queue d'approbation Boss explicite avant toute action GitHub/publication.
+  OPS-6 : télémétrie CAS-7 consolidée en rapport ; valeur inconnue = UNKNOWN, jamais un proxy.
+  OPS-7 : nuits limitées (M10) — refresh/health-check/bench autorisés, merge/publication/promotion interdits.
+  OPS-8/9 : mission bornée (jamais saturation de contexte) ; NON VÉRIFIÉ/LIMITES obligatoire à chaque rapport — déjà SATISFIED.
+  Découpage entièrement interprété par la tour de contrôle — à valider ou amender explicitement (silence = pas de GO, C-2).
 requirements:
   - id: OPS-1
     statement: >

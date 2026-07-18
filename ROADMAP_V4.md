@@ -13,13 +13,21 @@ celles qui restent à écrire sont marquées `(à écrire)`.
 ---
 
 ## M0 — SAFE STOP + AUTORITÉ DOCUMENTAIRE
-**Carte** : `~/Claude-HQ/JOAO_RUN_CARD_M0_AUTORITE_V4.md` (ce run). **Dépend de** : rien (racine).
-**Livre** : les 6 autorités (§1 de la Constitution) + safe-stop (Apply Assist désactivé, `/pkg/`
-bloqué, promotions automatiques désactivées, statut `ALPHA`, claims exact-SHA retirées).
+**Carte** : `~/Claude-HQ/JOAO_RUN_CARD_M0_AUTORITE_V4.md` (M0) + `~/Claude-HQ/JOAO_RUN_CARD_M01_PATCH_ACTIVATION.md`
+(M0.1, correctif documentaire suite contre-review externe : intégrité PASS, cohérence
+sémantique FAIL). **Dépend de** : rien (racine).
+**Livre (périmètre RÉEL, corrigé D-043)** : les 7 autorités du bundle + l'activation record
+(§1 de la Constitution) · statut `ALPHA` affiché (README/CLI/UI/api.py) · Apply Assist
+SUSPENDU (hérité, non réactivé par ce run) · claims trompeuses retirées (exact-SHA,
+« validé GO Boss » sur les mauvais documents) · documents candidats générés ET vérifiés en
+lecture (loader G1 + traçabilité G2). **M0 ne bloque PAS `/pkg/`** — le blocage de l'accès
+brut `/pkg/` est une exigence CV-SEC (`governance/PROJECT_SPEC_V4.yaml` CV-3, M1-B), pas une
+livraison de M0 : aucun code produit CV bot n'est touché par ce dépôt.
 **Exigences touchées** : UI-9, OPS-9 (product_ui.yaml, operations.yaml).
 **Gate** : une seule roadmap active, aucune ancienne spec chargée par le loader (G1), GO Boss.
-**Décision Boss** : GO sur `SYSTEM_CONSTITUTION_V4.md` + `SPEC_INDEX_V4.json` — c'est LA
-signature qui active V4 (fait passer `RUNTIME_AUTHORITY` à `true`).
+**Décision Boss** : GO sur `SYSTEM_CONSTITUTION_V4.md` + `SPEC_BUNDLE_MANIFEST_V4.json` — c'est
+LA signature, enregistrée dans `ACTIVATION_RECORD_V4.json` (jamais dans le bundle lui-même),
+qui active V4 (fait passer `runtime_authority` à `true`).
 
 ## VAGUE 1 — PARALLÈLE (repos distincts, reviews et promotions séparées)
 
@@ -34,8 +42,10 @@ review→approbation→promotion→rollback sur une mission jouet, MÊME hash de
 ### M1-B — CV-SEC V4 « sécurité du produit utilisé »
 **Carte** : `~/Claude-HQ/CV_BOT_RUN_CARD_CVSEC_V4.md`. **Dépend de** : rien (repo distinct,
 parallèle à M1-A). **Repo** : `~/job-opportunity-radar`.
-**Exigences** : `specs/cv_bot.yaml` CV-1→CV-10 · `specs/security.yaml` SEC-1, SEC-2, SEC-4 ·
-`specs/product_ui.yaml` UI-4, UI-8.
+**Exigences** : `governance/PROJECT_SPEC_V4.yaml` (ce repo, ex-`specs/cv_bot.yaml` — déplacé
+par le patch M0.1 D4) CV-1→CV-10 · `governance/cv_bot_business_rules.yaml` (ce repo, patch
+M0.1 D6) CVBIZ-1→CVBIZ-11 · JOÃO `specs/security.yaml` SEC-1, SEC-2, SEC-4 ·
+JOÃO `specs/product_ui.yaml` UI-4, UI-8.
 **Gate** : les 10 attaques rouge→vert · parcours réel complet (offre→CV→lettre→download→
 Apply Assist en DONNÉES DE TEST→revue humaine) · preuve que le flux quotidien du Boss est inchangé.
 **Décision Boss** : GO sur le parcours + levée de la suspension Apply Assist (CV-10) — APRÈS
@@ -73,7 +83,8 @@ utilisables au premier jugement · médiane ≤1 boucle de réparation · aucune
 ## M5 — CLIQUET DÉTERMINISTE
 **Carte** : (à écrire, dépend de M4 = poursuivre). Outils avec contrat, version, health
 check, tests, mutation tests, fallback. **Aucune autonomie nocturne à ce stade.**
-**Exigences** : `specs/memory.yaml` MEM-7 (graduation vers le code) · `specs/cv_bot.yaml`
+**Exigences** : `specs/memory.yaml` MEM-7 (graduation vers le code) ·
+`~/job-opportunity-radar/governance/cv_bot_business_rules.yaml` CVBIZ-1→CVBIZ-11
 et `specs/product_ui.yaml` (règles CV/UX graduées hors prompt une fois couvertes par une gate technique).
 
 ## M6 — CHAT CORE MINIMAL

@@ -22,6 +22,18 @@ notes: >
   À ARBITRER PAR LE BOSS : cette spec entière (portée et découpage des 9 exigences)
   n'a pas de validation explicite du panel V4 — seul son contenu SOURCE (les leçons/
   décisions citées) est validé.
+boss_validation_requested: true
+boss_summary: |-
+  Résumé Boss (patch M0.1 D5) — cette spec reste DANS le bundle : le GO portera sur ce contenu COMPLET (C-2).
+  UI-1 : toute UI livrée a ses actions réellement câblées, prouvées par un clic E2E.
+  UI-2 : le vrai verdict du reviewer s'affiche toujours, jamais une carte générique.
+  UI-3 : un run n'est « DELIVERED » qu'avec un artefact promu, jamais avant.
+  UI-4 : tout rendu visuel est comparé à une référence Boss-validée dans l'évidence.
+  UI-5/6/7 : le chat (M6) route l'intention avant tout run, refuse une mission sans spec signée, reprend une session sans perte.
+  UI-8 : jamais de fermeture silencieuse faute de TTY.
+  UI-9 : label ALPHA tant que la checklist GA (12 critères) n'est pas complète — déjà SATISFIED.
+  Découpage entièrement interprété par la tour de contrôle, aucune section dédiée dans le rapport V4 source.
+  À valider ou amender explicitement — silence = pas de GO (C-2).
 requirements:
   - id: UI-1
     statement: >

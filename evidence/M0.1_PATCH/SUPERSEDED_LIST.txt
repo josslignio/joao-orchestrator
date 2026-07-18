@@ -1,0 +1,9 @@
+SUPERSEDED header check — 7 legacy docs in ~/Claude-HQ (re-verified, unchanged by M0.1)
+$ for f in ...; do head -3 "$f" | grep -q SUPERSEDED && echo OK || echo MISSING; done
+OK  JOAO_MASTER_ROADMAP_20260717.md
+OK  JOAO_RUN_CARD_SUITE_A.md
+OK  JOAO_RUN_CARD_SUITE_B.md
+OK  JOAO_RUN_CARD_BIGRUN_SUITE.md
+OK  JOAO_SYNTHESE_DEUX_PANELS_20260718.md
+OK  JOAO_RAPPORT_OPTIMISATION_PANEL_20260718.md
+OK  JOAO_PHASE0_PROTOCOL.md

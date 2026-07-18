@@ -1,25 +1,30 @@
 # SYSTEM CONSTITUTION V4 — JOÃO.AI (autorité documentaire unique)
-**STATUS: PROMOTED_PENDING_GO_BOSS · VERSION: 4.0.0 · DATE: 2026-07-18 · RUNTIME_AUTHORITY: intended-once-signed**
-**SOURCE: transcription fidèle du rapport d'audit externe GPT (`~/Claude-HQ/RAPPORT_OPTIMISATION_V4_GPT.md`, §6-7), validé GO Boss le 18/07 comme source d'autorité du run M0. Ce document devient l'autorité RUNTIME du système au moment où le Boss dit GO explicitement sur CE document + `SPEC_INDEX_V4.json` (voir §9 — c'est la signature qui active V4).**
+**STATUS: CANDIDATE · VERSION: 4.0.0 · DATE: 2026-07-18 (patch M0.1) · RUNTIME_AUTHORITY: false · SOURCE_STATUS: proposed_not_signed**
+**SOURCE : transcription fidèle du rapport d'audit externe GPT (`~/Claude-HQ/RAPPORT_OPTIMISATION_V4_GPT.md`, §6-7). Le 18/07, le Boss a donné GO sur la DIRECTION uniquement — utiliser ce rapport externe comme source d'autorité pour le run M0 (voir `DECISION_LOG.jsonl` DEC-008) — PAS sur le contenu de CE document ni sur `SPEC_BUNDLE_MANIFEST_V4.json`. À ce jour, AUCUN GO Boss n'a jamais été donné sur ce document précis ou sur son hash : la formulation « validé GO Boss » utilisée par le rapport de run M0 pour CE document était trop large et a été retirée par le patch M0.1 (contre-review, cohérence sémantique FAIL). Ce document devient l'autorité RUNTIME du système SEULEMENT au moment où le Boss dit GO explicitement, par identité + hash + version (C-2 : silence ≠ GO), sur CE document + `SPEC_BUNDLE_MANIFEST_V4.json` — voir §8/§9 et `ACTIVATION_RECORD_V4.json`, où cette signature est enregistrée SÉPARÉMENT du bundle qu'elle valide.**
 
-Le runtime ne parcourt jamais librement les anciens Markdown. Un document actif est un document listé dans `SPEC_INDEX_V4.json`, avec un sha256 vérifié — jamais « le dernier document en date ».
+Le runtime ne parcourt jamais librement les anciens Markdown. Un document actif est un document listé dans `SPEC_BUNDLE_MANIFEST_V4.json` (`bundle_documents`), avec un sha256 vérifié — jamais « le dernier document en date ». `DECISION_LOG.jsonl` n'est PAS un document du bundle : c'est un journal vivant, lu directement, qui continue de recevoir des décisions sans jamais invalider le hash du bundle (§1.7, fin de la circularité d'activation — patch M0.1 deliverable 1).
 
 ---
 
-## 1. LES 6 AUTORITÉS (l'architecture documentaire, rapport §5)
+## 1. LES 7 AUTORITÉS (l'architecture documentaire, rapport §5 — révisée par le patch M0.1 deliverable 1)
 
 Les anciens documents restent dans l'historique, marqués `STATUS: SUPERSEDED / REPLACED_BY: MASTER_SPEC_V4 / RUNTIME_AUTHORITY: false` — leur contenu de fond survit **à l'intérieur** des specs V4, il n'est pas perdu, seulement plus une autorité d'exécution directe.
 
+**M0.1 a scindé l'ancien couple « index + décisions » en deux pièces distinctes pour tuer la circularité d'activation** (contre-review : un document qui grossit avec l'historique de ses propres validations ne peut jamais être une preuve stable de CE qu'il valide) :
+
 1. **`SYSTEM_CONSTITUTION_V4.md`** (ce document) — invariants universels : frontières de confiance, interdits, promotion, rôles, statuts, portée des preuves.
-2. **`SPEC_INDEX_V4.json`** — index machine des documents actifs (versions + sha256 réels). Un document hors index n'est pas actif.
-3. **`specs/*.yaml`** — 8 specs typées (`runtime_integrity`, `security`, `memory`, `phase0`, `provider_cascade`, `cv_bot`, `product_ui`, `operations`) ; chaque exigence porte : id immuable, statement, severity, verification_gate, roadmap_milestone, owner, status.
-4. **`ROADMAP_V4.md`** — ne recopie jamais les specs ; référence leurs IDs, les dépendances, les gates, les décisions Boss.
-5. **`TRACEABILITY_V4.jsonl`** — défaut → exigence → code → test → attaque → preuve → milestone → statut. Une exigence sans test/preuve/milestone est **invalide** (le générateur refuse de l'émettre — voir G2).
-6. **`DECISION_LOG.jsonl`** — décisions Boss : décision, portée, date, version, hash, preuve, supersession. Le Markdown est une VUE humaine, jamais une autorité machine.
+2. **`SPEC_BUNDLE_MANIFEST_V4.json`** — le bundle IMMUABLE : Constitution + les 7 specs locales + roadmap + traçabilité (versions + sha256 réels), plus les références externes typées (`external_spec_references`). Un document hors bundle n'est pas actif. **Ne contient jamais `DECISION_LOG.jsonl`** (voir point 7) — et ne change plus jamais après signature : toute évolution est un nouveau bundle (v4.0.1, ...) avec un nouvel `ACTIVATION_RECORD_V4.json`.
+3. **`ACTIVATION_RECORD_V4.json`** — l'enregistrement SÉPARÉ du GO Boss : référence le hash du bundle signé (`bundle_sha256_at_generation`), porte `boss_go` (identité + date + hash confirmé + version confirmée) et `runtime_authority`. Le bundle ne s'auto-déclare JAMAIS signé (D-038, LOI 1) ; c'est ce fichier, et lui seul, qui peut affirmer `runtime_authority: true`, et seulement après un GO explicite dont le hash confirmé correspond exactement au bundle signé.
+4. **`specs/*.yaml`** — 7 specs locales typées (`runtime_integrity`, `security`, `memory`, `phase0`, `provider_cascade`, `product_ui`, `operations`) ; chaque exigence porte : id immuable, statement, severity, verification_gate, roadmap_milestone, owner, status. La 8ᵉ spec du rapport (`cv_bot`) n'est plus locale (voir point 6).
+5. **`ROADMAP_V4.md`** — ne recopie jamais les specs ; référence leurs IDs, les dépendances, les gates, les décisions Boss.
+6. **Référence externe typée `cv-bot`** (`SPEC_BUNDLE_MANIFEST_V4.json/external_spec_references`) — pointe vers `~/job-opportunity-radar/governance/PROJECT_SPEC_V4.yaml` (project_id, repository, spec_path, version, sha256), vérifiée par `governance/spec_loader.py::_verify_external_reference` (fichier absent, sha256 erroné, ou `spec_path` qui échappe au repo référencé — traversal/symlink — tous refusés). Le contenu (CV-1→CV-10) n'a pas changé depuis M0, seul son emplacement a bougé (isolation produit, patch M0.1 deliverable 4) ; les 11 défauts métier qu'il ne couvre pas sont désormais dans `~/job-opportunity-radar/governance/cv_bot_business_rules.yaml` (deliverable 6).
+7. **`TRACEABILITY_V4.jsonl`** — défaut → exigence → code → test → attaque → preuve → milestone → statut. Une exigence sans test/preuve/milestone est **invalide** (le générateur refuse de l'émettre — voir G2).
+
+**`DECISION_LOG.jsonl`** (décisions Boss : décision, portée, date, version, hash, preuve, supersession) reste un document du repo, mais **N'EST PLUS une des 7 autorités du bundle** — c'est un journal VIVANT, hors bundle, jamais sha256-vérifié contre le bundle, lu directement par `spec_loader.py`. Le Markdown est une VUE humaine, jamais une autorité machine. C'est précisément le fait qu'il vivait À L'INTÉRIEUR de l'ancien `SPEC_INDEX_V4.json` (M0) qui créait la circularité d'activation corrigée ici.
 
 ## 2. LES 7 LOIS (C-1 → C-7, verbatim rapport §6)
 
-**C-1 — Une seule autorité.** Le runtime charge exclusivement `SPEC_INDEX_V4.json` — jamais « le dernier document ».
+**C-1 — Une seule autorité.** Le runtime charge exclusivement `SPEC_BUNDLE_MANIFEST_V4.json` — jamais « le dernier document ».
 
 **C-2 — Silence ≠ GO.** Sont INVALIDES comme validation : l'absence d'opposition, une demande de lancement, l'ouverture d'un rendu, un message ambigu, l'approbation d'un autre artefact. Un GO exige : identité + hash + version + rendu si visuel.
 
@@ -80,7 +85,7 @@ SUITE-A monolithique · SUITE-B immédiatement après CV-SEC · Chat Era avant l
 
 ## 8. CE DOCUMENT N'EST PAS ENCORE UNE AUTORITÉ RUNTIME
 
-Conformément à C-2 et à la carte de run M0 (`~/Claude-HQ/JOAO_RUN_CARD_M0_AUTORITE_V4.md`), ce document et `SPEC_INDEX_V4.json` sont produits en statut `CANDIDATE`. Ils deviennent l'autorité (`RUNTIME_AUTHORITY: true`) au moment — et seulement au moment — où le Boss donne un GO explicite (identité + hash + version, C-2) sur leur lecture. Ce GO est demandé dans `BOSS_DECISION` du rapport de ce run — il n'est jamais auto-déclaré par la tour de contrôle (LOI 1, D-038).
+Conformément à C-2 et à la carte de run M0.1 (`~/Claude-HQ/JOAO_RUN_CARD_M01_PATCH_ACTIVATION.md`, correctif de `~/Claude-HQ/JOAO_RUN_CARD_M0_AUTORITE_V4.md`), ce document et `SPEC_BUNDLE_MANIFEST_V4.json` sont produits en statut `CANDIDATE`. Ils deviennent l'autorité (`runtime_authority: true`) au moment — et seulement au moment — où le Boss donne un GO explicite (identité + hash + version, C-2) sur leur lecture, GO qui est enregistré dans `ACTIVATION_RECORD_V4.json` — jamais dans le bundle lui-même. Ce GO est demandé dans `BOSS_DECISION` du rapport de ce run (`M0.1_PATCH_REPORT.md`) — il n'est jamais auto-déclaré par la tour de contrôle (LOI 1, D-038). Avant ce GO, `ACTIVATION_RECORD_V4.json` existe déjà sur disque avec `boss_go.given: false` et `runtime_authority: false` — sa présence ne préjuge en rien de la décision.
 
 ## NON VÉRIFIÉ / LIMITES DE CE DOCUMENT
 - C'est une **transcription** des §6-7 du rapport V4, pas une réinterprétation : les 7 lois et le vocabulaire sont repris texte-pour-texte quand le rapport les formule explicitement.

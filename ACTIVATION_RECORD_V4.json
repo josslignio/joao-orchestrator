@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "activation_id": "ACT-V4-PENDING",
+  "bundle_version": "4.0.0",
+  "bundle_sha256_at_generation": "9560d7400d1a5ccaec881e089725e9f85d3fde62ebd6e477fbbe5505b06a71db",
+  "generated_at": "2026-07-18T15:27:51Z",
+  "boss_go": {
+    "given": false,
+    "identity": null,
+    "date": null,
+    "hash_confirmed": null,
+    "version_confirmed": null
+  },
+  "runtime_authority": false,
+  "note": "Enregistrement SÉPARÉ du bundle (fin de la circularité d'activation, patch M0.1 deliverable 1). Le bundle ne s'auto-déclare jamais signé (C-1/C-2, D-038) — silence ≠ GO. `runtime_authority` ne passe à `true` que si un GO Boss explicite (identité + hash + version) remplit `boss_go` ci-dessus ET que `boss_go.hash_confirmed` == `bundle_sha256_at_generation` du bundle SIGNÉ (pas d'un bundle regénéré depuis). DECISION_LOG.jsonl reste hors bundle et hors de ce record : c'est un journal vivant, jamais une autorité machine (Constitution §1.6)."
+}

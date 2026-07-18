@@ -1,1 +1,5 @@
-PyYAML>=6.0
+PyYAML==6.0.3
+# Pinned exact version (M0.1 patch, deliverable 7 — was ">=6.0", never actually tested against
+# a range). See requirements.lock.txt for the full sha256 hash set (all published PyPI
+# artifacts of this exact release) — install reproducibly with:
+#   python3 -m pip install --require-hashes -r requirements.lock.txt

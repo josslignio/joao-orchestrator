@@ -10,11 +10,13 @@ from pathlib import Path
 def test_no_product_repository_files():
     """Verify no product repository CODE is present in JOÃO (RULE 29 — no embedded product code).
 
-    `specs/*.yaml` is excluded: since M0 (SYSTEM_CONSTITUTION_V4.md), JOÃO core deliberately
-    holds GOVERNANCE specs that name the products it orchestrates (e.g. `specs/cv_bot.yaml` —
-    security requirements CV-1..CV-10) — that is meta-level governance data, not embedded
-    product implementation. This distinction (spec-about vs. code-of) is a judgment call of
-    the M0 run, flagged in its NON VÉRIFIÉ / LIMITES section for Boss arbitration.
+    M0.1 patch (deliverable 4): the M0 exception for `specs/` is RETIRED. The contre-review
+    ruled it a restored-but-quiet isolation breach: `specs/cv_bot.yaml` named a product
+    (`cv_bot`) inside JOÃO's own tree, exactly what this test exists to catch. The CV bot
+    business/security spec now lives in its own product repo
+    (`~/job-opportunity-radar/governance/PROJECT_SPEC_V4.yaml`) and is referenced from JOÃO
+    only as a typed, hash-verified external reference in `SPEC_BUNDLE_MANIFEST_V4.json`
+    (see `governance/spec_loader.py::_verify_external_reference`) — never copied in.
     """
     project_root = Path(__file__).parent.parent
 
@@ -29,12 +31,11 @@ def test_no_product_repository_files():
     ]
 
     for pattern in product_patterns:
-        matching_files = [p for p in project_root.rglob(f"*{pattern}*")
-                          if "specs" not in p.relative_to(project_root).parts]
+        matching_files = list(project_root.rglob(f"*{pattern}*"))
         if matching_files:
             raise AssertionError(f"Found product-specific files matching '{pattern}': {matching_files}")
 
-    print("✓ No product repository files in JOÃO (governance specs/*.yaml excluded, see docstring)")
+    print("✓ No product repository files in JOÃO (specs/ exception retired, M0.1 D4)")
 
 def test_git_ignores_product_repos():
     """Verify .gitignore excludes product repositories"""

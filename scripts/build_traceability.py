@@ -26,6 +26,16 @@ import import_ledger  # noqa: E402  (reuse the existing, tested ledger parser)
 
 DEFAULT_LEDGER = Path.home() / "Claude-HQ" / "DEFECTS_LEDGER.md"
 
+# M0.1 patch (deliverable 6): specs/cv_bot.yaml moved out of this repo (test_project_isolation
+# fix, deliverable 4) to ~/job-opportunity-radar/governance/PROJECT_SPEC_V4.yaml, referenced by
+# JOÃO only as a typed external reference (SPEC_BUNDLE_MANIFEST_V4.json). Its requirements (and
+# the new cv_bot_business_rules.yaml covering the 11 previously-UNMAPPED defects) still need to
+# appear in TRACEABILITY_V4.jsonl, so this generator reads them directly, same as any local spec.
+DEFAULT_EXTERNAL_SPECS = [
+    Path.home() / "job-opportunity-radar" / "governance" / "PROJECT_SPEC_V4.yaml",
+    Path.home() / "job-opportunity-radar" / "governance" / "cv_bot_business_rules.yaml",
+]
+
 
 class TraceabilityError(RuntimeError):
     """Raised when a requirement has no gate+milestone — an invalid, un-emittable exigence."""
@@ -40,11 +50,17 @@ def all_ledger_defect_ids(ledger_path: Path = DEFAULT_LEDGER) -> list[str]:
 
 
 def build_traceability(specs_dir: Path = REPO / "specs",
-                       ledger_path: Path = DEFAULT_LEDGER) -> list[dict[str, Any]]:
+                       ledger_path: Path = DEFAULT_LEDGER,
+                       external_specs: list[Path] | None = None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     mapped_defects: set[str] = set()
 
-    for spec_file in sorted(specs_dir.glob("*.yaml")):
+    spec_files = sorted(specs_dir.glob("*.yaml"))
+    for ext in (DEFAULT_EXTERNAL_SPECS if external_specs is None else external_specs):
+        if ext.is_file():
+            spec_files.append(ext)
+
+    for spec_file in spec_files:
         spec = yaml.safe_load(spec_file.read_text(encoding="utf-8"))
         spec_name = spec.get("spec", spec_file.stem)
         for req in spec.get("requirements", []):

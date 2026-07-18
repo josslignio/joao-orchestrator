@@ -1,15 +1,16 @@
 {
   "schema_version": 1,
-  "version": "4.0.0",
-  "generated_at": "2026-07-18T14:24:47Z",
-  "runtime_authority": false,
-  "active_documents": [
+  "bundle_version": "4.0.0",
+  "generated_at": "2026-07-18T15:27:46Z",
+  "immutable": true,
+  "immutability_note": "Ce manifest ne change JAMAIS après signature (ACTIVATION_RECORD_V4.json). DECISION_LOG.jsonl est un journal vivant HORS bundle (voir docstring) — il peut recevoir de nouvelles entrées sans jamais invalider bundle_sha256.",
+  "bundle_documents": [
     {
       "path": "SYSTEM_CONSTITUTION_V4.md",
       "type": "constitution",
       "version": "4.0.0",
-      "sha256": "1324dac7f68304122b39efc6e25872de4bb33ba679987761d1fc41f92e46ad20",
-      "bytes": 9321
+      "sha256": "138280b6352b04314cc2a31494d1a3fe4a333b9ce2388b66f65424f162a1543e",
+      "bytes": 12870
     },
     {
       "path": "specs/runtime_integrity.yaml",
@@ -47,46 +48,42 @@
       "bytes": 4598
     },
     {
-      "path": "specs/cv_bot.yaml",
-      "type": "spec",
-      "version": "4.0.0",
-      "sha256": "920315f5589a7b224483ccf8793003e80630c50183fd4b34b117a6e0c02463cf",
-      "bytes": 6408
-    },
-    {
       "path": "specs/product_ui.yaml",
       "type": "spec",
       "version": "4.0.0",
-      "sha256": "3cff02e0a4cc8d5961f5a59870ad6f79043180509136ca82158a445999a01fa6",
-      "bytes": 5772
+      "sha256": "fc15639987b5ec1d273ed7e633bb1250212a21e2a22eb0eab93af0b8ddce495a",
+      "bytes": 6755
     },
     {
       "path": "specs/operations.yaml",
       "type": "spec",
       "version": "4.0.0",
-      "sha256": "53ffb2e311da6e2a930f4fda36b6d3b9aa6f9284df7d3b0d1aea406000c6cf7b",
-      "bytes": 5814
+      "sha256": "783911458777e08ea99e383bed83ae0034a963a092350ae075c820eb701160c0",
+      "bytes": 6914
     },
     {
       "path": "ROADMAP_V4.md",
       "type": "roadmap",
       "version": "4.0.0",
-      "sha256": "06ef5af883ba57e94caab59c081cf5dd6f4aca44db0c013457e331eb7b415851",
-      "bytes": 8411
+      "sha256": "e6c659de4fdeb65e45d8c4994b0ba5821c864a303303c1a4999a304ca9bf3cb4",
+      "bytes": 9352
     },
     {
       "path": "TRACEABILITY_V4.jsonl",
       "type": "traceability",
       "version": "4.0.0",
-      "sha256": "35e0676af81a3450b95765a9b3776cfcbd81867d8268a3e8beb68314137590c3",
-      "bytes": 20156
-    },
-    {
-      "path": "DECISION_LOG.jsonl",
-      "type": "decision_log",
-      "version": "4.0.0",
-      "sha256": "6cbdb9f3ba1647156e191f94771cae496601bc0b1c54cd3703d408d95539b5bc",
-      "bytes": 4571
+      "sha256": "6b44db4a1a98c2c1a90c4e685b745719face518dd01fcc41dfb048d3a24040bc",
+      "bytes": 18696
     }
-  ]
+  ],
+  "external_spec_references": [
+    {
+      "project_id": "cv-bot",
+      "repository": "~/job-opportunity-radar",
+      "spec_path": "governance/PROJECT_SPEC_V4.yaml",
+      "version": "4.0.0",
+      "sha256": "c99669d3cbd1ef19252876cb747a9f7c3f7cc7a4b4189b92947efbaecc8cec6b"
+    }
+  ],
+  "bundle_sha256": "9560d7400d1a5ccaec881e089725e9f85d3fde62ebd6e477fbbe5505b06a71db"
 }
