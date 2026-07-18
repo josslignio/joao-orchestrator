@@ -184,13 +184,19 @@ def real_glm_runner(executable: Path, timeout: int = 900) -> Callable:
     return _run
 
 
-def real_claude_runner(executable: str = "claude", timeout: int = 1200) -> Callable:
-    """A last-resort `claude` CLI builder. Real subprocess; only ever reached on full escalation."""
+def real_claude_runner(executable: str = "claude", timeout: int = 1200,
+                       claude_model: str = "sonnet") -> Callable:
+    """A last-resort `claude` CLI builder. Real subprocess; only ever reached on full escalation.
+
+    B-24 tiering: `claude_model` selects the tier — "haiku" for a cheap smoke build, "sonnet"
+    for a real build (never Opus, per the quota doctrine). The model actually used is honest:
+    it is exactly the `--model` we pass.
+    """
     from ..bubble.runtime import digest
 
     def _run(workspace: Path, task_file: Path, output: Path, allowed: list[str], angle: str) -> dict:
         prompt = task_file.read_text()
-        argv = [executable, "-p", prompt, "--permission-mode", "acceptEdits",
+        argv = [executable, "-p", prompt, "--model", claude_model, "--permission-mode", "acceptEdits",
                 "--add-dir", str(workspace)]
         started = time.monotonic()
         try:
@@ -239,17 +245,21 @@ class CascadeBuilder:
     def __init__(self, *, glm_executable: Path = Path("~/.local/bin/joao-glm").expanduser(),
                  claude_executable: str = "claude", n: int = 3,
                  angles: tuple[str, ...] = DEFAULT_ANGLES, timeout: int = 900,
+                 claude_model: str = "sonnet",
                  deterministic: Optional[Callable] = None, judge: Optional[Callable] = None,
                  glm_runner: Optional[Callable] = None, claude_runner: Optional[Callable] = None,
                  test_runner: Optional[Callable] = None):
         self.glm_executable = Path(glm_executable)
+        self.claude_executable = claude_executable
+        self.claude_model = claude_model  # B-24: "sonnet" build / "haiku" smoke (never Opus)
         self.n = n
         self.angles = angles
         self.timeout = timeout
         self.deterministic = deterministic
         self.judge = judge or _readability_tiebreak_judge
         self.glm_runner = glm_runner or real_glm_runner(self.glm_executable, timeout)
-        self.claude_runner = claude_runner or real_claude_runner(claude_executable, max(timeout, 1200))
+        self._claude_runner_injected = claude_runner
+        self.claude_runner = claude_runner or real_claude_runner(claude_executable, max(timeout, 1200), claude_model)
         self.test_runner = test_runner or _default_test_runner
 
     # BuilderAdapter API — RunRuntime calls this exactly like GLMBuilder.build
@@ -295,11 +305,16 @@ class CascadeBuilder:
             result._cap_index = index  # type: ignore[attr-defined]
             return result
 
+        # B-24: a smoke mission uses the cheap Claude tier (haiku); a real build uses sonnet.
+        claude_runner = self.claude_runner
+        if self._claude_runner_injected is None and run.get("smoke"):
+            claude_runner = real_claude_runner(self.claude_executable, max(self.timeout, 1200), "haiku")
+
         def glm(_task: TaskSpec, angle: str) -> WorkerResult:
             return _worker("glm", angle, self.glm_runner, COST_GLM)
 
         def claude(_task: TaskSpec) -> WorkerResult:
-            return _worker("claude", "", self.claude_runner, COST_CLAUDE)
+            return _worker("claude", "", claude_runner, COST_CLAUDE)
 
         def verify(_task: TaskSpec, _result: WorkerResult) -> tuple[bool, float]:
             # objective tests FIRST, on the candidate that is currently applied to the worktree

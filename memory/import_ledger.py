@@ -205,18 +205,39 @@ def load_existing() -> dict:
     return out
 
 
-def main():
-    if not LEDGER.is_file():
-        print(f"ledger not found: {LEDGER}"); return 2
-    ledger_lessons = parse_ledger(LEDGER.read_text())
-    law_lessons = parse_laws(ANALYSIS.read_text()) if ANALYSIS.is_file() else []
-    candidates = law_lessons + ledger_lessons  # laws first → stable L-001.. for systemic
+def _load_existing_from(lessons_path: Path) -> dict:
+    if not lessons_path.is_file():
+        return {}
+    out = {}
+    for line in lessons_path.read_text().splitlines():
+        line = line.strip()
+        if line:
+            try:
+                d = json.loads(line)
+                out[d["source_defect"]] = d
+            except (json.JSONDecodeError, KeyError):
+                continue
+    return out
 
-    existing = load_existing()
-    # stable id assignment: keep existing ids, append new ones by next free number
+
+def import_lessons(ledger_path: Path, lessons_path: Path, analysis_path: Path | None = None,
+                   today: str | None = None) -> dict:
+    """Idempotent, append-only import of a ledger (+ 6 LOIS) into `lessons_path`.
+
+    Parameterised so B-37 can point it at any ledger/lessons pair (the real brain, or a temp
+    one in tests). Keeps every existing id, only assigns fresh L-nnn to genuinely-new defects.
+    """
+    ledger_path, lessons_path = Path(ledger_path), Path(lessons_path)
+    if not ledger_path.is_file():
+        return {"added": 0, "total": 0, "from_ledger": 0, "from_laws": 0, "error": "ledger not found"}
+    ledger_lessons = parse_ledger(ledger_path.read_text())
+    law_lessons = (parse_laws(Path(analysis_path).read_text())
+                   if analysis_path and Path(analysis_path).is_file() else [])
+    candidates = law_lessons + ledger_lessons  # laws first → stable L-001.. for systemic
+    existing = _load_existing_from(lessons_path)
     used_nums = sorted(int(d["id"].split("-")[1]) for d in existing.values() if d.get("id", "").startswith("L-"))
     next_num = (used_nums[-1] + 1) if used_nums else 1
-    today = date(2026, 7, 18).isoformat()
+    today = today or date(2026, 7, 18).isoformat()
     added = 0
     lines = [json.dumps(d, ensure_ascii=False, sort_keys=True) for d in existing.values()]
     seen = set(existing)
@@ -228,10 +249,19 @@ def main():
         next_num += 1
         added += 1
         lines.append(json.dumps(c, ensure_ascii=False, sort_keys=True))
-    LESSONS.write_text("\n".join(lines) + ("\n" if lines else ""))
-    total = len(existing) + added
-    print(f"imported {added} new lessons ({total} total) → {LESSONS}")
-    print(f"  from ledger: {len(ledger_lessons)} · from 6 LOIS: {len(law_lessons)}")
+    if added or not lessons_path.exists():
+        lessons_path.parent.mkdir(parents=True, exist_ok=True)
+        lessons_path.write_text("\n".join(lines) + ("\n" if lines else ""))
+    return {"added": added, "total": len(existing) + added,
+            "from_ledger": len(ledger_lessons), "from_laws": len(law_lessons)}
+
+
+def main():
+    result = import_lessons(LEDGER, LESSONS, ANALYSIS)
+    if result.get("error"):
+        print(f"ledger not found: {LEDGER}"); return 2
+    print(f"imported {result['added']} new lessons ({result['total']} total) → {LESSONS}")
+    print(f"  from ledger: {result['from_ledger']} · from 6 LOIS: {result['from_laws']}")
     return 0
 
 

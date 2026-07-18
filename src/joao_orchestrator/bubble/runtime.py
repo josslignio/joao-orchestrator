@@ -66,6 +66,25 @@ def _retro():
     return _RETRO
 
 
+_LEDGER_SYNC = None
+_LEDGER_SYNC_LOADED = False
+
+
+def _ledger_sync_mod():
+    """Lazily import the B-37 ledger→brain sync (memory/ledger_sync.py). None if absent."""
+    global _LEDGER_SYNC, _LEDGER_SYNC_LOADED
+    if _LEDGER_SYNC_LOADED:
+        return _LEDGER_SYNC
+    _LEDGER_SYNC_LOADED = True
+    mem = _memory_dir()
+    if (mem / "ledger_sync.py").exists():
+        if str(mem) not in sys.path:
+            sys.path.insert(0, str(mem))
+        import ledger_sync as _mod  # noqa: PLC0415
+        _LEDGER_SYNC = _mod
+    return _LEDGER_SYNC
+
+
 def now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -267,11 +286,12 @@ def claude_capability() -> dict[str, Any]:
 
 class RunRuntime:
     """Persistent CP2 state machine, evidence writer and bounded repair loop."""
-    def __init__(self, state_root: Path, *, builder: BuilderAdapter, reviewer: ReviewerAdapter | None = None, tests: TestRunnerAdapter | None = None, memory: MemoryAdapter | None = None, profiles: ProjectProfileAdapter | None = None, enforce_phase0: bool = False, projects_root: Path | None = None):
+    def __init__(self, state_root: Path, *, builder: BuilderAdapter, reviewer: ReviewerAdapter | None = None, tests: TestRunnerAdapter | None = None, memory: MemoryAdapter | None = None, profiles: ProjectProfileAdapter | None = None, enforce_phase0: bool = False, projects_root: Path | None = None, ledger_sync: bool = False):
         self.root = Path(state_root).expanduser(); self.builder = builder
         self.reviewer = reviewer or CodexEvidenceReviewer(); self.tests = tests or LocalTestRunner()
         self.memory = memory or LocalMemoryAdapter(self.root / "memory"); self.profiles = profiles or LocalProfileAdapter()
         self.enforce_phase0 = enforce_phase0
+        self.ledger_sync = ledger_sync
         self.projects_root = Path(projects_root).expanduser() if projects_root else self.root / "projects"
     def _dir(self, run_id: str) -> Path: return self.root / "runs" / run_id
     def _inject(self, run: dict[str, Any], role: str, *, files_touched: list[str] | None = None, stage: str | None = None):
@@ -315,7 +335,19 @@ class RunRuntime:
             raise RuntimeStateError(f"invalid transition {old.value} -> {target.value}")
         run.update({"status": target.value, "updated_at": now(), "current_step": reason}); self._write(run)
         self._event(run, "state_changed", from_status=old.value, to_status=target.value, reason=reason); self._checkpoint(run)
-    def start(self, *, project_id: str, workspace: Path, mission: str, targeted_tests: list[list[str]], full_tests: list[list[str]], profile: ProjectProfile | None = None, critical: bool = False, recurrence: bool = False, tags: list[str] | None = None) -> str:
+    def _sync_ledger(self) -> dict | None:
+        """B-37: refresh the brain from DEFECTS_LEDGER.md if it changed since the last import."""
+        mod = _ledger_sync_mod()
+        if mod is None:
+            return None
+        try:
+            return mod.sync_if_stale(lessons=_memory_dir() / "lessons.jsonl",
+                                     marker=self.root / "ledger-import-marker.json")
+        except Exception as exc:  # a sync failure must never block a mission — inject what we have
+            return {"synced": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+    def start(self, *, project_id: str, workspace: Path, mission: str, targeted_tests: list[list[str]], full_tests: list[list[str]], profile: ProjectProfile | None = None, critical: bool = False, recurrence: bool = False, tags: list[str] | None = None, smoke: bool = False) -> str:
+        ledger_status = self._sync_ledger() if self.ledger_sync else None
         if self.enforce_phase0:
             from .kickoff import spec_is_signed  # noqa: PLC0415
             if not spec_is_signed(self.projects_root, project_id):
@@ -331,10 +363,12 @@ class RunRuntime:
             raise RuntimeStateError("workspace has forbidden or out-of-scope drift: " + "; ".join(baseline_violations))
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"; folder = self._dir(run_id); folder.mkdir(parents=True)
         tasks = [{"id": "plan", "status": "pending"}, {"id": "build", "status": "pending", "depends_on": ["plan"]}, {"id": "test", "status": "pending", "depends_on": ["build"]}, {"id": "review", "status": "pending", "depends_on": ["test"]}]
-        run = {"schema_version": 1, "run_id": run_id, "project_id": project_id, "workspace": str(workspace), "mission": mission, "status": "pending", "created_at": now(), "updated_at": now(), "current_step": "created", "profile": profile.to_dict(), "targeted_tests": targeted_tests, "full_tests": full_tests, "corrections_used": 0, "max_corrections": 1, "critical": bool(critical), "recurrence": bool(recurrence), "tags": list(tags or []), "tasks": tasks}
+        run = {"schema_version": 1, "run_id": run_id, "project_id": project_id, "workspace": str(workspace), "mission": mission, "status": "pending", "created_at": now(), "updated_at": now(), "current_step": "created", "profile": profile.to_dict(), "targeted_tests": targeted_tests, "full_tests": full_tests, "corrections_used": 0, "max_corrections": 1, "critical": bool(critical), "recurrence": bool(recurrence), "tags": list(tags or []), "smoke": bool(smoke), "tasks": tasks}
         atomic_write_text(folder / "mission.md", mission + "\n"); atomic_write_json(folder / "project-profile.json", profile.to_dict())
         atomic_write_json(folder / "task-graph.json", {"tasks": tasks}); atomic_write_json(folder / "plan.json", {"status": "pending", "bounded": True, "max_corrections": 1}); self._write(run)
-        self._event(run, "run_created", builder_provider=self.builder.provider, builder_model=self.builder.model); self._checkpoint(run)
+        self._event(run, "run_created", builder_provider=self.builder.provider, builder_model=self.builder.model)
+        if ledger_status is not None: self._event(run, "ledger_synced", synced=bool(ledger_status.get("synced")), added=ledger_status.get("added", 0), reason=ledger_status.get("reason", ""))
+        self._checkpoint(run)
         self._transition(run, RunStatus.PLANNING, "load profile and local memory")
         planner_rules = self._inject(run, "planner")
         atomic_write_json(folder / "memory.json", self.memory.load(project_id))

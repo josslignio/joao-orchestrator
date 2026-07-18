@@ -44,7 +44,8 @@ def main(argv: list[str] | None = None) -> int:
         # 2.2c — missions launched from chat pass through the Phase-1 cost cascade (GLM→best-of-N→
         # Claude) with memory injection, and the Phase-0 hard gate stays enforced for projects.
         server = LocalAPIServer(RunRuntime(state_root, builder=CascadeBuilder(), reviewer=CodexCLIReviewer(),
-                                           enforce_phase0=True, projects_root=state_root / "projects"))
+                                           enforce_phase0=True, projects_root=state_root / "projects",
+                                           ledger_sync=True))  # B-37: brain re-synced from the ledger at launch
         print(server.url)
         if not args.no_open:
             webbrowser.open(server.url, new=2)

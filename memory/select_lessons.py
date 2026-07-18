@@ -127,8 +127,11 @@ def select_lessons(project: str = "", mission_type: str = "", tags=None,
             candidates = [d for d in pool if int(d.get("severity", 2)) == 3]
 
     if not q:
-        # deterministic order for the fallback: severity, then recency (new first), then id.
-        candidates.sort(key=lambda d: (-int(d.get("severity", 2)), -recency_of[d["id"]], d["id"]))
+        # deterministic fallback order: the 6 LOIS are the systemic BACKBONE and must always be
+        # armed first (a newly-imported severity-3 defect must never evict them), then the other
+        # severity-3 lessons by recency, then id.
+        candidates.sort(key=lambda d: (0 if str(d.get("source_defect", "")).startswith("LOI-") else 1,
+                                       -int(d.get("severity", 2)), -recency_of[d["id"]], d["id"]))
 
     selected, used = [], 0
     for d in candidates:
