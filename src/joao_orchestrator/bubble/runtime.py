@@ -19,7 +19,7 @@ from ..domain.models import ProjectProfile
 from ..policy.paths import detect_path_violations
 from ..storage.atomic import FileLock, LockAcquireError, append_line, atomic_write_json, atomic_write_text
 from .sandbox import run_sandboxed
-from .candidate import CandidateError, freeze_candidate, recompute_candidate_tree, release_candidate
+from .candidate import freeze_candidate, recompute_candidate_tree, release_candidate
 from .change_capture import EMPTY_DIFF_SHA256, capture_full_diff
 from .reviewer_contract import validate_reviewer_verdict
 
@@ -452,7 +452,11 @@ class RunRuntime:
             # immediately before acceptance — approval can happen long after tests
             # and review ran, so this closes the gap a mid-flight tamper check
             # right after testing cannot cover on its own.
-            recomputed = recompute_candidate_tree(Path(candidate["readonly_copy"]))
+            try:
+                recomputed = recompute_candidate_tree(Path(candidate["readonly_copy"]))
+            except Exception as exc:
+                self._event(run, "candidate_recompute_failed", stage="approve", error=f"{type(exc).__name__}: {exc}")
+                raise RuntimeStateError(f"RI-3: could not re-verify candidate integrity at approval time: {exc}") from exc
             if recomputed != candidate["candidate_tree"]:
                 self._event(run, "candidate_integrity_violation", stage="approve",
                            frozen_tree=candidate["candidate_tree"], recomputed_tree=recomputed)
@@ -604,8 +608,9 @@ class RunRuntime:
                 pass
         try:
             candidate = freeze_candidate(workspace, folder, run["run_id"], attempt)
-        except CandidateError as exc:
-            self._event(run, "candidate_freeze_failed", error=str(exc))
+        except Exception as exc:  # a freeze failure (incl. a raw git CalledProcessError) must
+            # fail-closed, never strand the run in BUILDING (same principle as P1-A above).
+            self._event(run, "candidate_freeze_failed", error=f"{type(exc).__name__}: {exc}")
             self._transition(run, RunStatus.BLOCKED, "RI-3: could not freeze immutable candidate"); self._finalize(run); return run
         run["candidate"] = candidate; run["candidate_tree"] = candidate["candidate_tree"]; self._write(run)
         atomic_write_json(folder / "candidate-evidence.json", candidate)
@@ -628,7 +633,11 @@ class RunRuntime:
 
         # RI-3 (attack test 3): re-verify the frozen candidate was not modified
         # while tests were running, before trusting the test results at all.
-        recomputed_tree = recompute_candidate_tree(candidate_copy)
+        try:
+            recomputed_tree = recompute_candidate_tree(candidate_copy)
+        except Exception as exc:  # can't verify integrity => fail-closed, never strand the run
+            self._event(run, "candidate_recompute_failed", stage="post-test", error=f"{type(exc).__name__}: {exc}")
+            self._transition(run, RunStatus.BLOCKED, "RI-3: could not re-verify candidate integrity"); self._finalize(run); return run
         if recomputed_tree != candidate["candidate_tree"]:
             self._event(run, "candidate_integrity_violation", stage="post-test",
                         frozen_tree=candidate["candidate_tree"], recomputed_tree=recomputed_tree)
