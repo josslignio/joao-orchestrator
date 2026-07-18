@@ -110,3 +110,17 @@ def test_cv_mission_surfaces_authority_lessons_in_builder(tmp_path):
     # a docx/visual mission must inject the authority-chain lessons the ledger graved.
     _, _, _, seen = _drive(tmp_path)
     assert "D-042" in seen["mission"] or "D-034" in seen["mission"]
+
+
+def test_retro_hook_fires_and_records_metric_state_local(tmp_path):
+    # Phase 4 wiring: finishing a mission writes a retro template and records the metric,
+    # into the runtime's own state_root — never the committed brain.
+    rt, run_id, _, _ = _drive(tmp_path)
+    rt.approve(run_id)
+    folder = tmp_path / "state" / "runs" / run_id
+    assert (folder / "retro-template.md").is_file()
+    metrics = tmp_path / "state" / "memory" / "run_metrics.jsonl"
+    assert metrics.is_file(), "run metric must be recorded under state_root/memory"
+    rows = [json.loads(x) for x in metrics.read_text().splitlines() if x.strip()]
+    assert rows[-1]["run_id"] == run_id and rows[-1]["perfect"] is True
+    assert any(e["kind"] == "retro_recorded" for e in rt.events(run_id))

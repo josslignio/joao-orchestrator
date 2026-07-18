@@ -47,6 +47,25 @@ def _injector():
     return _INJECTOR
 
 
+_RETRO = None
+_RETRO_LOADED = False
+
+
+def _retro():
+    """Lazily import the Phase-4 retro/loop module (memory/retro.py). None if absent."""
+    global _RETRO, _RETRO_LOADED
+    if _RETRO_LOADED:
+        return _RETRO
+    _RETRO_LOADED = True
+    mem = _memory_dir()
+    if (mem / "retro.py").exists():
+        if str(mem) not in sys.path:
+            sys.path.insert(0, str(mem))
+        import retro as _retro_mod  # noqa: PLC0415
+        _RETRO = _retro_mod
+    return _RETRO
+
+
 def now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -336,8 +355,28 @@ class RunRuntime:
     def _paths(self, workspace: Path) -> list[str]:
         raw = subprocess.run(["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd=str(workspace), shell=False, capture_output=True, text=True, check=True).stdout
         return sorted({item[3:].replace("\\\\", "/") for item in raw.split("\0") if item})
+    def _write_retro(self, run: dict[str, Any]) -> None:
+        """Phase-4 hook: emit the retro template and record the run metric (state-local).
+
+        Deliberately light — it never fabricates lessons (D-029: candidate ingestion is a
+        separate, considered step). Brain runtime-state lives under this runtime's state_root.
+        """
+        mod = _retro()
+        if mod is None:
+            return
+        mod.set_state_dir(self.root / "memory")
+        folder = self._dir(run["run_id"]); status = run["status"]; project = run.get("project_id", "")
+        template = mod.render_retro_template(project, run["run_id"], (run.get("mission", "")[:80] or "mission"),
+                                             spec=run.get("mission", ""), result=f"status={status}")
+        atomic_write_text(folder / "retro-template.md", template)
+        if status in {"accepted", "stopped", "blocked", "failed"}:
+            perfect = status == "accepted" and int(run.get("corrections_used", 0)) == 0 and bool(run.get("review_verified"))
+            mod.record_run_metric(project, run["run_id"], perfect=perfect, at=now())
+            self._event(run, "retro_recorded", perfect=perfect, runs_until_perfect=mod.runs_until_perfect(project))
+
     def _finalize(self, run: dict[str, Any]) -> None:
         folder = self._dir(run["run_id"]); atomic_write_json(folder / "final-status.json", {"status": run["status"], "last_checkpoint": run.get("last_checkpoint")})
+        self._write_retro(run)
         files = sorted(path for path in folder.rglob("*") if path.is_file() and path.name != "manifest.json")
         atomic_write_json(folder / "manifest.json", {"schema_version": 1, "run_id": run["run_id"], "files": [{"path": str(path.relative_to(folder)), "sha256": digest(path), "bytes": path.stat().st_size} for path in files]})
     def _review_gate(self, run: dict[str, Any], stage: str) -> dict[str, Any]:
