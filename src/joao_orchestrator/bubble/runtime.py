@@ -315,7 +315,7 @@ class RunRuntime:
             raise RuntimeStateError(f"invalid transition {old.value} -> {target.value}")
         run.update({"status": target.value, "updated_at": now(), "current_step": reason}); self._write(run)
         self._event(run, "state_changed", from_status=old.value, to_status=target.value, reason=reason); self._checkpoint(run)
-    def start(self, *, project_id: str, workspace: Path, mission: str, targeted_tests: list[list[str]], full_tests: list[list[str]], profile: ProjectProfile | None = None) -> str:
+    def start(self, *, project_id: str, workspace: Path, mission: str, targeted_tests: list[list[str]], full_tests: list[list[str]], profile: ProjectProfile | None = None, critical: bool = False, recurrence: bool = False, tags: list[str] | None = None) -> str:
         if self.enforce_phase0:
             from .kickoff import spec_is_signed  # noqa: PLC0415
             if not spec_is_signed(self.projects_root, project_id):
@@ -331,7 +331,7 @@ class RunRuntime:
             raise RuntimeStateError("workspace has forbidden or out-of-scope drift: " + "; ".join(baseline_violations))
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"; folder = self._dir(run_id); folder.mkdir(parents=True)
         tasks = [{"id": "plan", "status": "pending"}, {"id": "build", "status": "pending", "depends_on": ["plan"]}, {"id": "test", "status": "pending", "depends_on": ["build"]}, {"id": "review", "status": "pending", "depends_on": ["test"]}]
-        run = {"schema_version": 1, "run_id": run_id, "project_id": project_id, "workspace": str(workspace), "mission": mission, "status": "pending", "created_at": now(), "updated_at": now(), "current_step": "created", "profile": profile.to_dict(), "targeted_tests": targeted_tests, "full_tests": full_tests, "corrections_used": 0, "max_corrections": 1, "tasks": tasks}
+        run = {"schema_version": 1, "run_id": run_id, "project_id": project_id, "workspace": str(workspace), "mission": mission, "status": "pending", "created_at": now(), "updated_at": now(), "current_step": "created", "profile": profile.to_dict(), "targeted_tests": targeted_tests, "full_tests": full_tests, "corrections_used": 0, "max_corrections": 1, "critical": bool(critical), "recurrence": bool(recurrence), "tags": list(tags or []), "tasks": tasks}
         atomic_write_text(folder / "mission.md", mission + "\n"); atomic_write_json(folder / "project-profile.json", profile.to_dict())
         atomic_write_json(folder / "task-graph.json", {"tasks": tasks}); atomic_write_json(folder / "plan.json", {"status": "pending", "bounded": True, "max_corrections": 1}); self._write(run)
         self._event(run, "run_created", builder_provider=self.builder.provider, builder_model=self.builder.model); self._checkpoint(run)
@@ -433,6 +433,9 @@ class RunRuntime:
                 before = self._paths(workspace); builder = self.builder.build(mission_for_builder, workspace, folder, profile.allowed_write_paths, correction)
         except LockAcquireError:
             self._transition(run, RunStatus.BLOCKED, "second builder refused"); self._finalize(run); return run
+        except Exception as exc:  # a builder that raises must fail-closed, never strand the run (P1-A)
+            self._event(run, "builder_exception", error=f"{type(exc).__name__}: {exc}")
+            self._transition(run, RunStatus.BLOCKED, "builder raised; fail-closed"); self._finalize(run); return run
         after = self._paths(workspace); changed = sorted(set(after) - set(before)); violations = detect_path_violations(changed, profile)
         atomic_write_json(folder / "changed-paths.json", {"before": before, "after": after, "changed_by_builder": changed, "violations": violations})
         atomic_write_json(folder / "builder-evidence.json", builder)
