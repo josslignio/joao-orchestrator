@@ -18,6 +18,10 @@ from typing import Any
 from ..domain.models import ProjectProfile
 from ..policy.paths import detect_path_violations
 from ..storage.atomic import FileLock, LockAcquireError, append_line, atomic_write_json, atomic_write_text
+from .sandbox import run_sandboxed
+from .candidate import CandidateError, freeze_candidate, recompute_candidate_tree, release_candidate
+from .change_capture import EMPTY_DIFF_SHA256, capture_full_diff
+from .reviewer_contract import validate_reviewer_verdict
 
 
 def _memory_dir() -> Path:
@@ -139,7 +143,8 @@ class ReviewerAdapter(ABC):
 
 class TestRunnerAdapter(ABC):
     @abstractmethod
-    def run(self, argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]: ...
+    def run(self, argv: list[str], cwd: Path, timeout: int, *, network: bool = False,
+            environment_allowlist: list[str] | None = None) -> dict[str, Any]: ...
 
 
 class MemoryAdapter(ABC):
@@ -188,7 +193,19 @@ class LocalProfileAdapter(ProjectProfileAdapter):
 
 
 class LocalTestRunner(TestRunnerAdapter):
-    def run(self, argv: list[str], cwd: Path, timeout: int) -> dict[str, Any]:
+    """RI-6: mission test commands run sandboxed by default (temp HOME, minimal
+    env, network denied) — network is allowed only when the run's signed mission
+    explicitly declares `network_capability` (RI-6's capability-declaration rule).
+    `sandboxed=False` exists only for callers outside a RunRuntime mission that
+    need the old passthrough behavior (e.g. ad-hoc scripting)."""
+    def __init__(self, sandboxed: bool = True):
+        self.sandboxed = sandboxed
+
+    def run(self, argv: list[str], cwd: Path, timeout: int, *, network: bool = False,
+            environment_allowlist: list[str] | None = None) -> dict[str, Any]:
+        if self.sandboxed:
+            return run_sandboxed(argv, cwd=cwd, timeout=timeout, network=network,
+                                 profile_allowlist=environment_allowlist or [])
         try:
             proc = subprocess.run(argv, cwd=str(cwd), shell=False, capture_output=True, text=True, timeout=timeout)
             return {"argv": argv, "returncode": proc.returncode, "ok": proc.returncode == 0, "stdout": proc.stdout[-16000:], "stderr": proc.stderr[-16000:]}
@@ -202,6 +219,13 @@ class SandboxBuilder(BuilderAdapter):
     def build(self, mission, workspace, run_dir, allowed, correction): return self.callback(mission, workspace, correction)
 
 
+# RI-6: the GLM CLI authenticates via env vars (not a ~/-rooted credential file
+# — verified against scripts/joao_glm_cli.py), so a fresh temp HOME is safe here;
+# these names are the only ones explicitly let through the sandbox's allowlist.
+_GLM_ENV_ALLOWLIST = ["ZAI_API_KEY", "ZHIPU_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY",
+                       "JOAO_GLM_MODEL", "JOAO_OPENCODE"]
+
+
 class GLMBuilder(BuilderAdapter):
     provider = "zai-coding-plan"; model = "zai-coding-plan/glm-4.5-air"
     def __init__(self, executable: Path = Path("~/.local/bin/joao-glm").expanduser()): self.executable = executable
@@ -210,21 +234,34 @@ class GLMBuilder(BuilderAdapter):
         output = run_dir / ("glm-correction.jsonl" if correction else "glm-builder.jsonl")
         argv = [str(self.executable), "--workspace", str(workspace), "--task-file", str(task), "--output", str(output), "--mode", "workspace-write", "--budget", "small"]
         for item in allowed: argv.extend(["--allowed-path", item])
-        proc = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=900)
-        return {"ok": proc.returncode == 0, "provider": self.provider, "model": self.model, "returncode": proc.returncode, "stdout": proc.stdout[-4000:], "stderr": proc.stderr[-4000:], "output": str(output), "output_sha256": digest(output) if output.exists() else None}
+        # network=True: this adapter's entire purpose is calling the ZAI API —
+        # that is the mission's explicit provider choice acting as the RI-6
+        # network-capability declaration for this specific dispatch.
+        result = run_sandboxed(argv, cwd=workspace, timeout=900, network=True,
+                               profile_allowlist=_GLM_ENV_ALLOWLIST,
+                               extra_write_paths=[str(run_dir)])
+        # RI-5: never trust a builder-reported hash — the controller
+        # (RunRuntime._execute) independently recomputes output_sha256 itself.
+        return {"ok": result["ok"], "provider": self.provider, "model": self.model,
+                "returncode": result["returncode"], "stdout": result["stdout"][-4000:],
+                "stderr": result["stderr"][-4000:], "output": str(output),
+                "sandbox_enforcement": result.get("enforcement")}
 
 
 class CodexEvidenceReviewer(ReviewerAdapter):
     # M0 safe-stop (D-043/C-3): "exact-SHA" is an unqualified claim — the label now states
     # exactly what is proven: a worktree SHA at review time, NOT yet an immutable candidate
     # (that guarantee is RI-3, delivered by A0/M1-A — see SYSTEM_CONSTITUTION_V4.md §4).
-    provider = "codex"; model = "worktree-sha-at-review-time (non-immuable — candidat immuable = A0/RI-3)"
+    provider = "codex"; model = "worktree-sha-at-review-time"
     def review(self, run, run_dir):
         proof = run_dir / "review-import.json"
-        if not proof.exists(): return {"ok": True, "decision": "approval", "required": True, "expected_diff_sha256": run.get("final_diff_sha256")}
-        data = json.loads(proof.read_text())
-        if data.get("reviewed_diff_sha256") != run.get("final_diff_sha256"): return {"ok": False, "decision": "block", "reason": "review proof diff mismatch"}
-        return {"ok": data.get("verdict") == "ACCEPT", "decision": data.get("decision", "pass"), "proof": data}
+        if not proof.exists():
+            # Fail-closed (RI-4/RI-5): an absent proof is not an implicit pass.
+            return {"ok": False, "decision": "block", "required": True,
+                    "reason": "no review proof imported yet",
+                    "expected_candidate_tree": run.get("candidate_tree")}
+        return validate_reviewer_verdict(proof.read_text(), expected_candidate_tree=run.get("candidate_tree"),
+                                         provider=self.provider, model=self.model)
 
 
 class CodexCLIReviewer(ReviewerAdapter):
@@ -239,38 +276,42 @@ class CodexCLIReviewer(ReviewerAdapter):
         return bool(shutil.which(self.executable) and Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().exists())
 
     def review_stage(self, run, run_dir, stage: str, active_rules: str = ""):
+        # RI-4: the pre-candidate "plan" stage has nothing to bind to yet;
+        # "build"/"final" always bind the verdict to the frozen candidate_tree.
+        candidate_tree = run.get("candidate_tree") if stage != "plan" else None
         workspace = Path(run["workspace"])
         output = run_dir / f"codex-{stage}-review.jsonl"
-        rules_prefix = (active_rules + "\\n\\n") if active_rules else ""
+        rules_prefix = (active_rules + "\n\n") if active_rules else ""
+        tree_line = f"The candidate under review has candidate_tree = {candidate_tree!r}.\n" if candidate_tree else ""
+        contract = (
+            "Respond with EXACTLY one JSON object (no markdown fences, no prose before or "
+            "after) shaped like: {\"candidate_tree\": \"" + (candidate_tree or "") + "\", "
+            "\"verdict\": \"ACCEPT\"|\"P1\"|\"BLOCK\", \"findings\": [\"...\"], "
+            "\"reviewer\": {\"provider\": \"codex-subscription\", \"model\": \"<your model>\"}}. "
+            "A P1 finding must name the concrete repair."
+        )
         prompt = (
             f"{rules_prefix}"
             "You are the independent JOAO reviewer. Work read-only. Review the "
-            f"{stage} gate for this bounded mission:\\n\\n{run['mission']}\\n\\n"
+            f"{stage} gate for this bounded mission:\n\n{run['mission']}\n\n"
+            f"{tree_line}"
             "Inspect only the current worktree, task evidence and git diff. Do not "
-            "edit, commit, push, install packages or call external services. At the "
-            "end, print exactly one final line: JOAO_REVIEW: ACCEPT, JOAO_REVIEW: P1, "
-            "or JOAO_REVIEW: BLOCK. A P1 must name the concrete repair."
+            "edit, commit, push, install packages or call external services. "
+            f"{contract}"
         )
         argv = [self.executable, "exec", "--json", "--sandbox", "read-only",
                 "-C", str(workspace), prompt]
         try:
             proc = subprocess.run(argv, cwd=str(workspace), shell=False, capture_output=True,
-                                  text=True, timeout=self.timeout)
+                                  text=True, timeout=self.timeout, start_new_session=True)
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"ok": False, "decision": "block", "stage": stage,
                     "reason": f"Codex reviewer unavailable: {exc}"}
         atomic_write_text(output, proc.stdout)
-        text = proc.stdout + "\\n" + proc.stderr
-        match = re.findall(r"JOAO_REVIEW:\\s*(ACCEPT|P1|BLOCK)", text, flags=re.I)
-        verdict = match[-1].upper() if match else ""
-        decision = {"ACCEPT": "pass", "P1": "p1", "BLOCK": "block"}.get(verdict, "block")
-        return {
-            "ok": proc.returncode == 0 and verdict == "ACCEPT",
-            "decision": decision, "stage": stage, "verdict": verdict or "MISSING",
-            "returncode": proc.returncode, "output": str(output),
-            "output_sha256": digest(output), "stderr": proc.stderr[-4000:],
-            "proof": {"verdict": verdict, "reviewed_diff_sha256": run.get("final_diff_sha256")},
-        }
+        result = validate_reviewer_verdict(proc.stdout, expected_candidate_tree=candidate_tree,
+                                          provider=self.provider, model=self.model)
+        return {**result, "stage": stage, "returncode": proc.returncode, "output": str(output),
+                "output_sha256": digest(output), "stderr": proc.stderr[-4000:]}
 
     def review(self, run, run_dir):
         return self.review_stage(run, run_dir, "final")
@@ -349,7 +390,7 @@ class RunRuntime:
         except Exception as exc:  # a sync failure must never block a mission — inject what we have
             return {"synced": False, "reason": f"{type(exc).__name__}: {exc}"}
 
-    def start(self, *, project_id: str, workspace: Path, mission: str, targeted_tests: list[list[str]], full_tests: list[list[str]], profile: ProjectProfile | None = None, critical: bool = False, recurrence: bool = False, tags: list[str] | None = None, smoke: bool = False) -> str:
+    def start(self, *, project_id: str, workspace: Path, mission: str, targeted_tests: list[list[str]], full_tests: list[list[str]], profile: ProjectProfile | None = None, critical: bool = False, recurrence: bool = False, tags: list[str] | None = None, smoke: bool = False, declared_baseline: str | None = None, network_capability: bool = False, read_only: bool = False) -> str:
         ledger_status = self._sync_ledger() if self.ledger_sync else None
         if self.enforce_phase0:
             from .kickoff import spec_is_signed  # noqa: PLC0415
@@ -361,15 +402,27 @@ class RunRuntime:
         if not full_tests: raise RuntimeStateError("at least one explicit full-test command is required")
         profile = profile or self.profiles.load(project_id, workspace)
         if Path(profile.repository_root).resolve() != workspace: raise RuntimeStateError("profile workspace mismatch")
-        baseline_violations = detect_path_violations(self._paths(workspace), profile)
+        baseline_paths = self._paths(workspace)
+        # RI-1: refuse to start on a dirty worktree; the only exception is an
+        # explicitly declared, frozen temporary baseline (recorded as evidence,
+        # never a silent pass-through).
+        if baseline_paths and not declared_baseline:
+            preview = ", ".join(baseline_paths[:5]) + ("…" if len(baseline_paths) > 5 else "")
+            raise RuntimeStateError(
+                "RI-1: worktree is not clean (" + preview + ") — start() refuses a dirty "
+                "baseline; pass declared_baseline=\"<reason>\" to explicitly freeze and "
+                "declare this as an accepted temporary baseline."
+            )
+        baseline_violations = detect_path_violations(baseline_paths, profile)
         if baseline_violations:
             raise RuntimeStateError("workspace has forbidden or out-of-scope drift: " + "; ".join(baseline_violations))
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"; folder = self._dir(run_id); folder.mkdir(parents=True)
         tasks = [{"id": "plan", "status": "pending"}, {"id": "build", "status": "pending", "depends_on": ["plan"]}, {"id": "test", "status": "pending", "depends_on": ["build"]}, {"id": "review", "status": "pending", "depends_on": ["test"]}]
-        run = {"schema_version": 1, "run_id": run_id, "project_id": project_id, "workspace": str(workspace), "mission": mission, "status": "pending", "created_at": now(), "updated_at": now(), "current_step": "created", "profile": profile.to_dict(), "targeted_tests": targeted_tests, "full_tests": full_tests, "corrections_used": 0, "max_corrections": 1, "critical": bool(critical), "recurrence": bool(recurrence), "tags": list(tags or []), "smoke": bool(smoke), "tasks": tasks}
+        run = {"schema_version": 1, "run_id": run_id, "project_id": project_id, "workspace": str(workspace), "mission": mission, "status": "pending", "created_at": now(), "updated_at": now(), "current_step": "created", "profile": profile.to_dict(), "targeted_tests": targeted_tests, "full_tests": full_tests, "corrections_used": 0, "max_corrections": 1, "critical": bool(critical), "recurrence": bool(recurrence), "tags": list(tags or []), "smoke": bool(smoke), "tasks": tasks, "declared_baseline": declared_baseline, "baseline_paths_at_start": baseline_paths, "network_capability": bool(network_capability), "read_only": bool(read_only)}
         atomic_write_text(folder / "mission.md", mission + "\n"); atomic_write_json(folder / "project-profile.json", profile.to_dict())
         atomic_write_json(folder / "task-graph.json", {"tasks": tasks}); atomic_write_json(folder / "plan.json", {"status": "pending", "bounded": True, "max_corrections": 1}); self._write(run)
         self._event(run, "run_created", builder_provider=self.builder.provider, builder_model=self.builder.model)
+        if declared_baseline: self._event(run, "baseline_frozen_and_declared", reason=declared_baseline, paths=baseline_paths)
         if ledger_status is not None: self._event(run, "ledger_synced", synced=bool(ledger_status.get("synced")), added=ledger_status.get("added", 0), reason=ledger_status.get("reason", ""))
         self._checkpoint(run)
         self._transition(run, RunStatus.PLANNING, "load profile and local memory")
@@ -393,6 +446,17 @@ class RunRuntime:
         if not run.get("review_verified"):
             self._event(run, "approval_refused", reason="independent review proof is absent or mismatched")
             raise RuntimeStateError("cannot approve without matching independent review proof")
+        candidate = run.get("candidate")
+        if candidate:
+            # RI-3 (attack test 3): re-verify the frozen candidate one last time,
+            # immediately before acceptance — approval can happen long after tests
+            # and review ran, so this closes the gap a mid-flight tamper check
+            # right after testing cannot cover on its own.
+            recomputed = recompute_candidate_tree(Path(candidate["readonly_copy"]))
+            if recomputed != candidate["candidate_tree"]:
+                self._event(run, "candidate_integrity_violation", stage="approve",
+                           frozen_tree=candidate["candidate_tree"], recomputed_tree=recomputed)
+                raise RuntimeStateError("RI-3: candidate was modified after tests/review — evidence invalidated, cannot approve")
         self._transition(run, RunStatus.ACCEPTED, "human approval"); self._finalize(run); return run
     def reject(self, run_id: str) -> dict[str, Any]: return self.stop(run_id)
     def _paths(self, workspace: Path) -> list[str]:
@@ -435,6 +499,23 @@ class RunRuntime:
             review = self.reviewer.review(run, folder)
         else:
             review = {"ok": True, "decision": "pass", "stage": stage, "skipped": "legacy reviewer"}
+        if stage == "final":
+            # RI-4, enforced by the controller regardless of what the reviewer
+            # adapter itself claims: a verdict for the wrong (or no) candidate
+            # is rejected here even if a buggy/malicious adapter reports ok=True.
+            # Scoped to "final" — the stage that actually gates approval; "build"
+            # stays an adapter-defined advisory gate (a legacy reviewer with no
+            # `review_stage` skips it entirely, as before).
+            proof = review.get("proof")
+            expected = run.get("candidate_tree")
+            if not isinstance(proof, dict) or not expected or proof.get("candidate_tree") != expected:
+                review = {
+                    "ok": False, "decision": "block", "stage": stage,
+                    "reason": "RI-4: reviewer proof missing or bound to a different candidate_tree",
+                    "expected_candidate_tree": expected,
+                    "received_candidate_tree": proof.get("candidate_tree") if isinstance(proof, dict) else None,
+                    "adapter_claimed_ok": bool(review.get("ok")),
+                }
         atomic_write_json(folder / f"{stage}-review-evidence.json", review)
         self._event(run, "review_completed", stage=stage, provider=self.reviewer.provider,
                     decision=review.get("decision", "block"))
@@ -475,23 +556,88 @@ class RunRuntime:
             self._transition(run, RunStatus.BLOCKED, "builder raised; fail-closed"); self._finalize(run); return run
         after = self._paths(workspace); changed = sorted(set(after) - set(before)); violations = detect_path_violations(changed, profile)
         atomic_write_json(folder / "changed-paths.json", {"before": before, "after": after, "changed_by_builder": changed, "violations": violations})
-        atomic_write_json(folder / "builder-evidence.json", builder)
+        # RI-5: the controller never trusts a builder-self-reported hash (e.g. a
+        # builder-authored SHA256SUMS-style claim) — any such field is dropped
+        # here and, when the builder names an output file, independently re-hashed.
+        builder_evidence = {key: value for key, value in builder.items()
+                            if key not in {"output_sha256", "sha256", "candidate_tree"}}
+        output_path = builder.get("output")
+        if output_path and Path(output_path).exists():
+            builder_evidence["controller_verified_output_sha256"] = digest(Path(output_path))
+        atomic_write_json(folder / "builder-evidence.json", builder_evidence)
         if not builder.get("ok") or violations:
             self._transition(run, RunStatus.BLOCKED, "builder failed or outside scope"); self._finalize(run); return run
-        patch = subprocess.run(["git", "diff", "--binary", "--no-ext-diff", "--no-textconv"], cwd=str(workspace), shell=False, capture_output=True, check=True).stdout
-        atomic_write_text(folder / "final-diff.patch", patch.decode(errors="replace")); run["final_diff_sha256"] = digest(folder / "final-diff.patch"); run["tasks"][1]["status"] = "completed"; self._write(run)
+
+        # RI-2: complete change capture — tracked+staged+untracked+deleted+
+        # renamed+permissions+symlinks, cross-validated against an
+        # independently captured status list. `git diff` alone is never proof.
+        capture = capture_full_diff(workspace)
+        atomic_write_json(folder / "change-capture-evidence.json", {
+            "changed_paths": capture["changed_paths"], "completeness_ok": capture["completeness_ok"],
+            "missing_from_diff": capture["missing_from_diff"], "extra_in_diff": capture["extra_in_diff"],
+        })
+        if not capture["completeness_ok"]:
+            self._event(run, "change_capture_incomplete", missing=capture["missing_from_diff"])
+            self._transition(run, RunStatus.BLOCKED, "RI-2: diff completeness check failed"); self._finalize(run); return run
+        atomic_write_text(folder / "final-diff.patch", capture["patch"].decode(errors="replace"))
+        run["final_diff_sha256"] = digest(folder / "final-diff.patch")
+
+        # RI-8: an empty diff is FAILED for a change mission — acceptable only
+        # when the mission explicitly declared itself read_only.
+        if run["final_diff_sha256"] == EMPTY_DIFF_SHA256 and not run.get("read_only"):
+            run["tasks"][1]["status"] = "completed"; self._write(run)
+            self._event(run, "nothing_produced", final_diff_sha256=run["final_diff_sha256"])
+            self._transition(run, RunStatus.FAILED, "RI-8: empty diff for a non-read_only mission"); self._finalize(run); return run
+        run["tasks"][1]["status"] = "completed"; self._write(run)
+
+        # RI-3: freeze the immutable candidate before anything reviews or tests
+        # it. A prior candidate from an earlier correction attempt (if any) is
+        # explicitly invalidated — it is never presented as still valid.
+        attempt = run["corrections_used"] + 1
+        prior_candidate = run.get("candidate")
+        if prior_candidate:
+            self._event(run, "candidate_invalidated", prior_candidate_tree=prior_candidate.get("candidate_tree"),
+                        reason="a new build attempt supersedes it")
+            try:
+                release_candidate(prior_candidate, workspace)
+            except Exception:
+                pass
+        try:
+            candidate = freeze_candidate(workspace, folder, run["run_id"], attempt)
+        except CandidateError as exc:
+            self._event(run, "candidate_freeze_failed", error=str(exc))
+            self._transition(run, RunStatus.BLOCKED, "RI-3: could not freeze immutable candidate"); self._finalize(run); return run
+        run["candidate"] = candidate; run["candidate_tree"] = candidate["candidate_tree"]; self._write(run)
+        atomic_write_json(folder / "candidate-evidence.json", candidate)
+        self._event(run, "candidate_frozen", candidate_tree=candidate["candidate_tree"], attempt=attempt)
+
         build_review = self._review_gate(run, "build")
         if build_review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]:
             self._transition(run, RunStatus.CORRECTING, "Codex build review P1; one repair permitted"); return run
         if not build_review.get("ok"):
             self._transition(run, RunStatus.BLOCKED, "Codex build review blocked"); self._finalize(run); return run
+
+        candidate_copy = Path(candidate["readonly_copy"])
         self._transition(run, RunStatus.TESTING, "targeted and full tests")
-        results = [self.tests.run(argv, workspace, profile.command_timeout_seconds) for argv in run["targeted_tests"] + run["full_tests"]]; atomic_write_json(folder / "test-results.json", {"results": results, "all_passed": all(item["ok"] for item in results)})
+        results = [self.tests.run(argv, candidate_copy, profile.command_timeout_seconds,
+                                  network=run.get("network_capability", False),
+                                  environment_allowlist=profile.environment_allowlist)
+                  for argv in run["targeted_tests"] + run["full_tests"]]
+        atomic_write_json(folder / "test-results.json", {"results": results, "all_passed": all(item["ok"] for item in results)})
         if not all(item["ok"] for item in results): self._transition(run, RunStatus.FAILED, "tests failed"); self._finalize(run); return run
+
+        # RI-3 (attack test 3): re-verify the frozen candidate was not modified
+        # while tests were running, before trusting the test results at all.
+        recomputed_tree = recompute_candidate_tree(candidate_copy)
+        if recomputed_tree != candidate["candidate_tree"]:
+            self._event(run, "candidate_integrity_violation", stage="post-test",
+                        frozen_tree=candidate["candidate_tree"], recomputed_tree=recomputed_tree)
+            self._transition(run, RunStatus.BLOCKED, "RI-3: candidate tampered after tests — evidence invalidated"); self._finalize(run); return run
+
         run["tasks"][2]["status"] = "completed"; self._transition(run, RunStatus.REVIEWING, "independent review")
         review = self._review_gate(run, "final"); atomic_write_json(folder / "review-evidence.json", review)
         proof = review.get("proof", {})
-        run["review_verified"] = bool(review.get("ok") and proof.get("verdict") == "ACCEPT" and proof.get("reviewed_diff_sha256") == run["final_diff_sha256"])
+        run["review_verified"] = bool(review.get("ok") and proof.get("verdict") == "ACCEPT" and proof.get("candidate_tree") == candidate["candidate_tree"])
         self._write(run)
         if review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]: self._transition(run, RunStatus.CORRECTING, "P1; one repair permitted"); return run
         if not review.get("ok") or review.get("decision") == "block": self._transition(run, RunStatus.BLOCKED, "review blocked"); self._finalize(run); return run

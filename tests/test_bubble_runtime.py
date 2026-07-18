@@ -16,7 +16,9 @@ from joao_orchestrator.domain.models import ProjectProfile
 class AcceptedReviewer:
     provider = "codex"; model = "fixture-independent"
     def review(self, run, _):
-        return {"ok": True, "decision": "pass", "proof": {"verdict": "ACCEPT", "reviewed_diff_sha256": run["final_diff_sha256"]}}
+        return {"ok": True, "decision": "pass",
+                "proof": {"verdict": "ACCEPT", "candidate_tree": run["candidate_tree"],
+                         "findings": [], "reviewer": {"provider": self.provider, "model": self.model}}}
 
 
 def sandbox(tmp_path: Path):
@@ -63,16 +65,47 @@ def test_out_of_scope_or_failed_test_blocks(tmp_path):
     assert evidence["violations"]
 
 
+def test_scope_comes_from_the_run_signed_at_start_not_a_stale_live_profile(tmp_path):
+    # RI-7 non-regression: the run's own persisted profile snapshot (captured
+    # at start()) stays authoritative — a later edit of the on-disk profile
+    # file must never retroactively widen or narrow what an in-flight run
+    # is allowed to touch.
+    work = sandbox(tmp_path)
+
+    def build(_, workspace, __):
+        (workspace / "module.py").write_text("VALUE = 2\n")
+        return {"ok": True}
+
+    value = runtime(tmp_path, build, AcceptedReviewer())
+    run = value.start(project_id="fixture", workspace=work, mission="fix",
+                      targeted_tests=[[sys.executable, "test_module.py"]],
+                      full_tests=[[sys.executable, "test_module.py"]])
+    # Widen the on-disk profile *after* start() captured its own snapshot.
+    (work / ".joao-profile.json").write_text(json.dumps({
+        "project_id": "fixture", "display_name": "fixture", "repository_root": str(work),
+        "allowed_write_paths": ["module.py", "secret.txt"], "forbidden_paths": []}))
+    state = value.run_once(run)
+    assert state["status"] == "needs_approval"
+    persisted_profile = json.loads((tmp_path / "state" / "runs" / run / "run.json").read_text())["profile"]
+    assert persisted_profile["allowed_write_paths"] == ["module.py"]
+
+
 def test_dirty_secret_and_unreviewed_approval_are_refused(tmp_path):
     work = sandbox(tmp_path)
     (work / ".env").write_text("secret=not-read\n")
-    value = runtime(tmp_path, lambda *_: {"ok": True})
-    with pytest.raises(RuntimeStateError, match="out-of-scope drift"):
+    def build(_, workspace, __):
+        (workspace / "module.py").write_text("VALUE = 2\n")
+        return {"ok": True}
+    value = runtime(tmp_path, build)
+    with pytest.raises(RuntimeStateError, match="RI-1"):
         value.start(project_id="fixture", workspace=work, mission="unsafe", targeted_tests=[], full_tests=[[sys.executable, "-c", "pass"]])
     (work / ".env").unlink()
     run = value.start(project_id="fixture", workspace=work, mission="review", targeted_tests=[], full_tests=[[sys.executable, "-c", "pass"]])
     state = value.run_once(run)
-    assert state["status"] == "needs_approval"
+    # Fail-closed (RI-4/RI-5): no review proof was ever imported, so the
+    # default CodexEvidenceReviewer blocks rather than silently letting the
+    # run reach human approval.
+    assert state["status"] == "blocked"
     with pytest.raises(RuntimeStateError, match="independent review proof"):
         value.approve(run)
 

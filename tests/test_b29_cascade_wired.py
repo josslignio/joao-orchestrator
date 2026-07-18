@@ -164,7 +164,8 @@ class _AcceptReviewer:
 
     def review(self, run, _):
         return {"ok": True, "decision": "pass",
-                "proof": {"verdict": "ACCEPT", "reviewed_diff_sha256": run["final_diff_sha256"]}}
+                "proof": {"verdict": "ACCEPT", "candidate_tree": run["candidate_tree"],
+                         "findings": [], "reviewer": {"provider": self.provider, "model": self.model}}}
 
 
 def test_cascade_builder_drives_a_full_runruntime_run(tmp_path):

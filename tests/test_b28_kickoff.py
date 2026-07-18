@@ -17,7 +17,8 @@ class AcceptedStageReviewer:
     provider = "codex"; model = "fixture"
     def review_stage(self, run, run_dir, stage, active_rules=""):
         return {"ok": True, "decision": "pass", "stage": stage,
-                "proof": {"verdict": "ACCEPT", "reviewed_diff_sha256": run.get("final_diff_sha256")}}
+                "proof": {"verdict": "ACCEPT", "candidate_tree": run.get("candidate_tree"),
+                         "findings": [], "reviewer": {"provider": self.provider, "model": self.model}}}
     def review(self, run, run_dir):
         return self.review_stage(run, run_dir, "final")
 
