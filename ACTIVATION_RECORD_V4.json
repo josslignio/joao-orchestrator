@@ -1,16 +1,22 @@
 {
   "schema_version": 1,
-  "activation_id": "ACT-V4-PENDING",
+  "activation_id": "ACT-V4-0001",
   "bundle_version": "4.0.0",
   "bundle_sha256_at_generation": "63371b75377edd40a5f54e256cc83f9039025fcfc889f676ac7219241dbfe3fb",
   "generated_at": "2026-07-18T16:06:08Z",
   "boss_go": {
-    "given": false,
-    "identity": null,
-    "date": null,
-    "hash_confirmed": null,
-    "version_confirmed": null
+    "given": true,
+    "identity": "Jocelyn Grosjean (Boss)",
+    "date": "2026-07-18",
+    "hash_confirmed": "63371b75377edd40a5f54e256cc83f9039025fcfc889f676ac7219241dbfe3fb",
+    "version_confirmed": "4.0.0",
+    "decision_text": "J'approuve le bundle documentaire 63371b75377edd40a5f54e256cc83f9039025fcfc889f676ac7219241dbfe3fb comme baseline V4 pour construire A0 et CV-SEC. Cette approbation ne signifie pas encore que V4 est techniquement appliquée dans RunRuntime. Je maintiens product_ui.yaml et operations.yaml en DRAFT jusqu'à leur validation explicite séparée.",
+    "decision_log_ref": "DEC-009"
   },
-  "runtime_authority": false,
-  "note": "Enregistrement SÉPARÉ du bundle (fin de la circularité d'activation, patch M0.1 deliverable 1). Le bundle ne s'auto-déclare jamais signé (C-1/C-2, D-038) — silence ≠ GO. `runtime_authority` ne passe à `true` que si un GO Boss explicite (identité + hash + version) remplit `boss_go` ci-dessus ET que `boss_go.hash_confirmed` == `bundle_sha256_at_generation` du bundle SIGNÉ (pas d'un bundle regénéré depuis). DECISION_LOG.jsonl reste hors bundle et hors de ce record : c'est un journal vivant, jamais une autorité machine (Constitution §1.6)."
+  "runtime_authority": true,
+  "carve_outs": {
+    "specs/product_ui.yaml": "NON approuvé par ce GO — reste DRAFT (validation Boss explicite séparée requise). Le fichier lui-même n'a PAS été modifié pour refléter ce carve-out (un changement de son contenu changerait son sha256 et invaliderait le hash de bundle précisément approuvé ci-dessus) ; sa valeur `approval_status: pending_boss` reste donc la source de vérité machine, sémantiquement équivalente au DRAFT prononcé par le Boss.",
+    "specs/operations.yaml": "NON approuvé par ce GO — reste DRAFT (validation Boss explicite séparée requise), même remarque que ci-dessus."
+  },
+  "note": "GO Boss REÇU et enregistré ici, séparément du bundle qu'il signe (C-1/C-2/D-038 — le bundle ne s'auto-déclare jamais signé, et cet enregistrement ne modifie AUCUN document du bundle : bundle_sha256 est resté identique avant/après l'ajout de DEC-009 à DECISION_LOG.jsonl, preuve live que ce GO n'invalide rien). `runtime_authority: true` signifie ICI : ce bundle EST désormais reconnu comme l'autorité documentaire V4 (C-1 — le loader peut le traiter comme référence signée). Cela ne signifie PAS que `RunRuntime` applique quoi que ce soit techniquement : aucun code de mission-launch n'appelle `load_active_specs()` aujourd'hui (limite déjà documentée depuis M0/M0.1) — c'est exactement la distinction que le Boss a lui-même posée dans son texte de décision. Le bundle ne doit plus JAMAIS être modifié en place maintenant qu'il est signé : toute évolution future (y compris la validation séparée de product_ui.yaml/operations.yaml) est un nouveau bundle v4.0.1 avec un nouvel ACTIVATION_RECORD_V4.json — jamais une édition de ce record."
 }
