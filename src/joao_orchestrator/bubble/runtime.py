@@ -8,6 +8,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
@@ -17,6 +18,33 @@ from typing import Any
 from ..domain.models import ProjectProfile
 from ..policy.paths import detect_path_violations
 from ..storage.atomic import FileLock, LockAcquireError, append_line, atomic_write_json, atomic_write_text
+
+
+def _memory_dir() -> Path:
+    """Locate the B-28 brain (repo-root `memory/`), honouring an explicit override."""
+    override = os.environ.get("JOAO_MEMORY_DIR")
+    if override:
+        return Path(override).expanduser()
+    return Path(__file__).resolve().parents[3] / "memory"
+
+
+_INJECTOR = None
+_INJECTOR_LOADED = False
+
+
+def _injector():
+    """Lazily import the single injection authority (memory/inject.py). None if absent."""
+    global _INJECTOR, _INJECTOR_LOADED
+    if _INJECTOR_LOADED:
+        return _INJECTOR
+    _INJECTOR_LOADED = True
+    mem = _memory_dir()
+    if (mem / "inject.py").exists():
+        if str(mem) not in sys.path:
+            sys.path.insert(0, str(mem))
+        import inject as _inject_mod  # noqa: PLC0415
+        _INJECTOR = _inject_mod
+    return _INJECTOR
 
 
 def now() -> str:
@@ -169,10 +197,12 @@ class CodexCLIReviewer(ReviewerAdapter):
     def available(self) -> bool:
         return bool(shutil.which(self.executable) and Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().exists())
 
-    def review_stage(self, run, run_dir, stage: str):
+    def review_stage(self, run, run_dir, stage: str, active_rules: str = ""):
         workspace = Path(run["workspace"])
         output = run_dir / f"codex-{stage}-review.jsonl"
+        rules_prefix = (active_rules + "\\n\\n") if active_rules else ""
         prompt = (
+            f"{rules_prefix}"
             "You are the independent JOAO reviewer. Work read-only. Review the "
             f"{stage} gate for this bounded mission:\\n\\n{run['mission']}\\n\\n"
             "Inspect only the current worktree, task evidence and git diff. Do not "
@@ -223,6 +253,28 @@ class RunRuntime:
         self.reviewer = reviewer or CodexEvidenceReviewer(); self.tests = tests or LocalTestRunner()
         self.memory = memory or LocalMemoryAdapter(self.root / "memory"); self.profiles = profiles or LocalProfileAdapter()
     def _dir(self, run_id: str) -> Path: return self.root / "runs" / run_id
+    def _inject(self, run: dict[str, Any], role: str, *, files_touched: list[str] | None = None, stage: str | None = None):
+        """Compose the role's RÈGLES ACTIVES block, persist it as evidence, log the ids.
+
+        This is the ONE place memory reaches a role prompt — every launch path funnels here.
+        If the memory subsystem is genuinely absent the gap is recorded loudly (no silent
+        bypass) and an empty block is returned so a mis-installed package still runs.
+        """
+        folder = self._dir(run["run_id"])
+        mod = _injector()
+        if mod is None:
+            self._event(run, "memory_injection_unavailable", role=role, stage=stage or "")
+            from types import SimpleNamespace
+            return SimpleNamespace(role=role, ids=[], block="", token_estimate=0)
+        result = mod.build_injection(role, project=run.get("project_id", ""),
+                                     mission_type=run.get("mission", ""),
+                                     files_touched=files_touched)
+        name = f"active-rules-{role}" + (f"-{stage}" if stage else "") + ".md"
+        atomic_write_text(folder / name, result.block or "(no lessons matched)\n")
+        self._event(run, "memory_injected", role=role, stage=stage or "",
+                    injected_ids=result.ids, count=len(result.ids),
+                    token_estimate=result.token_estimate)
+        return result
     def _read(self, run_id: str) -> dict[str, Any]:
         path = self._dir(run_id) / "run.json"
         if not path.exists(): raise RuntimeStateError("unknown run: " + run_id)
@@ -259,7 +311,9 @@ class RunRuntime:
         atomic_write_json(folder / "task-graph.json", {"tasks": tasks}); atomic_write_json(folder / "plan.json", {"status": "pending", "bounded": True, "max_corrections": 1}); self._write(run)
         self._event(run, "run_created", builder_provider=self.builder.provider, builder_model=self.builder.model); self._checkpoint(run)
         self._transition(run, RunStatus.PLANNING, "load profile and local memory")
-        atomic_write_json(folder / "memory.json", self.memory.load(project_id)); atomic_write_json(folder / "plan.json", {"status": "ready", "mission_sha256": hashlib.sha256(mission.encode()).hexdigest(), "bounded": True, "max_corrections": 1})
+        planner_rules = self._inject(run, "planner")
+        atomic_write_json(folder / "memory.json", self.memory.load(project_id))
+        atomic_write_json(folder / "plan.json", {"status": "ready", "mission_sha256": hashlib.sha256(mission.encode()).hexdigest(), "bounded": True, "max_corrections": 1, "injected_lesson_ids": planner_rules.ids})
         run["tasks"][0]["status"] = "completed"; self._transition(run, RunStatus.READY, "bounded plan created"); return run_id
     def get(self, run_id: str) -> dict[str, Any]: return self._read(run_id)
     def events(self, run_id: str) -> list[dict[str, Any]]: return self._events(self._read(run_id)).read()
@@ -288,8 +342,13 @@ class RunRuntime:
         atomic_write_json(folder / "manifest.json", {"schema_version": 1, "run_id": run["run_id"], "files": [{"path": str(path.relative_to(folder)), "sha256": digest(path), "bytes": path.stat().st_size} for path in files]})
     def _review_gate(self, run: dict[str, Any], stage: str) -> dict[str, Any]:
         folder = self._dir(run["run_id"])
+        changed = []
+        changed_path = folder / "changed-paths.json"
+        if changed_path.exists():
+            changed = json.loads(changed_path.read_text()).get("changed_by_builder", [])
+        r_rules = self._inject(run, "reviewer", files_touched=changed, stage=stage)
         if hasattr(self.reviewer, "review_stage"):
-            review = self.reviewer.review_stage(run, folder, stage)
+            review = self.reviewer.review_stage(run, folder, stage, active_rules=r_rules.block)
         elif stage == "final":
             review = self.reviewer.review(run, folder)
         else:
@@ -324,7 +383,9 @@ class RunRuntime:
         if not building: self._transition(run, RunStatus.BUILDING, "builder dispatch")
         try:
             with FileLock(folder / "builder", timeout=.01):
-                before = self._paths(workspace); builder = self.builder.build(run["mission"], workspace, folder, profile.allowed_write_paths, correction)
+                b_rules = self._inject(run, "builder", files_touched=profile.allowed_write_paths)
+                mission_for_builder = f"{b_rules.block}\n\n---\n\n{run['mission']}" if b_rules.block else run["mission"]
+                before = self._paths(workspace); builder = self.builder.build(mission_for_builder, workspace, folder, profile.allowed_write_paths, correction)
         except LockAcquireError:
             self._transition(run, RunStatus.BLOCKED, "second builder refused"); self._finalize(run); return run
         after = self._paths(workspace); changed = sorted(set(after) - set(before)); violations = detect_path_violations(changed, profile)
