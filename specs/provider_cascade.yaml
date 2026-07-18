@@ -1,0 +1,99 @@
+spec: provider_cascade
+version: "4.0.0"
+risk_boundary: provider_cascade
+roadmap_milestone_primary: M3
+source: "RAPPORT_OPTIMISATION_V4_GPT.md §13 (verbatim) — run card ~/Claude-HQ/JOAO_RUN_CARD_A1_CASCADE_REELLE.md"
+description: >
+  Ordre outil-déterministe → GLM solo → best-of-N GLM → Claude → review Codex externe
+  (jamais bloquant) ; chaque étage produit un CANDIDAT vérifiable, jamais un texte de
+  succès ; best-of-N réellement parallèle ; diversité mesurée ; juge indépendant ; tests
+  cachés avec limites déclarées ; télémétrie réelle (UNKNOWN plutôt qu'un proxy inventé).
+notes: >
+  Discrepancy flagged for Boss arbitration : la carte A1 (REQUIREMENT_IDS) référence
+  provider_cascade.yaml CAS-1→CAS-6 uniquement, mais le rapport V4 §13 définit CAS-1 à
+  CAS-7 (la télémétrie, deliverable 6 de la carte A1, EST CAS-7). Ce fichier transcrit
+  fidèlement les 7 exigences du rapport — l'écart avec la carte A1 doit être corrigé à
+  la prochaine édition de cette carte.
+requirements:
+  - id: CAS-1
+    statement: >
+      Ordre de la cascade : outil déterministe → GLM simple → best-of-N GLM → Claude →
+      review Codex externe. Codex n'est JAMAIS un point de disponibilité critique.
+    severity: 3
+    verification_gate: "A1 mission de preuve 1 (tâche outil-déterministe résolue étage a, coût ~0 tracé)"
+    roadmap_milestone: M3
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: CAS-2
+    statement: >
+      Chaque étage est vérifié : un worker retourne un CANDIDAT (ID, hash, sandbox,
+      tests, coûts, durée, provider, modèle) — jamais un texte de succès ; aucun modèle
+      ne s'auto-déclare vainqueur.
+    severity: 3
+    verification_gate: "A1 mission de preuve 2 (tâche GLM simple → étage b, candidat testé sur son hash)"
+    roadmap_milestone: M3
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: CAS-3
+    statement: >
+      Best-of-N réellement parallèle : concurrence bornée, sandboxes séparés, timeouts
+      individuels, exceptions isolées, zombies nettoyés, candidats gelés AVANT jugement.
+    severity: 3
+    verification_gate: "A1 mission de preuve 3 (tâche critique → best-of-3 réel, 3 sorties distinctes archivées)"
+    roadmap_milestone: M3
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: CAS-4
+    statement: >
+      Diversité mesurée : distance des diffs, fichiers touchés, architecture, couverture,
+      tests ajoutés, similarité. Une simple étiquette « perf/lisibilité/edge » ne suffit
+      pas ; une convergence excessive déclenche un re-sampling ou un retour single-builder.
+    severity: 2
+    verification_gate: "A1 deliverable 4 (diversité mesurée sur le best-of-3 de la mission de preuve 3, N ≤ 5)"
+    roadmap_milestone: M3
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: CAS-5
+    statement: >
+      Juge indépendant : candidats anonymisés, ID valide uniquement, ≠ builder, aucun
+      pouvoir d'écriture, ordre inconnu/aléatoire.
+    severity: 3
+    verification_gate: "A1 deliverable 5 (suite d'acceptation cachée écrite par un modèle ≠ builder, jamais montrée aux builders ; kill-switch si un builder « passe trop bien »)"
+    roadmap_milestone: M3
+    owner: reviewer
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: CAS-6
+    statement: >
+      Tests cachés avec limites déclarées : le verdict combine les tests du contrat
+      signé, les propriétés, les mutations, le held-out, la review du diff, et les
+      contrôles sécurité.
+    severity: 3
+    verification_gate: "A1 mission de preuve 4 (échec total simulé → BLOCKED visible, jamais de silence) + 5 (récidive → escalade forcée)"
+    roadmap_milestone: M3
+    owner: reviewer
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: CAS-7
+    statement: >
+      Télémétrie réelle par appel : provider, modèle, durée, tokens réels si disponibles
+      sinon `UNKNOWN` (JAMAIS un proxy présenté comme réel), résultat, erreur, étage,
+      raison d'escalade. Agrégée par mission (MissionCost) — la North Star ≥90% sous
+      Claude devient MESURABLE.
+    severity: 3
+    verification_gate: "A1 deliverable 6 (télémétrie réelle par mission, valeur indisponible = UNKNOWN)"
+    roadmap_milestone: M3
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim

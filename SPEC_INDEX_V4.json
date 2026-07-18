@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "version": "4.0.0",
+  "generated_at": "2026-07-18T14:24:47Z",
+  "runtime_authority": false,
+  "active_documents": [
+    {
+      "path": "SYSTEM_CONSTITUTION_V4.md",
+      "type": "constitution",
+      "version": "4.0.0",
+      "sha256": "1324dac7f68304122b39efc6e25872de4bb33ba679987761d1fc41f92e46ad20",
+      "bytes": 9321
+    },
+    {
+      "path": "specs/runtime_integrity.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "c3392ba7de20d245b3f9acb08900c4ba67153ee1b5c53187a5fce725901edd5f",
+      "bytes": 4490
+    },
+    {
+      "path": "specs/security.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "b8f86b83168ca3d4fe153787d0568d5eeb9c781413b43f8897a91a95ee84e21c",
+      "bytes": 3528
+    },
+    {
+      "path": "specs/memory.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "6a626feb7dadb15d5cce5d346ec6b3f2679d58b4eb53c1912b104445c0a7ef8d",
+      "bytes": 4270
+    },
+    {
+      "path": "specs/phase0.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "53c8ab2223c00d8fdb315c0111e60ff79fe82bcdb049c2f48c11a10c8adfee67",
+      "bytes": 3085
+    },
+    {
+      "path": "specs/provider_cascade.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "c1278941ba7265fbfc5d2b24659a929e4e31bf814774f6ea57caf8b4d7b4cd68",
+      "bytes": 4598
+    },
+    {
+      "path": "specs/cv_bot.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "920315f5589a7b224483ccf8793003e80630c50183fd4b34b117a6e0c02463cf",
+      "bytes": 6408
+    },
+    {
+      "path": "specs/product_ui.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "3cff02e0a4cc8d5961f5a59870ad6f79043180509136ca82158a445999a01fa6",
+      "bytes": 5772
+    },
+    {
+      "path": "specs/operations.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "53ffb2e311da6e2a930f4fda36b6d3b9aa6f9284df7d3b0d1aea406000c6cf7b",
+      "bytes": 5814
+    },
+    {
+      "path": "ROADMAP_V4.md",
+      "type": "roadmap",
+      "version": "4.0.0",
+      "sha256": "06ef5af883ba57e94caab59c081cf5dd6f4aca44db0c013457e331eb7b415851",
+      "bytes": 8411
+    },
+    {
+      "path": "TRACEABILITY_V4.jsonl",
+      "type": "traceability",
+      "version": "4.0.0",
+      "sha256": "35e0676af81a3450b95765a9b3776cfcbd81867d8268a3e8beb68314137590c3",
+      "bytes": 20156
+    },
+    {
+      "path": "DECISION_LOG.jsonl",
+      "type": "decision_log",
+      "version": "4.0.0",
+      "sha256": "6cbdb9f3ba1647156e191f94771cae496601bc0b1c54cd3703d408d95539b5bc",
+      "bytes": 4571
+    }
+  ]
+}

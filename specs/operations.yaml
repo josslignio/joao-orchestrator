@@ -1,0 +1,125 @@
+spec: operations
+version: "4.0.0"
+risk_boundary: autonomy
+roadmap_milestone_primary: M8
+source: >
+  DÉRIVÉ (pas de section itemizée dédiée dans RAPPORT_OPTIMISATION_V4_GPT.md) — construit
+  depuis : roadmap §14 (description M8 « supervision » + M10 « nuits limitées »),
+  Constitution C-7 (promotion atomique, rollback testé), CAS-7 (télémétrie réelle),
+  D-016/D-035, et ~/Claude-HQ/IDEAS_BACKLOG.md §« Supervisor digest / Regression
+  sentinels » (idée déjà actée par le Boss, transcrite ici sans rien y ajouter).
+description: >
+  Ce qui fait tourner le système en confiance dans la durée : rollback réellement
+  exécuté (pas seulement documenté), digest humain post-run, sentinels de non-régression,
+  budgets et kill-switch, queue d'approbation Boss, missions bornées, rapports honnêtes,
+  et le périmètre strict des nuits limitées (M10).
+notes: >
+  CETTE SPEC EST UNE INTERPRÉTATION, PAS UNE TRANSCRIPTION — même statut que product_ui.yaml
+  (voir sa note). Les items OPS-2/OPS-3/OPS-5 reprennent des idées déjà actées par le Boss
+  dans IDEAS_BACKLOG.md (Supervisor digest, Regression sentinels) — transcrites, pas inventées
+  — mais leur formalisation en exigence testable EST une interprétation de la tour de contrôle.
+  À ARBITRER PAR LE BOSS.
+requirements:
+  - id: OPS-1
+    statement: >
+      Rollback réellement EXÉCUTÉ (une commande lancée, pas seulement documentée) comme
+      preuve avant toute promotion — visible dans l'évidence.
+    severity: 3
+    verification_gate: "A0 EVIDENCE_REQUIRED (commande de rollback EXÉCUTÉE une fois en preuve) — Constitution C-7"
+    roadmap_milestone: M1-A
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: interpreted
+  - id: OPS-2
+    statement: >
+      Supervisor digest : après chaque run/mission, un rapport en langage humain
+      auto-généré (qui a fait quoi, ce qui a marché, ce qui bloque, la décision qui
+      attend le Boss) — le Boss ne fouille jamais les logs bruts.
+    severity: 2
+    verification_gate: "M8 attack test (à écrire) : digest généré et lisible en <2 min pour un run type"
+    roadmap_milestone: M8
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: "interpreted (idée actée par le Boss, IDEAS_BACKLOG.md — formalisation en exigence testable = interprétation tour de contrôle)"
+  - id: OPS-3
+    statement: >
+      Regression sentinels : après chaque livraison, re-run automatique des tests
+      d'acceptation des versions déjà promues — une régression est détectée par la
+      machine, jamais par le Boss en usage.
+    severity: 2
+    verification_gate: "M8 attack test (à écrire) : une régression plantée sur une version promue est détectée automatiquement"
+    roadmap_milestone: M8
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: "interpreted (idée actée par le Boss, IDEAS_BACKLOG.md)"
+  - id: OPS-4
+    statement: >
+      Budgets et kill-switch : un run qui dépasse un budget déclaré ou déclenche un
+      signal rouge (juge « passe trop bien », récidive répétée) s'arrête, jamais en silence.
+    severity: 2
+    verification_gate: "M8 attack test (à écrire) : dépassement de budget simulé → arrêt visible, jamais silencieux"
+    roadmap_milestone: M8
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: interpreted
+  - id: OPS-5
+    statement: >
+      Queue d'approbation Boss explicite : toute action GitHub/publication/candidature
+      passe par une queue visible — jamais auto-exécutée.
+    severity: 3
+    verification_gate: "M8 attack test (à écrire) : action GitHub tentée sans queue → refusée"
+    roadmap_milestone: M8
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: interpreted
+  - id: OPS-6
+    statement: >
+      Reporting agrégé : la télémétrie CAS-7 (provider/modèle/durée/tokens/coût par
+      appel) est consolidée en rapport lisible par mission ET par période — une valeur
+      indisponible reste `UNKNOWN`, jamais un proxy présenté comme réel.
+    severity: 2
+    verification_gate: "vérifié conjointement avec CAS-7 (provider_cascade.yaml) sur les missions de preuve A1"
+    roadmap_milestone: M3
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: interpreted
+  - id: OPS-7
+    statement: >
+      Nuits limitées (M10) : AUTORISÉ — refresh données, health checks, bench, branches
+      spéculatives, préparation locale. INTERDIT — merge, publication, candidature,
+      email, signature, activation de règle, changement d'autorité, promotion.
+    severity: 3
+    verification_gate: "M10 attack test (à écrire) : tentative de merge/publication en nuit → bloquée"
+    roadmap_milestone: M10
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: OPS-8
+    statement: >
+      Une mission reste BORNÉE : jamais une session poussée à saturation de contexte.
+      Compaction, sous-agents, ou découpage en missions bornées est obligatoire.
+    severity: 2
+    verification_gate: "surveillé au niveau carte de run (RISK_BOUNDARY unique, C-4) + chantier de compaction"
+    roadmap_milestone: M1-A
+    owner: "tour de contrôle"
+    status: PLANNED
+    source_defects: [D-016]
+    derivation: interpreted
+  - id: OPS-9
+    statement: >
+      Tout rapport de run contient une section NON VÉRIFIÉ / LIMITES — son absence
+      invalide le rapport entier.
+    severity: 3
+    verification_gate: "vérifié à chaque rapport de run par la tour de contrôle (convention de carte)"
+    roadmap_milestone: M0
+    owner: "tour de contrôle"
+    status: SATISFIED
+    source_defects: [D-035]
+    derivation: verbatim

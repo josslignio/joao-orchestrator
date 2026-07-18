@@ -5,6 +5,8 @@ __pycache__/
 *.jsonl
 !program/joao/master-run/RUN_JOURNAL.jsonl
 !memory/lessons.jsonl
+!TRACEABILITY_V4.jsonl
+!DECISION_LOG.jsonl
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

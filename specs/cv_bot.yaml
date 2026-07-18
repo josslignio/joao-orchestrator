@@ -1,0 +1,137 @@
+spec: cv_bot
+version: "4.0.0"
+risk_boundary: cv_security
+roadmap_milestone_primary: M1-B
+source: "RAPPORT_OPTIMISATION_V4_GPT.md §12 (verbatim) — run card ~/Claude-HQ/CV_BOT_RUN_CARD_CVSEC_V4.md"
+description: >
+  Sécurité du produit CV bot UTILISÉ (données personnelles). Autorités visuelles
+  INTOUCHÉES par ce spec (CV master sha256 831a9215…c9b75, cover letter sha256
+  c034573a…a7d3 — aucun changement visuel dans CV-SEC). Duplicate-and-edit strict,
+  artefact routé (jamais /pkg/ brut), Apply Assist blindé (scheme+hostname+redirections),
+  serveur durci, statuts honnêtes, PII confinée, dates dynamiques.
+notes: >
+  Onze défauts CV-bot (D-005, D-006, D-012, D-013, D-017, D-022, D-025, D-026, D-027,
+  D-033, D-040 — sourcing/scoring/salaire/environnement) sont des règles MÉTIER, pas des
+  exigences de sécurité/intégrité d'artefact : ils ne sont couverts par AUCUNE des 10
+  exigences CV-x ci-dessous ni par aucune autre des 8 specs V4. Voir TRACEABILITY_V4.jsonl
+  (status UNMAPPED_PENDING_SPEC) — ils attendent une spec dédiée (probablement livrée avec
+  M5/M7), non inventée ici pour ne pas dépasser la portée du rapport V4 (C-3).
+requirements:
+  - id: CV-1
+    statement: >
+      Duplicate-and-edit strict : la mise en page n'est JAMAIS reconstruite en code.
+      Zones personnalisables allowlistées uniquement (headline, compétences sélectionnées,
+      paragraphe de correspondance, entreprise, rôle, date).
+    severity: 3
+    verification_gate: "CVSEC-V4 BOSS_DECISION (parcours réel offre→CV→lettre dérivé du master, revue humaine du rendu)"
+    roadmap_milestone: M1-B
+    owner: builder
+    status: PLANNED
+    source_defects: [D-021, D-042]
+    derivation: verbatim
+  - id: CV-2
+    statement: >
+      Personnalisation traçable : chaque affirmation cite un `fact_id` validé, l'extrait
+      de l'offre (JD) source, et la transformation appliquée — aucune claim inventée.
+      Un placeholder inconnu reste VIDE et surligné, jamais deviné.
+    severity: 3
+    verification_gate: "CVSEC-V4 deliverable 2 (extraction déterministe des champs avant tout LLM)"
+    roadmap_milestone: M1-B
+    owner: builder
+    status: PLANNED
+    source_defects: [D-009, D-014]
+    derivation: verbatim
+  - id: CV-3
+    statement: >
+      Artefact ID unique — aucun accès brut à `/pkg/`. Téléchargement UNIQUEMENT via
+      `/artifacts/<artifact_id>/download`, le contrôleur vérifie autorité + provenance
+      + type avant de servir.
+    severity: 3
+    verification_gate: "CVSEC-V4 ATTACK_TEST 6 (accès brut ex-/pkg/ → 404/403)"
+    roadmap_milestone: M1-B
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-030]
+    derivation: verbatim
+  - id: CV-4
+    statement: >
+      Manifest calculé hors builder {master_sha, docx_sha, pdf_sha, job_key,
+      generator_version, spec_hash, rendu, date, contrôleur}. Au téléchargement : hashes
+      RECALCULÉS + type + autorité + manifest + statut vérifiés — jamais une confiance
+      aveugle au fichier écrit par le processus qui l'a généré.
+    severity: 3
+    verification_gate: "CVSEC-V4 ATTACK_TESTS 4 (PDF substitué → ⬇ bloqué) + 5 (manifest forgé → ⬇ bloqué)"
+    roadmap_milestone: M1-B
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-008, D-023, D-028]
+    derivation: verbatim
+  - id: CV-5
+    statement: >
+      Apply Assist blindé : HTTPS obligatoire, hostname EXACT allowlisté (jamais un
+      `contains("greenhouse")`), blocage localhost/IP privées/`file:`/`data:`/scheme
+      inconnu, re-validation après CHAQUE redirection (domaine final == domaine attendu),
+      domaine final affiché + confirmation humaine AVANT tout remplissage, AUCUN upload
+      avant cette confirmation.
+    severity: 3
+    verification_gate: "CVSEC-V4 ATTACK_TESTS 1 (faux domaine « greenhouse.evil.com ») + 2 (redirection externe) + 3 (localhost/IP privée)"
+    roadmap_milestone: M1-B
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: CV-6
+    statement: >
+      Statuts de question par champ : detected / supported / filled / requires_human /
+      unsupported / failed. « Détecté » n'est JAMAIS enregistré « rempli ».
+    severity: 2
+    verification_gate: "CVSEC-V4 ATTACK_TEST 9 (question « détectée » non remplie → requires_human, jamais filled)"
+    roadmap_milestone: M1-B
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-010, D-011]
+    derivation: verbatim
+  - id: CV-7
+    statement: >
+      File de jobs visible : queued → generating → validating → ready / failed:raison —
+      aucune exception silencieuse.
+    severity: 2
+    verification_gate: "CVSEC-V4 ATTACK_TEST 10 (lancement sans TTY → fenêtre reste ouverte, statut visible, D-039 re-vérifié)"
+    roadmap_milestone: M1-B
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-039]
+    derivation: "verbatim (portée lue au sens large pour couvrir l'attack test 10 sans-TTY de CVSEC-V4, non explicitement énoncé par le texte CV-7 du rapport — signalé pour arbitrage Boss)"
+  - id: CV-8
+    statement: >
+      PII : screenshots HORS racine HTTP, permissions 0700, rétention limitée, pas de
+      PII dans les logs, consultation par token temporaire uniquement.
+    severity: 3
+    verification_gate: "CVSEC-V4 ATTACK_TEST 8 (accès screenshot PII sans token → refusé)"
+    roadmap_milestone: M1-B
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: CV-9
+    statement: >
+      Date système ou injectée — jamais hardcodée dans le code produit.
+    severity: 1
+    verification_gate: "CVSEC-V4 deliverable 7 (dates dynamiques, horloge système injectable en test)"
+    roadmap_milestone: M1-B
+    owner: builder
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: CV-10
+    statement: >
+      Apply Assist reste SUSPENDU jusqu'à : toutes les gates CV-SEC vertes + test réel
+      sur compte de test + revue humaine du domaine final + confirmation explicite au
+      rapport. Décision Boss requise pour lever la suspension.
+    severity: 3
+    verification_gate: "CVSEC-V4 BOSS_DECISION (GO sur le parcours + levée explicite de la suspension Apply Assist)"
+    roadmap_milestone: M1-B
+    owner: boss
+    status: PLANNED
+    source_defects: [D-039]
+    derivation: verbatim
