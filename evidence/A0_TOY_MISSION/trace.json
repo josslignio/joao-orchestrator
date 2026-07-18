@@ -1,0 +1,42 @@
+{
+  "base_commit": "1dc29a6fba3088b9ba346d08555f32194066d11b",
+  "branch_tip_after_promotion": "ca5fed9c741eb4ad030df999cec1559a79faa0bd",
+  "branch_tip_after_rollback": "1dc29a6fba3088b9ba346d08555f32194066d11b",
+  "build_review_candidate_tree": "f7b8ca3c4486499203e1482a9964c8ce5be63e90",
+  "candidate_commit": "ca5fed9c741eb4ad030df999cec1559a79faa0bd",
+  "candidate_tree": "f7b8ca3c4486499203e1482a9964c8ce5be63e90",
+  "final_review_candidate_tree": "f7b8ca3c4486499203e1482a9964c8ce5be63e90",
+  "greeting_after_promotion": "def greet():\n    return 'hello, world'\n",
+  "greeting_after_rollback": "def greet():\n    return 'hello'\n",
+  "promoted_commit_tree": "f7b8ca3c4486499203e1482a9964c8ce5be63e90",
+  "promotion_manifest": {
+    "branch": "main",
+    "candidate_tree": "f7b8ca3c4486499203e1482a9964c8ce5be63e90",
+    "previous_tip": "1dc29a6fba3088b9ba346d08555f32194066d11b",
+    "promoted_commit": "ca5fed9c741eb4ad030df999cec1559a79faa0bd",
+    "rollback_command": [
+      "git",
+      "-C",
+      "/var/folders/3n/cp7h29p55gzds1ttv9rkjdgw0000gn/T/joao-a0-toy-uanpx87z/workspace",
+      "update-ref",
+      "refs/heads/main",
+      "1dc29a6fba3088b9ba346d08555f32194066d11b",
+      "ca5fed9c741eb4ad030df999cec1559a79faa0bd"
+    ],
+    "run_id": "run-20260718T214550Z-bf9ae9a1",
+    "tag": "joao-promoted-run-20260718T214550Z-bf9ae9a1"
+  },
+  "rollback_restored_base": true,
+  "rollback_result": {
+    "branch": "main",
+    "from_commit": "ca5fed9c741eb4ad030df999cec1559a79faa0bd",
+    "restored_to": "1dc29a6fba3088b9ba346d08555f32194066d11b",
+    "rolled_back": true
+  },
+  "run_id": "run-20260718T214550Z-bf9ae9a1",
+  "same_hash_end_to_end": true,
+  "same_hash_through_promotion": true,
+  "same_hash_through_review": true,
+  "status_after_approve": "accepted",
+  "status_after_run_once": "needs_approval"
+}
