@@ -90,6 +90,12 @@ et `specs/product_ui.yaml` (règles CV/UX graduées hors prompt une fois couvert
 ## M6 — CHAT CORE MINIMAL
 **Carte** : (à écrire, dépend de M4 = décision GO). **INTERDIT avant la décision M4** (§4.2 du
 rapport : les 10 missions sont une gate AVANT Chat Era, pas seulement avant le label GA).
+**Statut d'application (patch M0.1)** : cette interdiction est aujourd'hui **documentaire**
+(discipline de carte de run + Constitution §6), pas un gate technique dans `RunRuntime` — il
+n'existe encore aucun code qui refuserait un chat lancé avant M4. Elle devient un gate RUNTIME
+réel quand A0/M1-A (hard gate mission-sans-spec-signée) et A2/M2 (mémoire/Phase 0 sécurisées)
+sont promus ; jusque-là, aucun `SPEC_BUNDLE_MANIFEST_V4.json`/loader ne fait respecter cette
+règle en code.
 **Exigences** : `specs/product_ui.yaml` UI-5, UI-6, UI-7 · `specs/phase0.yaml` (hard gate
 mission-sans-spec-signée réutilisée depuis le chat).
 **Contrat** : « Bonjour » ne lance rien · mission sans spec signée refusée · verdict réel

@@ -2,6 +2,9 @@ spec: operations
 version: "4.0.0"
 risk_boundary: autonomy
 roadmap_milestone_primary: M8
+included_in_bundle: true
+approval_status: pending_boss
+runtime_enforceable: false
 source: >
   DÉRIVÉ (pas de section itemizée dédiée dans RAPPORT_OPTIMISATION_V4_GPT.md) — construit
   depuis : roadmap §14 (description M8 « supervision » + M10 « nuits limitées »),

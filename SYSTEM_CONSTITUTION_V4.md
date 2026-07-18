@@ -76,6 +76,15 @@ Statuts d'une **exigence** (`specs/*.yaml`, vocabulaire introduit par ce documen
 
 SUITE-A monolithique · SUITE-B immédiatement après CV-SEC · Chat Era avant les 10 missions réelles (M4) · freeze GA daté · HMAC fichier présenté comme preuve absolue de l'action du Boss · mémoire brute injectée (prose libre en zone d'instruction) · best-of-N séquentiel présenté comme parallèle · coûts proxy présentés comme réels (télémétrie doit dire `UNKNOWN` plutôt que d'inventer) · accès `/pkg/` brut · Apply Assist sur données réelles avant gate CV-SEC · claims « inattaquable » · nuits sans supervision · rapports sans section NON VÉRIFIÉ/LIMITES (D-035) · signature ligne-Markdown seule sans mécanisme (P0-4/MEM §11) · roadmap en prose libre sans IDs d'exigences.
 
+**Statut d'application (ajouté au patch M0.1)** : à ce jour, CETTE LISTE ENTIÈRE est un interdit
+**documentaire/process** — elle engage la discipline des cartes de run et du Boss, elle n'est
+PAS ENCORE un gate imposé par du code runtime. En particulier, « Chat Era avant M4 » n'a aucun
+mécanisme technique qui empêcherait aujourd'hui un chat de lancer un run avant la décision M4 :
+ce blocage arrive avec le hard gate mission-sans-spec-signée d'A0/M1-A (RI-*) et la mémoire
+sécurisée d'A2/M2 (`specs/phase0.yaml`), qui sont les premiers runs à donner à `RunRuntime` un
+point d'application réel. Tant que ces jalons ne sont pas promus, le seul rempart est la
+discipline de carte de run (C-4, une frontière par run) — jamais une garantie codée.
+
 ## 7. RÔLES
 
 - **Builder** : produit un candidat (jamais sa propre preuve finale de conformité — C-5, RI-5).

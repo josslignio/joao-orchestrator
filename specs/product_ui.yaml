@@ -2,6 +2,9 @@ spec: product_ui
 version: "4.0.0"
 risk_boundary: product_interface
 roadmap_milestone_primary: M7
+included_in_bundle: true
+approval_status: pending_boss
+runtime_enforceable: false
 source: >
   DÉRIVÉ (pas de section itemizée dédiée dans RAPPORT_OPTIMISATION_V4_GPT.md) — construit
   depuis : roadmap §14 (description M6 « Chat core minimal » + M7 « contrat design et UI »),
