@@ -1,0 +1,188 @@
+<!doctype html><html lang=fr><meta charset=utf-8><title>JOÃO — Chat Era</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:#0a0f18;color:#e8f0fa;font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto}
+.app{display:grid;grid-template-columns:230px 1fr;height:100vh}
+.side{background:#0c1420;border-right:1px solid #22344a;padding:14px;overflow:auto}
+.brand{font-weight:800;font-size:17px;letter-spacing:.5px;margin-bottom:2px}
+.brand b{background:linear-gradient(90deg,#5ad1ff,#b98cff);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.tag{color:#7f93ab;font-size:11px;margin-bottom:14px}
+.side button{width:100%;text-align:left;background:#152233;color:#dbe8f7;border:1px solid #2c4260;border-radius:9px;padding:9px 11px;margin-bottom:8px;font:inherit;cursor:pointer}
+.side button:hover{background:#1c2d43}
+.convs{margin-top:10px;border-top:1px solid #22344a;padding-top:10px}
+.conv{padding:7px 9px;border-radius:8px;color:#a9bdd6;cursor:pointer;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.conv:hover{background:#152233}.conv.on{background:#1c2d43;color:#eaf3ff}
+.main{display:grid;grid-template-rows:1fr auto;min-width:0}
+.split{display:grid;grid-template-columns:1fr;min-height:0}
+.split.panelopen{grid-template-columns:1fr 380px}
+.stream{overflow:auto;padding:26px 8vw}
+.panel{border-left:1px solid #22344a;background:#0c1420;overflow:auto;padding:16px;display:none}
+.split.panelopen .panel{display:block}
+.panel h3{margin:.2em 0 .6em}.panel pre{white-space:pre-wrap;word-break:break-word;background:#080e17;border:1px solid #22344a;border-radius:8px;padding:12px}
+.msg{max-width:760px;margin:0 auto 20px}
+.who{font-size:11px;color:#7f93ab;margin-bottom:4px;display:flex;gap:8px;align-items:center}
+.bubble{background:#111d2c;border:1px solid #223349;border-radius:12px;padding:13px 15px;white-space:pre-wrap;word-break:break-word}
+.msg.user .bubble{background:#16283d;border-color:#2b4a6b}
+.msg.user .who{color:#8fb7e6}
+.model{background:#0f2438;border:1px solid #27618f;color:#7fd0ff;border-radius:20px;padding:1px 8px;font-size:10px}
+.btns{display:flex;gap:10px;margin-top:8px}
+.btns button{background:#15304a;border:1px solid #2f6ea0;color:#d6ecff;border-radius:9px;padding:8px 12px;cursor:pointer;font:inherit}
+.btns button:hover{background:#1b3f60}
+.small{background:none;border:1px solid #2c4260;color:#9db1c9;border-radius:7px;padding:2px 8px;font-size:11px;cursor:pointer;margin-left:8px}
+.composer{border-top:1px solid #22344a;background:#0c1420;padding:12px 8vw}
+.crow{display:flex;gap:8px;align-items:flex-end;max-width:820px;margin:0 auto}
+textarea#in{flex:1;resize:none;min-height:46px;max-height:200px;background:#0a121d;color:#eef;border:1px solid #2c4260;border-radius:11px;padding:12px;font:inherit}
+.send{background:#1e6bb8;border:1px solid #5b9fd6;color:#fff;border-radius:11px;padding:12px 16px;font-weight:700;cursor:pointer}
+.ctl{display:flex;gap:8px;align-items:center;max-width:820px;margin:0 auto 8px;font-size:12px;color:#8ea3bd;flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid #2c4260;border-radius:8px;overflow:hidden}
+.seg button{background:#0f1a28;color:#9db1c9;border:0;padding:5px 11px;cursor:pointer;font:inherit}
+.seg button.on{background:#1e6bb8;color:#fff}
+select,.mini{background:#0f1a28;color:#cfe0f3;border:1px solid #2c4260;border-radius:8px;padding:5px 8px;font:inherit}
+.chip{display:inline-flex;gap:6px;align-items:center;background:#10202f;border:1px solid #2c4260;border-radius:20px;padding:3px 9px;font-size:11px}
+.chip.bad{border-color:#7a3b3b;color:#ff9d9d}.chip.ok{border-color:#2f6b48;color:#8fe6b4}
+.note{color:#7f93ab;font-size:11px}
+a.dl{color:#7fd0ff}
+</style>
+<div class=app>
+  <aside class=side>
+    <div class=brand>JOÃO<b>.AI</b></div>
+    <div class=tag>Chat Era · local · honnête</div>
+    <button onclick=newChat()>＋ Nouveau chat</button>
+    <button onclick=startKickoff() title="Phase 0 — nouveau projet">🧭 Nouveau projet (Kickoff)</button>
+    <div class=note id=caps>capacités…</div>
+    <div class=convs id=convs></div>
+  </aside>
+  <div class=main>
+    <div class="split" id=split>
+      <div class=stream id=stream>
+        <div class=msg><div class=who>JOÃO</div><div class=bubble>Salut 👋 Pose-moi une question, ou demande un build. Je <b>comprends l'intention</b> avant d'agir : une salutation ne lance pas un run. Je n'invente jamais — si je ne peux pas lire un doc ou ne sais pas, je le dis. (Pas d'accès web pour l'instant.)</div></div>
+      </div>
+      <div class=panel id=panel><h3 id=ptitle>Panneau</h3><div id=pbody></div></div>
+    </div>
+    <div class=composer>
+      <div class=ctl>
+        <span>Mode</span>
+        <span class=seg id=modeseg>
+          <button data-m=auto class=on onclick="setMode('auto')">Auto</button>
+          <button data-m=chat onclick="setMode('chat')">💬 Chat</button>
+          <button data-m=mission onclick="setMode('mission')">🛠️ Mission</button>
+        </span>
+        <span>Cerveau</span>
+        <select id=brain><option value=claude>Claude (Sonnet)</option><option value=glm>GLM (0 forfait)</option></select>
+        <label class=mini style="cursor:pointer">📎 Pièce jointe<input id=file type=file style=display:none onchange=attach(event)></label>
+        <span id=chips></span>
+      </div>
+      <div class=crow>
+        <textarea id=in placeholder="Écris un message… (Entrée = envoyer, Maj+Entrée = nouvelle ligne)"></textarea>
+        <button class=send onclick=send()>Envoyer</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const TOKEN="__JOAO_TOKEN__";
+let mode="auto", conv=null, pending=[], kickoff=null;
+const x=id=>document.getElementById(id);
+const H=()=>({'X-JOAO-Token':TOKEN,'Content-Type':'application/json'});
+async function j(u,o={}){o.headers={...(o.headers||{}),'X-JOAO-Token':TOKEN};const r=await fetch(u,o);const v=await r.json();if(!r.ok)throw Error(v.error||'request failed');return v}
+function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function setMode(m){mode=m;[...x('modeseg').children].forEach(b=>b.classList.toggle('on',b.dataset.m===m))}
+function scroll(){x('stream').scrollTop=x('stream').scrollHeight}
+
+function addMsg(role,html,who){const d=document.createElement('div');d.className='msg '+role;
+  d.innerHTML=`<div class=who>${esc(who||(role==='user'?'Toi':'JOÃO'))}</div><div class=bubble>${html}</div>`;
+  x('stream').appendChild(d);scroll();return d}
+
+async function newChat(){conv=null;kickoff=null;pending=[];x('chips').innerHTML='';x('stream').innerHTML='';
+  addMsg('assistant','Nouveau chat. Je t\'écoute.');loadConvs()}
+
+async function loadConvs(){try{const cs=await j('/chat/conversations');x('convs').innerHTML=cs.map(c=>
+  `<div class="conv${c.id===conv?' on':''}" onclick="openConv('${c.id}')">${esc(c.title||c.id)}</div>`).join('')}catch(e){}}
+async function openConv(id){const c=await j('/chat/history/'+id);conv=id;x('stream').innerHTML='';
+  c.messages.forEach(m=>addMsg(m.role,renderAssistant(m.content,m.model),m.role==='user'?'Toi':'JOÃO'+(m.model?' · '+m.model:'')));loadConvs()}
+
+function renderAssistant(text,model){let h=esc(text);
+  if((text||'').length>600)h+=`<div class=btns><button onclick='openPanel(${JSON.stringify(text)})'>📄 Ouvrir en .md</button></div>`;
+  return h}
+function openPanel(text){x('split').classList.add('panelopen');x('ptitle').textContent='Réponse (.md)';
+  const blob=new Blob([text],{type:'text/markdown'});const url=URL.createObjectURL(blob);
+  x('pbody').innerHTML=`<p><a class=dl href='${url}' download='joao-reponse.md'>⬇ Télécharger .md</a></p><pre>${esc(text)}</pre>`}
+
+async function attach(ev){const f=ev.target.files[0];if(!f)return;const b=await f.arrayBuffer();
+  const b64=btoa(String.fromCharCode(...new Uint8Array(b)));
+  try{const r=await j('/chat/attach',{method:'POST',body:JSON.stringify({name:f.name,content_base64:b64})});
+    pending.push(r.id);const e=r.extraction;const ok=e.ok;
+    x('chips').insertAdjacentHTML('beforeend',`<span class="chip ${ok?'ok':'bad'}">${ok?'✓':'✗'} ${esc(e.name)} ${ok?('· '+e.chars+' car. '+e.method):('· '+esc(e.error))}</span>`);
+  }catch(e){alert(e.message)}ev.target.value=''}
+
+async function send(force){const text=x('in').value.trim();if(!text)return;
+  const useMode=force||mode;x('in').value='';
+  addMsg('user',esc(text));
+  const r=await j('/chat/classify',{method:'POST',body:JSON.stringify({message:text,mode:useMode,has_attachment:pending.length>0})});
+  if(r.intent==='AMBIGU'){const d=addMsg('assistant',`🤔 ${esc(r.reason)}`);
+    d.querySelector('.bubble').innerHTML+=`<div class=btns><button onclick="reSend('chat')">💬 Répondre en chat</button><button onclick="reSend('mission')">🛠️ Lancer une mission</button></div>`;
+    window.__last=text;return}
+  if(r.intent==='KICKOFF'){addMsg('assistant','Nouveau projet détecté → je démarre le Kickoff (Phase 0).');startKickoff();return}
+  if(r.intent==='MISSION_CODE'){missionForm(text);return}
+  await streamReply(text);}
+function reSend(m){const t=window.__last;x('in').value=t;send(m)}
+
+async function streamReply(text){const brain=x('brain').value;
+  const d=addMsg('assistant','',(brain==='glm'?'GLM':'Claude'));const bub=d.querySelector('.bubble');
+  const who=d.querySelector('.who');let acc='',model='';
+  const resp=await fetch('/chat',{method:'POST',headers:H(),body:JSON.stringify({message:text,model:brain,conversation:conv,attachments:pending})});
+  pending=[];x('chips').innerHTML='';
+  const reader=resp.body.getReader(),dec=new TextDecoder();let buf='';
+  while(true){const{value,done}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});
+    let i;while((i=buf.indexOf('\n\n'))>=0){const line=buf.slice(0,i);buf=buf.slice(i+2);
+      if(!line.startsWith('data: '))continue;const ev=JSON.parse(line.slice(6));
+      if(ev.event==='start'){conv=ev.conversation}
+      else if(ev.event==='model'){model=ev.model;who.innerHTML=esc('JOÃO')+` <span class=model>${esc(model)}</span>`}
+      else if(ev.event==='delta'){acc+=ev.text;bub.innerHTML=esc(acc);scroll()}
+      else if(ev.event==='error'){acc+='\n⚠️ '+ev.message;bub.innerHTML=esc(acc)}
+      else if(ev.event==='done'){model=ev.model||model;bub.innerHTML=renderAssistant(acc,model);
+        who.innerHTML=esc('JOÃO')+` <span class=model>${esc(model)}</span>`+(ev.cost!=null?` <span class=note>coût ${ev.cost}</span>`:'')}
+      else if(ev.event==='saved'){loadConvs()}}}
+  scroll()}
+
+// ── mission from chat → cascade + Phase 0 gate (2.2c) ──
+function missionForm(text){const d=addMsg('assistant','🛠️ Demande de build détectée. Je passe par la <b>cascade</b> (GLM→best-of-N→Claude) avec mémoire injectée.');
+  d.querySelector('.bubble').innerHTML+=`<div style="margin-top:8px">
+    <div><input class=mini id=mw placeholder="/chemin/worktree-git" style=width:100%></div>
+    <div style=margin-top:6px><input class=mini id=map placeholder="chemins modifiables (ex: src/,tests/)" style=width:100%></div>
+    <div style=margin-top:6px><input class=mini id=mt value="python3 -m pytest -q" style=width:100%></div>
+    <label class=note><input type=checkbox id=mc checked> critique (force best-of-3)</label>
+    <div class=btns><button onclick='launchMission(${JSON.stringify(text)})'>Lancer la mission</button></div></div>`}
+async function launchMission(text){try{
+  const body={mission:text,workspace:x('mw').value,allowed_paths:x('map').value.split(',').map(s=>s.trim()).filter(Boolean),
+    full_test_command:x('mt').value,critical:x('mc').checked};
+  const r=await j('/chat/mission',{method:'POST',body:JSON.stringify(body)});
+  const d=addMsg('assistant',`Mission lancée : <b>${esc(r.run_id)}</b>. Je route via la cascade…`);
+  pollRun(r.run_id,d.querySelector('.bubble'))}catch(e){addMsg('assistant','⚠️ '+esc(e.message))}}
+async function pollRun(id,bub){const t=setInterval(async()=>{try{const v=await j('/runs/'+id);
+  bub.innerHTML=`Mission <b>${esc(id)}</b> · statut <b>${esc(v.status)}</b> · ${esc(v.current_step||'')}`;
+  if(['needs_approval','accepted','blocked','failed','stopped'].includes(v.status)){clearInterval(t);
+    x('split').classList.add('panelopen');x('ptitle').textContent='Mission '+id;
+    const cost=v.cascade_cost?('coût '+v.cascade_cost):'';
+    bub.innerHTML+=` <button class=small onclick='showRun("${id}")'>voir l'évidence</button>`}}catch(e){clearInterval(t)}},1500)}
+async function showRun(id){const v=await j('/runs/'+id);x('split').classList.add('panelopen');
+  x('ptitle').textContent='Mission '+id;x('pbody').innerHTML=`<pre>${esc(JSON.stringify(v,null,2))}</pre>`}
+
+// ── kickoff (Phase 0 as a routed intent, 2.2b) ──
+async function startKickoff(){const p=prompt('Nom du projet ?','nouveau-projet');if(!p)return;kickoff=p;
+  const s=await j('/kickoff/'+encodeURIComponent(p)+'/start',{method:'POST'});addMsg('assistant','🧭 Kickoff « '+esc(p)+' » démarré.');askKickoff(s)}
+function askKickoff(s){if(s.complete){addMsg('assistant',s.signed?'✅ Spec signée — missions autorisées.':'Interview terminée. Signe la spec avec « GO Boss » quand tu veux.'+
+  ` <div class=btns><button onclick="signKickoff()">✅ GO Boss</button></div>`);return}
+  const d=addMsg('assistant',`<b>[${esc(s.question.key)}]</b> ${esc(s.question.text)}`+
+    `<div style=margin-top:6px><input class=mini id=ka style="width:100%" placeholder="ta réponse"> <button class=small onclick="ansKickoff()">Répondre</button></div>`)}
+async function ansKickoff(){const t=x('ka').value.trim();if(!t)return;
+  const s=await j('/kickoff/'+encodeURIComponent(kickoff)+'/answer',{method:'POST',body:JSON.stringify({text:t})});askKickoff(s)}
+async function signKickoff(){const s=await j('/kickoff/'+encodeURIComponent(kickoff)+'/sign',{method:'POST'});askKickoff(s)}
+
+x('in').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});
+async function caps(){try{const v=await j('/capabilities');x('caps').innerHTML=
+  `GLM ${v.chat.glm.available?'✓':'✗'} · Claude ${v.chat.claude.available?'✓':'✗'} · Codex ${v.codex.available?'✓':'✗'} · web ✗`}catch(e){}}
+caps();loadConvs();
+</script>
+</html>
