@@ -106,6 +106,47 @@ def freeze_candidate(workspace: Path, run_dir: Path, run_id: str, attempt: int) 
     }
 
 
+def freeze_baseline(workspace: Path, run_id: str) -> dict[str, Any]:
+    """A0-3: a genuinely frozen exceptional baseline.
+
+    Before A0.1, `declared_baseline` was a string label plus a list of paths
+    recorded as evidence — nothing was actually frozen; the run simply
+    proceeded to diff the live workspace against the (also live, movable)
+    branch HEAD. That conflates a pre-existing dirty file with whatever the
+    builder does next: both land in the same `git diff HEAD` with no way to
+    tell them apart after the fact.
+
+    This creates an actual git tree/commit of the dirty worktree's exact
+    state BEFORE the builder ever runs, pinned under
+    `refs/joao/baselines/<run_id>` so it survives GC — the same pattern
+    `freeze_candidate` uses for the build output. The caller can then diff
+    the eventual candidate against THIS tree (never against the live branch
+    HEAD, which can move) to isolate exactly what the builder itself
+    changed, and separately diff `true_head..baseline_commit` to isolate
+    exactly what was already dirty before the run started. Raises
+    `CandidateError` if the resulting commit object does not actually
+    resolve — the caller must never claim a baseline was frozen unless a
+    real object exists for it.
+    """
+    workspace = Path(workspace)
+    true_head = _git(["rev-parse", "HEAD"], workspace).stdout.strip()
+    _git(["add", "-A"], workspace)
+    tree = _git(["write-tree"], workspace).stdout.strip()
+    commit = _git(["commit-tree", tree, "-p", true_head, "-m",
+                  f"JOAO frozen baseline {run_id}"], workspace).stdout.strip()
+    ref = f"refs/joao/baselines/{run_id}"
+    _git(["update-ref", ref, commit], workspace)
+    # Restore the live workspace's index to its pre-freeze state — freezing
+    # the baseline snapshot must never disturb the dirty worktree it is a
+    # picture of (the builder still needs to find its usual starting point).
+    _git(["reset", "--mixed", "-q", true_head], workspace, check=False)
+    exists = _git(["cat-file", "-e", commit + "^{commit}"], workspace, check=False).returncode == 0
+    if not exists:
+        raise CandidateError(f"A0-3: baseline freeze did not produce a resolvable commit object ({commit})")
+    return {"run_id": run_id, "baseline_ref": ref, "baseline_commit": commit,
+            "baseline_tree": tree, "true_head": true_head}
+
+
 def recompute_candidate_tree(readonly_copy: Path) -> str:
     """Independently re-derive the tree hash from what is actually on disk —
     never trust the value recorded at freeze time without re-checking it."""

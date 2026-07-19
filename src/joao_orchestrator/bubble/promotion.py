@@ -8,14 +8,47 @@ moved since the check, rather than blindly overwriting concurrent work.
 Promotion itself refuses outright (no force) if the branch has already
 drifted from the candidate's recorded parent before it even attempts the
 compare-and-swap.
+
+A0-4 / A0-6 (correction pass, 2026-07-19): the pre-A0.1 `promote()`/
+`rollback()` did the branch-ref compare-and-swap correctly, but then
+materialized that ref move into the live `workspace` with a `git reset
+--hard` whose return code was ignored (`check=False`). Two concrete flaws
+followed from that:
+
+  - `reset --hard` never removes untracked/ignored files. A gitignored
+    payload (e.g. exactly the `*.secret` file the new A0-4 gate in
+    `_execute` refuses earlier in the pipeline) sitting in `workspace`
+    survives a promotion completely untouched, right next to the newly
+    promoted code — "detected and refused" upstream is not the same
+    guarantee as "cannot survive a promotion" if promotion itself would
+    have let it ride along regardless.
+  - a failed `reset --hard` (silently swallowed by `check=False`) could
+    leave the branch ref already moved to the new commit while the actual
+    worktree on disk still showed the old one — a false success with no
+    detectable divergence, and no automatic rollback.
+
+Promotion now never touches the live `workspace` worktree at all. After the
+ref CAS succeeds, a brand-new, throwaway ("sterile") worktree is checked out
+fresh from the candidate commit — a fresh `git worktree add` only ever
+materializes what git actually tracked in that commit's tree, so a stray
+untracked/ignored file from the old workspace has no way to appear in it.
+Before the promotion is ever reported as verified, the sterile worktree's
+tree hash is independently recomputed, its `git status` is confirmed clean,
+and it is scanned for sensitive ignored files. Any checkout or verification
+failure triggers an immediate CAS rollback of the branch ref — never an
+ignored return code, never a manifest written before verification.
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
+from ..policy.paths import detect_sensitive_ignored_files
 from ..storage.atomic import atomic_write_json
+from .candidate import recompute_candidate_tree
+from .change_capture import ignored_files_inventory
 
 
 class PromotionError(RuntimeError):
@@ -31,11 +64,49 @@ def _current_branch(workspace: Path) -> str:
     return _git(["rev-parse", "--abbrev-ref", "HEAD"], workspace).stdout.strip()
 
 
+def _verify_sterile_worktree(worktree: Path, expected_tree: str) -> list[str]:
+    """A0-4/A0-6: independently re-derive the tree hash from what is actually
+    on disk in the fresh checkout (never trust the checkout silently
+    "worked"), confirm the worktree itself reports clean (nothing beyond the
+    candidate's own tracked tree materialized), and confirm no sensitive
+    gitignored file is present. Returns a list of problems — empty means
+    verified."""
+    problems = []
+    try:
+        recomputed = recompute_candidate_tree(worktree)
+    except Exception as exc:  # fail-closed: cannot verify => not verified
+        return [f"could not recompute tree hash: {type(exc).__name__}: {exc}"]
+    if recomputed != expected_tree:
+        problems.append(f"tree mismatch: expected {expected_tree}, sterile worktree recomputed {recomputed}")
+    status = _git(["status", "--porcelain"], worktree, check=False).stdout.strip()
+    if status:
+        problems.append(f"sterile worktree is not clean: {status!r}")
+    sensitive = detect_sensitive_ignored_files(ignored_files_inventory(worktree))
+    if sensitive:
+        problems.append("sensitive ignored file(s) present in sterile worktree: " + "; ".join(sensitive))
+    return problems
+
+
+def _cas_rollback_ref(workspace: Path, branch: str, previous_tip: str, promoted: str, tag: str) -> None:
+    """Used internally when post-CAS verification fails: move the branch ref
+    straight back with its own compare-and-swap (never a blind/forced move)
+    and drop the promotion tag. If this itself fails the exception is left
+    to propagate — silently swallowing a rollback failure would be exactly
+    the kind of ignored-return-code bug this correction pass exists to
+    remove."""
+    _git(["update-ref", f"refs/heads/{branch}", previous_tip, promoted], workspace)
+    _git(["tag", "-d", tag], workspace, check=False)
+
+
 def promote(workspace: Path, run_dir: Path, candidate: dict[str, Any], run_id: str,
            branch: str | None = None) -> dict[str, Any]:
     """Atomically fast-forward `branch` (default: current branch) to the
-    frozen candidate commit; tag it; write a manifest carrying the exact
-    rollback command as evidence."""
+    frozen candidate commit, then materialize and independently verify that
+    promotion in a brand-new sterile worktree — never in the live,
+    possibly-cruft-carrying `workspace`. The success manifest is written
+    ONLY after both the tree hash and the on-disk worktree state have been
+    verified; any failure along the way immediately CAS-rolls-back the
+    branch ref rather than leaving it pointing at an unverified commit."""
     workspace = Path(workspace)
     branch = branch or _current_branch(workspace)
     current_tip = _git(["rev-parse", branch], workspace).stdout.strip()
@@ -53,12 +124,35 @@ def promote(workspace: Path, run_dir: Path, candidate: dict[str, Any], run_id: s
     except subprocess.CalledProcessError as exc:
         _git(["tag", "-d", tag], workspace, check=False)
         raise PromotionError(f"branch {branch!r} moved concurrently during promotion — compare-and-swap refused: {exc.stderr}") from exc
-    if _current_branch(workspace) == branch:
-        _git(["reset", "--hard", candidate["candidate_commit"]], workspace, check=False)
+
+    # A0-4/A0-6: materialize the promotion in a brand-new sterile worktree —
+    # never `reset --hard` the live `workspace` (which `reset --hard` would
+    # never actually clean of untracked/ignored cruft anyway).
+    sterile_dir = Path(run_dir) / f"promoted-worktree-{run_id}"
+    if sterile_dir.exists():
+        shutil.rmtree(sterile_dir, ignore_errors=True)
+    checkout = _git(["worktree", "add", "--detach", str(sterile_dir), candidate["candidate_commit"]], workspace, check=False)
+    if checkout.returncode != 0:
+        _cas_rollback_ref(workspace, branch, current_tip, candidate["candidate_commit"], tag)
+        raise PromotionError(
+            f"A0-6: sterile worktree checkout failed (returncode={checkout.returncode}): {checkout.stderr.strip()} "
+            f"— branch {branch!r} CAS-rolled-back to {current_tip} immediately; no false success was reported"
+        )
+    problems = _verify_sterile_worktree(sterile_dir, candidate["candidate_tree"])
+    if problems:
+        _git(["worktree", "remove", "--force", str(sterile_dir)], workspace, check=False)
+        shutil.rmtree(sterile_dir, ignore_errors=True)
+        _cas_rollback_ref(workspace, branch, current_tip, candidate["candidate_commit"], tag)
+        raise PromotionError(
+            "A0-6: promotion verification failed in the sterile worktree — " + "; ".join(problems) +
+            f" — branch {branch!r} CAS-rolled-back to {current_tip} immediately; no false success was reported"
+        )
+
     manifest = {
         "run_id": run_id, "branch": branch, "tag": tag,
         "promoted_commit": candidate["candidate_commit"], "candidate_tree": candidate["candidate_tree"],
-        "previous_tip": current_tip,
+        "previous_tip": current_tip, "promoted_worktree": str(sterile_dir),
+        "verified": True, "verified_tree": candidate["candidate_tree"],
         "rollback_command": ["git", "-C", str(workspace), "update-ref",
                              f"refs/heads/{branch}", current_tip, candidate["candidate_commit"]],
     }
@@ -69,7 +163,11 @@ def promote(workspace: Path, run_dir: Path, candidate: dict[str, Any], run_id: s
 def rollback(workspace: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     """Execute the rollback recorded in a promotion manifest: compare-and-swap
     `branch` back to `previous_tip`, refusing if the branch is no longer
-    exactly at the promoted commit (no blind overwrite of later work)."""
+    exactly at the promoted commit (no blind overwrite of later work).
+    Verifies the branch ref actually landed back on `previous_tip` before
+    reporting success (A0-6) — never the live `workspace` worktree (A0-4),
+    which this module no longer touches at all; the promoted artifact lives
+    in the sterile worktree recorded in the manifest, not in `workspace`."""
     workspace = Path(workspace)
     branch, previous_tip, promoted = manifest["branch"], manifest["previous_tip"], manifest["promoted_commit"]
     try:
@@ -79,6 +177,10 @@ def rollback(workspace: Path, manifest: dict[str, Any]) -> dict[str, Any]:
             f"branch {branch!r} is not at the promoted commit {promoted} anymore — "
             f"refusing a blind rollback: {exc.stderr}"
         ) from exc
-    if _current_branch(workspace) == branch:
-        _git(["reset", "--hard", previous_tip], workspace, check=False)
-    return {"rolled_back": True, "branch": branch, "restored_to": previous_tip, "from_commit": promoted}
+    new_tip = _git(["rev-parse", branch], workspace).stdout.strip()
+    if new_tip != previous_tip:
+        raise PromotionError(
+            f"A0-6: rollback did not verify — branch {branch!r} tip is {new_tip}, expected {previous_tip}"
+        )
+    return {"rolled_back": True, "branch": branch, "restored_to": previous_tip, "from_commit": promoted,
+            "verified": True}

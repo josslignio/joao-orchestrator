@@ -58,10 +58,21 @@ def _paths_mentioned_in_diff(patch_text: str) -> set[str]:
     return mentioned
 
 
-def capture_full_diff(workspace: Path) -> dict[str, Any]:
+def capture_full_diff(workspace: Path, base_ref: str = "HEAD") -> dict[str, Any]:
     """Capture a complete diff (tracked+staged+untracked+deleted+renamed,
-    with permission and symlink changes intact) against HEAD, then
+    with permission and symlink changes intact) against `base_ref`, then
     cross-validate it against an independently captured status listing.
+
+    `base_ref` defaults to "HEAD" (unchanged default behavior for every
+    existing caller). A0-3: passing a frozen baseline commit here instead of
+    "HEAD" isolates a builder's own diff from whatever was already dirty in
+    the workspace before the run started — the completeness cross-check
+    below is still computed against the live `git status` (i.e. against the
+    real HEAD, which never moves mid-run), so `missing_from_diff` when
+    `base_ref != HEAD` legitimately includes anything not yet re-diffed
+    against the alternate base; callers using a non-HEAD `base_ref` treat
+    this call as a supplementary, informational capture, not the RI-2 gate
+    itself (that gate always runs with the default `base_ref="HEAD"`).
 
     Returns: {"patch": bytes, "changed_paths": [...], "completeness_ok": bool,
               "missing_from_diff": [...], "extra_in_diff": [...]}
@@ -75,7 +86,7 @@ def capture_full_diff(workspace: Path) -> dict[str, Any]:
         if result.returncode == 0:
             added_intent.append(path)
     try:
-        patch = _git(["diff", "HEAD", "--binary", "--no-ext-diff", "--no-textconv", "-M"], workspace).stdout
+        patch = _git(["diff", base_ref, "--binary", "--no-ext-diff", "--no-textconv", "-M"], workspace).stdout
     finally:
         if added_intent:
             _git(["reset", "--", *added_intent], workspace, check=False)
@@ -92,3 +103,18 @@ def capture_full_diff(workspace: Path) -> dict[str, Any]:
         "missing_from_diff": missing_from_diff,
         "extra_in_diff": extra_in_diff,
     }
+
+
+def ignored_files_inventory(workspace: Path) -> list[str]:
+    """A0-4: an explicit inventory of every gitignored file actually present
+    on disk, via `git ls-files --others --ignored --exclude-standard` — the
+    canonical plumbing command for "untracked AND ignored". `git add -A` /
+    `git status` never see these paths at all (that is the whole point of
+    `.gitignore`), so without this dedicated inventory a file like
+    `payload.secret` next to a matching `*.secret` `.gitignore` rule is
+    invisible to every other check in this module and would silently ride
+    along in the workspace through build, review, and promotion.
+    """
+    workspace = Path(workspace)
+    raw = _git(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"], workspace, check=False).stdout
+    return sorted(p for p in raw.split("\0") if p)
