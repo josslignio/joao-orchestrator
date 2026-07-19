@@ -426,7 +426,12 @@ class CodexCLIReviewer(ReviewerAdapter):
         # process can touch inside `review_root`.
         dispatch = self.backend.execute(argv, cwd=review_root, timeout=self.timeout,
                                         network=True, preserve_host_environment=True)
-        if "pid" not in dispatch:
+        # Independent counter-audit note: a refused dispatch (e.g. the
+        # `protected`+`preserve_host_environment` or `protected`+no-Seatbelt
+        # guards in `run_sandboxed`) also carries `"pid": None` — check the
+        # VALUE, not just key presence, so this stays correct even if a
+        # future change ever sets `protected=True` on this call.
+        if not dispatch.get("pid"):
             return {"ok": False, "decision": "block", "stage": stage,
                     "reason": f"Codex reviewer unavailable: {dispatch.get('stderr', '')}",
                     "reviewed_path": str(review_root)}

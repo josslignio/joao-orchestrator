@@ -58,10 +58,6 @@ class PromotionError(RuntimeError):
     pass
 
 
-_APPROVAL_KEYS = {"run_id", "candidate_commit", "candidate_tree", "review_proof_sha256",
-                  "approved_by", "approved_at", "previous_status"}
-
-
 def create_approval_record(run: dict[str, Any], candidate: dict[str, Any], *,
                            review_proof_sha256: str, approved_by: str = "human",
                            approved_at: str | None = None) -> dict[str, Any]:
