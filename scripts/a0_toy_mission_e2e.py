@@ -1,9 +1,23 @@
 #!/usr/bin/env python3
-"""A0 EVIDENCE_REQUIRED: one full cycle — build -> candidate -> tests -> review
--> approval -> promotion -> rollback — on a toy mission, tracing the SAME
-candidate_tree hash end to end. Prints a step-by-step trace and writes a JSON
-evidence file. The rollback command is actually executed once, live, as proof
-(not just written).
+"""A0 / A0.1 EVIDENCE_REQUIRED: one full cycle — build -> candidate -> tests ->
+review -> approval -> promotion -> rollback — on a toy mission, tracing the
+SAME candidate_tree hash end to end. Prints a step-by-step trace and writes a
+JSON evidence file. The rollback command is actually executed once, live, as
+proof (not just written).
+
+A0.1 correction (2026-07-19): the original `ToyReviewer` just echoed back
+whatever `candidate_tree` the runtime handed it, without ever looking at a
+single file — that is no longer sufficient evidence that a reviewer is
+actually bound to what it claims to review (that is precisely what A0-1/A0-2
+fix for the real `CodexCLIReviewer`). `InspectingReviewer` below replaces it:
+it reads `greeting.py` from the exact path (`run["candidate"]["readonly_copy"]`)
+it is handed for the "build"/"final" stages, fails if the mission's actual
+acceptance criterion isn't met by that content, and independently
+recomputes the candidate's tree hash from what is actually on disk via the
+same primitive the controller itself uses (`recompute_candidate_tree`) —
+failing if that disagrees with the hash it was told. Real Codex CLI was not
+exercised in this run (quota constraint, same limitation documented in the
+original A0 report); this is the documented substitute.
 
 Usage: python3 scripts/a0_toy_mission_e2e.py [output_dir]
 """
@@ -18,22 +32,49 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from joao_orchestrator.bubble.candidate import recompute_candidate_tree  # noqa: E402
 from joao_orchestrator.bubble.runtime import LocalProfileAdapter, RunRuntime, SandboxBuilder  # noqa: E402
 from joao_orchestrator.bubble.promotion import promote, rollback  # noqa: E402
 
 
-class ToyReviewer:
-    provider = "toy-e2e-reviewer"
-    model = "deterministic-fixture"
+class InspectingReviewer:
+    """A0.1: a fake reviewer that actually reads the candidate's on-disk
+    files and independently re-derives the tree hash — it fails if the
+    content doesn't satisfy the mission, or if the recomputed hash disagrees
+    with the candidate_tree it was told to bind to."""
+    provider = "toy-e2e-inspecting-reviewer"
+    model = "reads-files-and-independently-recomputes-the-tree-hash"
 
     def review_stage(self, run, _run_dir, stage, active_rules=""):
-        # The "plan" stage runs before any candidate exists — nothing to bind to yet.
-        candidate_tree = run.get("candidate_tree") if stage != "plan" else None
+        if stage == "plan":
+            # No candidate exists yet at this stage — nothing to inspect or bind to.
+            return {"ok": True, "decision": "pass", "stage": stage,
+                    "proof": {"candidate_tree": None, "verdict": "ACCEPT", "findings": [],
+                             "reviewer": {"provider": self.provider, "model": self.model}}}
+        candidate = run.get("candidate")
+        expected_tree = candidate.get("candidate_tree") if candidate else None
+        review_root = Path(candidate["readonly_copy"]) if candidate else None
+        if not review_root or not review_root.exists():
+            return {"ok": False, "decision": "block", "stage": stage,
+                    "reason": "no candidate readonly_copy to inspect"}
+        greeting_path = review_root / "greeting.py"
+        if not greeting_path.exists():
+            return {"ok": False, "decision": "block", "stage": stage,
+                    "reason": "greeting.py is missing from the candidate copy"}
+        content = greeting_path.read_text()
+        if "hello, world" not in content:
+            return {"ok": False, "decision": "block", "stage": stage,
+                    "reason": f"greeting.py does not satisfy the mission (actual content: {content!r})"}
+        recomputed = recompute_candidate_tree(review_root)
+        if recomputed != expected_tree:
+            return {"ok": False, "decision": "block", "stage": stage,
+                    "reason": f"independently recomputed tree {recomputed} != candidate_tree {expected_tree}"}
         return {
             "ok": True, "decision": "pass", "stage": stage,
             "proof": {
-                "candidate_tree": candidate_tree, "verdict": "ACCEPT",
-                "findings": [],
+                "candidate_tree": expected_tree, "verdict": "ACCEPT",
+                "findings": [f"read {greeting_path} directly and confirmed the mission's acceptance "
+                            f"criterion is met; independently recomputed the tree hash and it matches"],
                 "reviewer": {"provider": self.provider, "model": self.model},
             },
         }
@@ -84,7 +125,7 @@ def main() -> int:
         trace["base_commit"] = base_commit
         print(f"[1/7] toy mission repo created at base commit {base_commit[:12]}")
 
-        rt = RunRuntime(state_root, builder=SandboxBuilder(toy_builder), reviewer=ToyReviewer(),
+        rt = RunRuntime(state_root, builder=SandboxBuilder(toy_builder), reviewer=InspectingReviewer(),
                         profiles=LocalProfileAdapter())
         run_id = rt.start(project_id="a0-toy", workspace=workspace, mission="make greet() say hello, world",
                           targeted_tests=[[sys.executable, "test_greeting.py"]],
@@ -120,8 +161,15 @@ def main() -> int:
         assert accepted["status"] == "accepted"
         print("[4/7] approved (candidate_tree re-verified once more immediately before acceptance)")
 
+        # A0-4/A0-6 (correction pass): promotion no longer touches the live
+        # `workspace` worktree at all (a `reset --hard` there would never
+        # have cleaned an untracked/ignored file anyway) — it materializes
+        # and independently verifies the promotion in a brand-new sterile
+        # worktree instead. The branch ref itself IS moved (verified via
+        # `git rev-parse`, never by inspecting `workspace`'s files).
         manifest = promote(workspace, run_dir, candidate, run_id)
         trace["promotion_manifest"] = manifest
+        assert manifest["verified"] is True
         promoted_tree = _git(["rev-parse", f"{manifest['promoted_commit']}^{{tree}}"], workspace).stdout.strip()
         trace["promoted_commit_tree"] = promoted_tree
         same_hash_through_promotion = promoted_tree == candidate_tree
@@ -133,12 +181,16 @@ def main() -> int:
         branch_tip_after_promotion = _git(["rev-parse", "main"], workspace).stdout.strip()
         trace["branch_tip_after_promotion"] = branch_tip_after_promotion
         assert branch_tip_after_promotion == manifest["promoted_commit"]
-        greeting_after_promotion = (workspace / "greeting.py").read_text()
+        sterile_worktree = Path(manifest["promoted_worktree"])
+        greeting_after_promotion = (sterile_worktree / "greeting.py").read_text()
         trace["greeting_after_promotion"] = greeting_after_promotion
-        print(f"[5/7] worktree reflects the promotion: {greeting_after_promotion.strip()!r}")
+        trace["promoted_worktree"] = str(sterile_worktree)
+        print(f"[5/7] the NEW sterile worktree ({sterile_worktree}) reflects the promotion: "
+              f"{greeting_after_promotion.strip()!r} — the live workspace itself is deliberately untouched")
 
         rollback_result = rollback(workspace, manifest)
         trace["rollback_result"] = rollback_result
+        assert rollback_result["verified"] is True
         branch_tip_after_rollback = _git(["rev-parse", "main"], workspace).stdout.strip()
         trace["branch_tip_after_rollback"] = branch_tip_after_rollback
         rollback_restored_base = branch_tip_after_rollback == base_commit == manifest["previous_tip"]
@@ -146,9 +198,13 @@ def main() -> int:
         print(f"[6/7] rollback EXECUTED — branch main restored to base commit: {rollback_restored_base}")
         assert rollback_restored_base
 
-        greeting_after_rollback = (workspace / "greeting.py").read_text()
-        trace["greeting_after_rollback"] = greeting_after_rollback
-        print(f"[7/7] worktree reflects the rollback: {greeting_after_rollback.strip()!r}")
+        # The base commit's own tree (still checked out in `workspace`,
+        # which promotion/rollback never touched) is the rollback's
+        # observable proof here — no sterile worktree is created for a
+        # rollback (there is nothing new to materialize).
+        greeting_at_base = (workspace / "greeting.py").read_text()
+        trace["greeting_at_base_workspace_untouched_throughout"] = greeting_at_base
+        print(f"[7/7] the live workspace was never mutated by promote()/rollback(): {greeting_at_base.strip()!r}")
 
         trace["same_hash_end_to_end"] = (
             trace["candidate_tree"] == trace["build_review_candidate_tree"]
