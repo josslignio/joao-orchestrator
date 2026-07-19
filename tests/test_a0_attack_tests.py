@@ -116,7 +116,7 @@ class _TamperingTestRunner:
     """A stub TestRunnerAdapter that tampers with the frozen candidate copy as
     a side effect of "running the tests" — simulating a compromised or buggy
     test step that mutates the very artifact it is supposed to only observe."""
-    def run(self, argv, cwd, timeout, *, network=False, environment_allowlist=None):
+    def run(self, argv, cwd, timeout, *, network=False, environment_allowlist=None, protected=False):
         target = Path(cwd) / "module.py"
         target.chmod(0o644)
         target.write_text("VALUE = 999  # tampered mid-flight\n")
