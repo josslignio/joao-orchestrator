@@ -32,7 +32,7 @@ from joao_orchestrator.bubble.runtime import (
 )
 from joao_orchestrator.bubble.sandbox import run_sandboxed
 import joao_orchestrator.bubble.promotion as promotion_mod
-from joao_orchestrator.bubble.promotion import PromotionError, promote
+from joao_orchestrator.bubble.promotion import PromotionError
 
 
 def _git(argv, cwd, check=True):
@@ -345,7 +345,7 @@ def test_a04_gitignored_sensitive_file_detected_refused_and_does_not_survive_pro
     candidate = accepted["candidate"]
     (work / "leftover.secret").write_text("SHOULD-NOT-SURVIVE-PROMOTION")
     folder = _run_folder(tmp_path, run)
-    manifest = promote(work, folder, candidate, run)
+    manifest = value2.promote(run)
     sterile = Path(manifest["promoted_worktree"])
 
     # GREEN: the sterile worktree is a fresh checkout of the candidate
@@ -544,7 +544,7 @@ def test_a06_worktree_sync_failure_after_ref_cas_never_produces_false_success(tm
     # that anything downstream actually reflected it.
     monkeypatch.setattr(promotion_mod, "_git", flaky_git)
     with pytest.raises(PromotionError, match="A0-6"):
-        promotion_mod.promote(work, folder, candidate, run)
+        value.promote(run)
 
     # GREEN: the branch ref was CAS-rolled-back immediately — never left
     # pointing at an unmaterialized commit — and no manifest was written.
