@@ -19,9 +19,11 @@ from ..domain.models import ProjectProfile
 from ..policy.paths import detect_path_violations, detect_sensitive_ignored_files
 from ..storage.atomic import FileLock, LockAcquireError, append_line, atomic_write_json, atomic_write_text
 from .sandbox import run_sandboxed
+from .execution_backend import ExecutionBackend, LocalUntrustedBackend, preflight_backend
 from .candidate import CandidateError, freeze_baseline, freeze_candidate, recompute_candidate_tree, release_candidate
 from .change_capture import EMPTY_DIFF_SHA256, capture_full_diff, ignored_files_inventory
 from .reviewer_contract import validate_reviewer_verdict
+from . import promotion as promotion_mod
 
 
 def _memory_dir() -> Path:
@@ -118,7 +120,11 @@ class RunStatus(str, Enum):
 
 
 NEXT = {
-    RunStatus.PENDING: {RunStatus.PLANNING, RunStatus.STOPPED},
+    # A0.2: PENDING -> BLOCKED is a new edge for a fail-fast preflight refusal
+    # (sensitive ignored file already present, or a required ExecutionBackend
+    # that is unavailable) — caught before planning, building or reviewing
+    # ever start, not merely before promotion.
+    RunStatus.PENDING: {RunStatus.PLANNING, RunStatus.STOPPED, RunStatus.BLOCKED},
     RunStatus.PLANNING: {RunStatus.READY, RunStatus.FAILED, RunStatus.STOPPED},
     RunStatus.READY: {RunStatus.BUILDING, RunStatus.PAUSED, RunStatus.STOPPED},
     RunStatus.BUILDING: {RunStatus.TESTING, RunStatus.BLOCKED, RunStatus.FAILED, RunStatus.PAUSED, RunStatus.STOPPED},
@@ -139,6 +145,23 @@ class RuntimeStateError(RuntimeError):
 
 class BuilderAdapter(ABC):
     provider = "unknown"; model = "unknown"
+    # A0.2 §12.1/§12.2: does this builder's own CLI need to phone its
+    # provider (provider_transport_network) independent of the mission's
+    # task_network? Declared per-class (not caller-settable) so it cannot be
+    # forged by a run argument.
+    requires_network_transport = False
+
+    def set_capabilities(self, capabilities: dict[str, Any]) -> None:
+        """A0.2 §12.1: the controller hands the FROZEN mission scope to the
+        builder fresh before every dispatch (including every correction-loop
+        rebuild) — the same scope tests and the reviewer already receive.
+        Base implementation just stores it; a builder that needs it (e.g.
+        GLMBuilder, to decide its own network permission) reads
+        `self._capabilities`. A builder that never calls this (or ignores the
+        stored value) simply has no capability-scoped behavior — never a
+        silent default grant."""
+        self._capabilities = capabilities
+
     @abstractmethod
     def build(self, mission: str, workspace: Path, run_dir: Path, allowed: list[str], correction: bool) -> dict[str, Any]: ...
 
@@ -209,15 +232,25 @@ class LocalTestRunner(TestRunnerAdapter):
 
     A0-5: `protected=True` (a `critical` run) fails closed instead of
     silently degrading to `env-only` enforcement when no real kernel sandbox
-    is available — see `sandbox.run_sandboxed`."""
-    def __init__(self, sandboxed: bool = True):
+    is available — see `sandbox.run_sandboxed`.
+
+    A0.2 (§12.2 single dispatch point): the sandboxed path is routed through
+    `ExecutionBackend.execute()`, never `run_sandboxed` directly — the same
+    choke point `GLMBuilder` and `CodexCLIReviewer` now use.
+    `sandboxed=False` is kept as a literal, un-tracked raw `subprocess.run` —
+    it exists ONLY to serve as the "naive/pre-RI-6" baseline inside attack
+    tests demonstrating what the sandboxed path prevents (e.g. env leakage, a
+    surviving zombie process); `RunRuntime` never constructs a
+    `LocalTestRunner` with `sandboxed=False`."""
+    def __init__(self, sandboxed: bool = True, backend: ExecutionBackend | None = None):
         self.sandboxed = sandboxed
+        self.backend = backend or LocalUntrustedBackend()
 
     def run(self, argv: list[str], cwd: Path, timeout: int, *, network: bool = False,
             environment_allowlist: list[str] | None = None, protected: bool = False) -> dict[str, Any]:
         if self.sandboxed:
-            return run_sandboxed(argv, cwd=cwd, timeout=timeout, network=network,
-                                 profile_allowlist=environment_allowlist or [], protected=protected)
+            return self.backend.execute(argv, cwd=cwd, timeout=timeout, network=network,
+                                        environment_allowlist=environment_allowlist or [], protected=protected)
         try:
             proc = subprocess.run(argv, cwd=str(cwd), shell=False, capture_output=True, text=True, timeout=timeout)
             return {"argv": argv, "returncode": proc.returncode, "ok": proc.returncode == 0, "stdout": proc.stdout[-16000:], "stderr": proc.stderr[-16000:]}
@@ -239,25 +272,49 @@ _GLM_ENV_ALLOWLIST = ["ZAI_API_KEY", "ZHIPU_API_KEY", "OPENAI_API_KEY", "CODEX_A
 
 
 class GLMBuilder(BuilderAdapter):
+    """A0.2 (§12.1/§12.2, run card #2): network permission for this builder's
+    own dispatch comes EXCLUSIVELY from the frozen mission scope handed in via
+    `set_capabilities()` — never a class-level `network=True` the adapter
+    grants itself. GLM's CLI genuinely needs network to reach Z.AI
+    (`provider_transport_network`), but on `local_untrusted` there is no
+    domain-scoped egress ACL (Seatbelt's `network*` rule is all-or-nothing —
+    see `sandbox.py`), so `provider_transport_network` and the mission's own
+    `task_network` necessarily collapse onto the SAME enforced toggle here: a
+    mission declared `network_capability=False` gets a GLM dispatch with
+    network denied too, and — because GLM cannot function without reaching
+    Z.AI — that dispatch fails outright rather than silently borrowing
+    network access the mission never granted. A real split (GLM allowed to
+    reach only Z.AI while the mission's own commands stay network-denied)
+    needs domain-scoped egress, which is a `container`/`vm` ExecutionBackend
+    property, reported and not implemented in A0.2."""
     provider = "zai-coding-plan"; model = "zai-coding-plan/glm-4.5-air"
-    def __init__(self, executable: Path = Path("~/.local/bin/joao-glm").expanduser()): self.executable = executable
+    requires_network_transport = True
+
+    def __init__(self, executable: Path = Path("~/.local/bin/joao-glm").expanduser(), backend: ExecutionBackend | None = None):
+        self.executable = executable
+        self.backend = backend or LocalUntrustedBackend()
+
     def build(self, mission, workspace, run_dir, allowed, correction):
         task = run_dir / ("correction.md" if correction else "builder-task.md"); atomic_write_text(task, mission)
         output = run_dir / ("glm-correction.jsonl" if correction else "glm-builder.jsonl")
         argv = [str(self.executable), "--workspace", str(workspace), "--task-file", str(task), "--output", str(output), "--mode", "workspace-write", "--budget", "small"]
         for item in allowed: argv.extend(["--allowed-path", item])
-        # network=True: this adapter's entire purpose is calling the ZAI API —
-        # that is the mission's explicit provider choice acting as the RI-6
-        # network-capability declaration for this specific dispatch.
-        result = run_sandboxed(argv, cwd=workspace, timeout=900, network=True,
-                               profile_allowlist=_GLM_ENV_ALLOWLIST,
-                               extra_write_paths=[str(run_dir)])
+        capabilities = getattr(self, "_capabilities", None) or {}
+        # A0.2: the ONLY source of this dispatch's network permission — no
+        # adapter-level override. Absent capabilities (set_capabilities()
+        # never called) fail closed to no network, never an implicit grant.
+        network = bool(capabilities.get("network_capability", False))
+        result = self.backend.execute(argv, cwd=workspace, timeout=900, network=network,
+                                      environment_allowlist=_GLM_ENV_ALLOWLIST,
+                                      extra_write_paths=[str(run_dir)])
         # RI-5: never trust a builder-reported hash — the controller
         # (RunRuntime._execute) independently recomputes output_sha256 itself.
         return {"ok": result["ok"], "provider": self.provider, "model": self.model,
                 "returncode": result["returncode"], "stdout": result["stdout"][-4000:],
                 "stderr": result["stderr"][-4000:], "output": str(output),
-                "sandbox_enforcement": result.get("enforcement")}
+                "sandbox_enforcement": result.get("enforcement"),
+                "task_network_capability_granted": network,
+                "provider_transport_network_declared": self.requires_network_transport}
 
 
 class CodexEvidenceReviewer(ReviewerAdapter):
@@ -293,9 +350,19 @@ class CodexCLIReviewer(ReviewerAdapter):
     """
     provider = "codex-subscription"; model = "local-codex-review"
 
-    def __init__(self, executable: str = "codex", timeout: int = 900):
+    def __init__(self, executable: str = "codex", timeout: int = 900, backend: ExecutionBackend | None = None):
         self.executable = executable
         self.timeout = timeout
+        # A0.2 (§12.2 single dispatch point): routed through ExecutionBackend
+        # like every other builder/test/reviewer subprocess.
+        # `preserve_host_environment=True` below because Codex CLI
+        # authenticates via `~/.codex` on the real HOME — a fresh temp HOME
+        # (the sandboxed default) would break that; this is a strictly
+        # STRONGER guarantee than the pre-A0.2 raw `subprocess.run` call
+        # (adds process-group tracking, timeout-kill sweep and OS resource
+        # limits — see `sandbox.run_sandboxed`'s `preserve_host_environment`
+        # docstring), not a regression.
+        self.backend = backend or LocalUntrustedBackend()
 
     def available(self) -> bool:
         return bool(shutil.which(self.executable) and Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().exists())
@@ -352,13 +419,23 @@ class CodexCLIReviewer(ReviewerAdapter):
         # candidate copy, never the mutable workspace.
         argv = [self.executable, "exec", "--json", "--sandbox", "read-only",
                 "-C", str(review_root), prompt]
-        try:
-            proc = subprocess.run(argv, cwd=str(review_root), shell=False, capture_output=True,
-                                  text=True, timeout=self.timeout, start_new_session=True)
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        # A0.2 (§12.2): single dispatch point — `network=True` here is
+        # `provider_transport_network` (Codex must reach its own backend to
+        # answer at all), never the mission's `task_network`; Codex's own
+        # `--sandbox read-only` flag is what actually bounds what this
+        # process can touch inside `review_root`.
+        dispatch = self.backend.execute(argv, cwd=review_root, timeout=self.timeout,
+                                        network=True, preserve_host_environment=True)
+        if "pid" not in dispatch:
             return {"ok": False, "decision": "block", "stage": stage,
-                    "reason": f"Codex reviewer unavailable: {exc}",
+                    "reason": f"Codex reviewer unavailable: {dispatch.get('stderr', '')}",
                     "reviewed_path": str(review_root)}
+
+        class _Proc:  # shim so the rest of this method reads exactly as before
+            returncode = dispatch.get("returncode", -1)
+            stdout = dispatch.get("stdout", "")
+            stderr = dispatch.get("stderr", "")
+        proc = _Proc()
         atomic_write_text(output, proc.stdout)
 
         post_tree = None
@@ -463,7 +540,7 @@ class RunRuntime:
         except Exception as exc:  # a sync failure must never block a mission — inject what we have
             return {"synced": False, "reason": f"{type(exc).__name__}: {exc}"}
 
-    def start(self, *, project_id: str, workspace: Path, mission: str, targeted_tests: list[list[str]], full_tests: list[list[str]], profile: ProjectProfile | None = None, critical: bool = False, recurrence: bool = False, tags: list[str] | None = None, smoke: bool = False, declared_baseline: str | None = None, network_capability: bool = False, read_only: bool = False) -> str:
+    def start(self, *, project_id: str, workspace: Path, mission: str, targeted_tests: list[list[str]], full_tests: list[list[str]], profile: ProjectProfile | None = None, critical: bool = False, recurrence: bool = False, tags: list[str] | None = None, smoke: bool = False, declared_baseline: str | None = None, network_capability: bool = False, read_only: bool = False, required_backend: str = "local_untrusted") -> str:
         ledger_status = self._sync_ledger() if self.ledger_sync else None
         if self.enforce_phase0:
             from .kickoff import spec_is_signed  # noqa: PLC0415
@@ -473,6 +550,16 @@ class RunRuntime:
         if not workspace.is_dir() or not (workspace / ".git").exists(): raise RuntimeStateError("workspace must be a local Git worktree")
         if not mission.strip(): raise RuntimeStateError("mission cannot be empty")
         if not full_tests: raise RuntimeStateError("at least one explicit full-test command is required")
+        # A0.2 §13 (baseline — one choice, not a caller-selectable OR):
+        # critical/protected runs require a genuinely clean workspace;
+        # `declared_baseline` (the exceptional dirty-workspace escape hatch)
+        # is refused outright for them, never silently honored.
+        if critical and declared_baseline:
+            raise RuntimeStateError(
+                "A0.2: declared_baseline is forbidden for a critical run — critical/protected "
+                "missions require a genuinely clean workspace at start(); a declared_baseline "
+                "is reserved for non-critical local_untrusted runs and never claims isolation."
+            )
         profile = profile or self.profiles.load(project_id, workspace)
         if Path(profile.repository_root).resolve() != workspace: raise RuntimeStateError("profile workspace mismatch")
         baseline_paths = self._paths(workspace)
@@ -490,6 +577,40 @@ class RunRuntime:
         if baseline_violations:
             raise RuntimeStateError("workspace has forbidden or out-of-scope drift: " + "; ".join(baseline_violations))
         run_id = f"run-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"; folder = self._dir(run_id); folder.mkdir(parents=True)
+        tasks = [{"id": "plan", "status": "pending"}, {"id": "build", "status": "pending", "depends_on": ["plan"]}, {"id": "test", "status": "pending", "depends_on": ["build"]}, {"id": "review", "status": "pending", "depends_on": ["test"]}]
+        # A0.2 §12.2/§12.1: `provider_transport_network` is DERIVED from the
+        # builder class actually wired in — never a caller argument, so it
+        # cannot be forged upward by a run request. `required_backend` and
+        # `builder_provider`/`builder_model` are frozen here too, alongside
+        # the fields A0-5 already froze (`network_capability`, `read_only`,
+        # `profile.allowed_write_paths`) — all cross-checked by
+        # `_resolve_mission_scope` before every dispatch.
+        run = {"schema_version": 1, "run_id": run_id, "project_id": project_id, "workspace": str(workspace), "mission": mission, "status": "pending", "created_at": now(), "updated_at": now(), "current_step": "created", "profile": profile.to_dict(), "targeted_tests": targeted_tests, "full_tests": full_tests, "corrections_used": 0, "max_corrections": 1, "critical": bool(critical), "recurrence": bool(recurrence), "tags": list(tags or []), "smoke": bool(smoke), "tasks": tasks, "declared_baseline": declared_baseline, "baseline_paths_at_start": baseline_paths, "baseline": None, "network_capability": bool(network_capability), "read_only": bool(read_only), "provider_transport_network": bool(getattr(self.builder, "requires_network_transport", False)), "required_backend": required_backend, "builder_provider": self.builder.provider, "builder_model": self.builder.model}
+        atomic_write_text(folder / "mission.md", mission + "\n"); atomic_write_json(folder / "project-profile.json", profile.to_dict())
+        atomic_write_json(folder / "task-graph.json", {"tasks": tasks}); atomic_write_json(folder / "plan.json", {"status": "pending", "bounded": True, "max_corrections": 1}); self._write(run)
+        self._event(run, "run_created", builder_provider=self.builder.provider, builder_model=self.builder.model)
+
+        # A0.2 §13/§18: a run requiring a backend stronger than local_untrusted
+        # gets BLOCKED/PREFLIGHT_UNAVAILABLE immediately if that backend is
+        # not implemented — never a silent fallback to local_untrusted.
+        if required_backend != "local_untrusted":
+            backend_check = preflight_backend(required_backend)
+            atomic_write_json(folder / "backend-preflight.json", backend_check)
+            if not backend_check["ok"]:
+                self._event(run, "protected_backend_unavailable", required_backend=required_backend,
+                            actual_backend="unavailable", reason_code="PREFLIGHT_UNAVAILABLE")
+                self._transition(run, RunStatus.BLOCKED, "A0.2: required ExecutionBackend unavailable (PREFLIGHT_UNAVAILABLE)")
+                self._finalize(run)
+                return run_id
+
+        # A0.2 §12.4: scan for sensitive gitignored files BEFORE any provider
+        # (plan reviewer, builder) is ever invoked — a secret must never be
+        # readable by a provider even once.
+        if not self._secrets_preflight(run, folder, workspace, "before-plan-review"):
+            self._transition(run, RunStatus.BLOCKED, "A0.2: sensitive ignored file present before any provider ran")
+            self._finalize(run)
+            return run_id
+
         # A0-3: a declared baseline is genuinely frozen into a real git object
         # BEFORE the builder ever runs — a string label alone proves nothing.
         # `baseline_record` stays None (and no `baseline_frozen` event is ever
@@ -502,11 +623,8 @@ class RunRuntime:
                 raise RuntimeStateError(f"A0-3: could not freeze declared baseline: {exc}") from exc
             drift_patch = _git_diff(workspace, baseline_record["true_head"], baseline_record["baseline_commit"])
             atomic_write_text(folder / "baseline-drift.patch", drift_patch)
-        tasks = [{"id": "plan", "status": "pending"}, {"id": "build", "status": "pending", "depends_on": ["plan"]}, {"id": "test", "status": "pending", "depends_on": ["build"]}, {"id": "review", "status": "pending", "depends_on": ["test"]}]
-        run = {"schema_version": 1, "run_id": run_id, "project_id": project_id, "workspace": str(workspace), "mission": mission, "status": "pending", "created_at": now(), "updated_at": now(), "current_step": "created", "profile": profile.to_dict(), "targeted_tests": targeted_tests, "full_tests": full_tests, "corrections_used": 0, "max_corrections": 1, "critical": bool(critical), "recurrence": bool(recurrence), "tags": list(tags or []), "smoke": bool(smoke), "tasks": tasks, "declared_baseline": declared_baseline, "baseline_paths_at_start": baseline_paths, "baseline": baseline_record, "network_capability": bool(network_capability), "read_only": bool(read_only)}
-        atomic_write_text(folder / "mission.md", mission + "\n"); atomic_write_json(folder / "project-profile.json", profile.to_dict())
-        atomic_write_json(folder / "task-graph.json", {"tasks": tasks}); atomic_write_json(folder / "plan.json", {"status": "pending", "bounded": True, "max_corrections": 1}); self._write(run)
-        self._event(run, "run_created", builder_provider=self.builder.provider, builder_model=self.builder.model)
+            run["baseline"] = baseline_record
+            self._write(run)
         if declared_baseline and baseline_record:
             self._event(run, "baseline_frozen", reason=declared_baseline, paths=baseline_paths,
                         baseline_tree=baseline_record["baseline_tree"], baseline_commit=baseline_record["baseline_commit"])
@@ -550,11 +668,63 @@ class RunRuntime:
                 self._event(run, "candidate_integrity_violation", stage="approve",
                            frozen_tree=candidate["candidate_tree"], recomputed_tree=recomputed)
                 raise RuntimeStateError("RI-3: candidate was modified after tests/review — evidence invalidated, cannot approve")
-        self._transition(run, RunStatus.ACCEPTED, "human approval"); self._finalize(run); return run
+        self._transition(run, RunStatus.ACCEPTED, "human approval")
+        # A0.2 §15: mint the immutable approval object HERE, at the moment of
+        # acceptance — bound to this exact run/candidate/review-evidence
+        # triple, written append-only (per-run file + a global ledger),
+        # never re-derivable from a later-mutated `run.json` alone.
+        if candidate:
+            folder = self._dir(run["run_id"])
+            review_path = folder / "review-evidence.json"
+            review_sha256 = digest(review_path) if review_path.is_file() else ""
+            record = promotion_mod.create_approval_record(
+                run, candidate, review_proof_sha256=review_sha256, approved_by="human", approved_at=now())
+            promotion_mod.write_approval_record(folder, self.root / "approvals.jsonl", record)
+            self._event(run, "approval_record_written", candidate_tree=candidate["candidate_tree"],
+                        review_proof_sha256=review_sha256)
+        self._finalize(run); return run
     def reject(self, run_id: str) -> dict[str, Any]: return self.stop(run_id)
+    def promote(self, run_id: str, branch: str | None = None) -> dict[str, Any]:
+        """A0.2 §15/run card #8: the wired entry point from an accepted run to
+        `promotion.promote()` — reads the run's own approval-record.json
+        (written by `approve()`) and hands both the run and the record to
+        `promote()`, which independently re-verifies every field itself
+        before touching git (see `promotion._verify_acceptance_for_promotion`).
+        Never bypassable by calling `promotion.promote()` with a bare
+        candidate — that call now requires `run`/`approval_record` too."""
+        run = self._read(run_id)
+        candidate = run.get("candidate")
+        if not candidate:
+            raise RuntimeStateError("cannot promote a run with no frozen candidate")
+        folder = self._dir(run_id)
+        approval_path = folder / "approval-record.json"
+        if not approval_path.is_file():
+            raise RuntimeStateError("cannot promote — no approval-record.json (run was never approve()'d)")
+        approval_record = json.loads(approval_path.read_text())
+        manifest = promotion_mod.promote(Path(run["workspace"]), folder, candidate, run_id,
+                                         branch=branch, run=run, approval_record=approval_record)
+        self._event(run, "promoted", promoted_commit=manifest["promoted_commit"],
+                    candidate_tree=manifest["candidate_tree"], promoted_worktree=manifest["promoted_worktree"])
+        return manifest
     def _paths(self, workspace: Path) -> list[str]:
         raw = subprocess.run(["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd=str(workspace), shell=False, capture_output=True, text=True, check=True).stdout
         return sorted({item[3:].replace("\\\\", "/") for item in raw.split("\0") if item})
+    def _secrets_preflight(self, run: dict[str, Any], folder: Path, workspace: Path, stage: str) -> bool:
+        """A0.2 §12.4: scan for sensitive gitignored files at `stage` — called
+        before the plan reviewer, before the builder, and (already, via
+        A0-4 in `_execute`) after the builder. Writes evidence unconditionally
+        (even when clean) so every stage's scan is auditable, not just the
+        blocking ones. Returns False (and emits `sensitive_ignored_file_detected`)
+        the first time a sensitive-named ignored file is found — the caller
+        blocks the run before any provider can read it."""
+        ignored = ignored_files_inventory(workspace)
+        sensitive = detect_sensitive_ignored_files(ignored)
+        atomic_write_json(folder / f"secrets-preflight-{stage}.json",
+                          {"stage": stage, "ignored_files": ignored, "sensitive": sensitive})
+        if sensitive:
+            self._event(run, "sensitive_ignored_file_detected", stage=stage, violations=sensitive)
+            return False
+        return True
     def _write_retro(self, run: dict[str, Any]) -> None:
         """Phase-4 hook: emit the retro template and record the run metric (state-local).
 
@@ -564,7 +734,11 @@ class RunRuntime:
         mod = _retro()
         if mod is None:
             return
-        mod.set_state_dir(self.root / "memory")
+        # A0.2 §7: redirect the lessons.jsonl WRITE target too, not just the
+        # per-run runtime state — resolves to the isolated JOAO_MEMORY_DIR
+        # copy under test (see tests/conftest.py), the real committed brain
+        # in production (JOAO_MEMORY_DIR unset).
+        mod.set_state_dir(self.root / "memory", lessons_path=_memory_dir() / "lessons.jsonl")
         folder = self._dir(run["run_id"]); status = run["status"]; project = run.get("project_id", "")
         template = mod.render_retro_template(project, run["run_id"], (run.get("mission", "")[:80] or "mission"),
                                              spec=run.get("mission", ""), result=f"status={status}")
@@ -652,7 +826,16 @@ class RunRuntime:
 
         Returns `(scope, mismatches)`: `scope` is None (fail-closed) if the
         checkpoint is missing or disagrees with the live run in any of the
-        three fields; `mismatches` names which fields disagreed.
+        cross-checked fields; `mismatches` names which fields disagreed.
+
+        A0.2 §12.3 widens the cross-checked field set beyond A0-5's original
+        three (`network_capability`, `read_only`, `allowed_write_paths`) to
+        the full frozen scope the run card requires: `critical`,
+        `environment_allowlist`, `command_timeout_seconds`, `forbidden_paths`,
+        `provider_transport_network`, `required_backend`, and builder
+        identity (`builder_provider`/`builder_model` — catches a resumed run
+        wired to a DIFFERENT builder object than the one `start()` recorded,
+        e.g. a process restart with the wrong adapter configured).
         """
         folder = self._dir(run["run_id"])
         frozen_path = folder / "checkpoints" / "0000-pending.json"
@@ -665,18 +848,36 @@ class RunRuntime:
         frozen_profile = frozen.get("profile") or {}
         live_profile = run.get("profile") or {}
         mismatches = []
-        if bool(frozen.get("network_capability")) != bool(run.get("network_capability")):
-            mismatches.append("network_capability")
-        if bool(frozen.get("read_only")) != bool(run.get("read_only")):
-            mismatches.append("read_only")
-        if list(frozen_profile.get("allowed_write_paths") or []) != list(live_profile.get("allowed_write_paths") or []):
-            mismatches.append("allowed_write_paths")
+        simple_fields = ("network_capability", "read_only", "critical",
+                         "provider_transport_network", "required_backend",
+                         "builder_provider", "builder_model")
+        for field in simple_fields:
+            if frozen.get(field) != run.get(field):
+                mismatches.append(field)
+        list_fields = ("allowed_write_paths", "environment_allowlist", "forbidden_paths")
+        for field in list_fields:
+            if list(frozen_profile.get(field) or []) != list(live_profile.get(field) or []):
+                mismatches.append(f"profile.{field}")
+        if frozen_profile.get("command_timeout_seconds") != live_profile.get("command_timeout_seconds"):
+            mismatches.append("profile.command_timeout_seconds")
+        # A0.2: the live builder OBJECT this run is actually about to dispatch
+        # to must match what was frozen — a resumed process wired to the
+        # wrong adapter is a scope violation even if run.json itself was
+        # never hand-edited.
+        if self.builder.provider != frozen.get("builder_provider") or self.builder.model != frozen.get("builder_model"):
+            mismatches.append("live_builder_identity")
         if mismatches:
             return None, mismatches
         return {
             "network_capability": bool(frozen.get("network_capability")),
             "read_only": bool(frozen.get("read_only")),
+            "critical": bool(frozen.get("critical")),
+            "provider_transport_network": bool(frozen.get("provider_transport_network")),
+            "required_backend": frozen.get("required_backend", "local_untrusted"),
             "allowed_write_paths": list(frozen_profile.get("allowed_write_paths") or []),
+            "environment_allowlist": list(frozen_profile.get("environment_allowlist") or []),
+            "forbidden_paths": list(frozen_profile.get("forbidden_paths") or []),
+            "command_timeout_seconds": frozen_profile.get("command_timeout_seconds"),
         }, []
 
     def _execute(self, run: dict[str, Any], correction: bool, building: bool = False) -> dict[str, Any]:
@@ -694,10 +895,26 @@ class RunRuntime:
             self._finalize(run); return run
         profile = ProjectProfile(**{key: value for key, value in run["profile"].items() if key in ProjectProfile.__dataclass_fields__})
         profile.allowed_write_paths = scope["allowed_write_paths"]
+
+        # A0.2 §12.4: re-scan for sensitive gitignored files immediately
+        # before every builder dispatch (including each correction-loop
+        # rebuild) — a mission can be paused/resumed, or a correction loop
+        # can span a real time gap, between start()'s preflight scan and this
+        # dispatch.
+        if not self._secrets_preflight(run, folder, workspace, "before-builder"):
+            self._transition(run, RunStatus.BLOCKED, "A0.2: sensitive ignored file present before builder dispatch")
+            self._finalize(run); return run
+
         try:
             with FileLock(folder / "builder", timeout=.01):
                 b_rules = self._inject(run, "builder", files_touched=profile.allowed_write_paths)
                 mission_for_builder = f"{b_rules.block}\n\n---\n\n{run['mission']}" if b_rules.block else run["mission"]
+                # A0.2 §12.1: the frozen scope reaches the builder exactly like
+                # it already reaches tests (`network=scope[...]` below) and the
+                # reviewer (`active_rules`/candidate binding) — delivered fresh
+                # before every dispatch, never assumed from a prior call.
+                if hasattr(self.builder, "set_capabilities"):
+                    self.builder.set_capabilities(dict(scope))
                 before = self._paths(workspace); builder = self.builder.build(mission_for_builder, workspace, folder, profile.allowed_write_paths, correction)
         except LockAcquireError:
             self._transition(run, RunStatus.BLOCKED, "second builder refused"); self._finalize(run); return run

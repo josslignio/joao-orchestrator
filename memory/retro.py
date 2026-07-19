@@ -35,19 +35,27 @@ PROJECTS = MEM.parent / "projects"
 TAXONOMY = ["PROMPT/CARTE", "MOTEUR", "REVIEW", "GATE", "UX/CÂBLAGE", "PROCESS", "ENVIRONNEMENT"]
 
 
-def set_state_dir(base) -> None:
+def set_state_dir(base, *, lessons_path=None) -> None:
     """Redirect the runtime-state files (recurrences, metrics, project memory) under `base`.
 
-    The shared lessons.jsonl STOCK is deliberately left where it is (the brain's canon):
+    The shared lessons.jsonl STOCK is normally left where it is (the brain's canon):
     only per-run/per-project runtime state moves, so a live runtime keeps its metrics with
-    its own state_root and never writes into the committed brain during a run (or a test).
+    its own state_root and never writes into the committed brain during a run.
+
+    A0.2 (§7 memory isolation): pass `lessons_path` to ALSO redirect the write
+    target for `ingest_candidates`/`close_mission` — used by the test suite
+    (`JOAO_MEMORY_DIR`-backed isolation, see tests/conftest.py) so a run
+    executed under test can never append into the real, committed
+    `memory/lessons.jsonl`, deterministic or not.
     """
-    global RECURRENCES, METRICS, PROJECTS
+    global RECURRENCES, METRICS, PROJECTS, LESSONS
     base = Path(base)
     base.mkdir(parents=True, exist_ok=True)
     RECURRENCES = base / "recurrences.jsonl"
     METRICS = base / "run_metrics.jsonl"
     PROJECTS = base / "projects"
+    if lessons_path is not None:
+        LESSONS = Path(lessons_path)
 
 _STOP = set("le la les de des du un une et ou à a au aux en dans par pour sur avec sans "
             "que qui est sont doit tout toute jamais pas ne plus se son sa ses ce cette".split())

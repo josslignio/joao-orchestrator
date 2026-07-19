@@ -40,19 +40,56 @@ ignored return code, never a manifest written before verification.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ..policy.paths import detect_sensitive_ignored_files
-from ..storage.atomic import atomic_write_json
+from ..storage.atomic import append_line, atomic_write_json
 from .candidate import recompute_candidate_tree
 from .change_capture import ignored_files_inventory
 
 
 class PromotionError(RuntimeError):
     pass
+
+
+_APPROVAL_KEYS = {"run_id", "candidate_commit", "candidate_tree", "review_proof_sha256",
+                  "approved_by", "approved_at", "previous_status"}
+
+
+def create_approval_record(run: dict[str, Any], candidate: dict[str, Any], *,
+                           review_proof_sha256: str, approved_by: str = "human",
+                           approved_at: str | None = None) -> dict[str, Any]:
+    """A0.2 §15: the immutable approval object `promote()` requires — separate
+    from the mutable `run.json`. Binds the human decision to the exact
+    run/candidate/review triple; `promote()` independently re-verifies every
+    field against the run's own on-disk evidence before it ever touches git."""
+    return {
+        "run_id": run["run_id"],
+        "candidate_commit": candidate["candidate_commit"],
+        "candidate_tree": candidate["candidate_tree"],
+        "review_proof_sha256": review_proof_sha256,
+        "approved_by": approved_by,
+        "approved_at": approved_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "previous_status": "needs_approval",
+    }
+
+
+def write_approval_record(run_dir: Path, ledger_path: Path, record: dict[str, Any]) -> Path:
+    """Persist the approval record twice: once per-run (content-addressed by
+    the run's own folder, easy to find) and once appended to a global,
+    append-only ledger (`ledger_path`) so a later `promote()` call — possibly
+    in a different process — can still find and re-verify it. Never
+    rewritten once written (A0.2 §15's "append-only or content-addressed")."""
+    path = Path(run_dir) / "approval-record.json"
+    atomic_write_json(path, record)
+    append_line(Path(ledger_path), json.dumps(record, sort_keys=True))
+    return path
 
 
 def _git(argv: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
@@ -98,15 +135,65 @@ def _cas_rollback_ref(workspace: Path, branch: str, previous_tip: str, promoted:
     _git(["tag", "-d", tag], workspace, check=False)
 
 
+def _verify_acceptance_for_promotion(run: dict[str, Any], candidate: dict[str, Any],
+                                     approval_record: dict[str, Any], run_dir: Path) -> None:
+    """A0.2 §15/run card #8: `promote()` verifies acceptance ITSELF — a
+    mutable `run.json` with `status == "accepted"` is not sufficient on its
+    own (that field could be hand-edited same as any other). This checks the
+    run's own status/review-verified flags AND that the separately-persisted,
+    append-only `approval_record` genuinely binds this exact run, candidate
+    and review-evidence file — recomputing the review proof hash from the
+    evidence file on disk rather than trusting the number the caller hands
+    in. Raises `PromotionError` (never a bool the caller could ignore) on the
+    first mismatch."""
+    if run.get("status") != "accepted":
+        raise PromotionError(f"A0.2: refusing promotion — run.status is {run.get('status')!r}, not 'accepted'")
+    if not run.get("review_verified"):
+        raise PromotionError("A0.2: refusing promotion — run.review_verified is not True")
+    if run.get("candidate_tree") != candidate["candidate_tree"]:
+        raise PromotionError(
+            f"A0.2: refusing promotion — run.candidate_tree {run.get('candidate_tree')!r} does not match "
+            f"the candidate being promoted {candidate['candidate_tree']!r}"
+        )
+    if approval_record.get("run_id") != run.get("run_id"):
+        raise PromotionError("A0.2: refusing promotion — approval_record.run_id does not match this run")
+    if approval_record.get("candidate_commit") != candidate.get("candidate_commit"):
+        raise PromotionError("A0.2: refusing promotion — approval_record.candidate_commit does not match this candidate")
+    if approval_record.get("candidate_tree") != candidate.get("candidate_tree"):
+        raise PromotionError("A0.2: refusing promotion — approval_record.candidate_tree does not match this candidate")
+    review_path = Path(run_dir) / "review-evidence.json"
+    if not review_path.is_file():
+        raise PromotionError("A0.2: refusing promotion — no review-evidence.json found for this run")
+    actual_review_sha256 = hashlib.sha256(review_path.read_bytes()).hexdigest()
+    if approval_record.get("review_proof_sha256") != actual_review_sha256:
+        raise PromotionError(
+            "A0.2: refusing promotion — approval_record.review_proof_sha256 does not match the "
+            "review-evidence.json currently on disk for this run (evidence tampered or record forged)"
+        )
+
+
 def promote(workspace: Path, run_dir: Path, candidate: dict[str, Any], run_id: str,
-           branch: str | None = None) -> dict[str, Any]:
+           branch: str | None = None, *, run: dict[str, Any] | None = None,
+           approval_record: dict[str, Any] | None = None) -> dict[str, Any]:
     """Atomically fast-forward `branch` (default: current branch) to the
     frozen candidate commit, then materialize and independently verify that
     promotion in a brand-new sterile worktree — never in the live,
     possibly-cruft-carrying `workspace`. The success manifest is written
     ONLY after both the tree hash and the on-disk worktree state have been
     verified; any failure along the way immediately CAS-rolls-back the
-    branch ref rather than leaving it pointing at an unverified commit."""
+    branch ref rather than leaving it pointing at an unverified commit.
+
+    A0.2 §15: `run` and `approval_record` are required — `promote()` will not
+    fast-forward anything until it has independently re-verified acceptance
+    itself (see `_verify_acceptance_for_promotion`), never trusting the
+    caller's word that the run was accepted."""
+    if run is None or approval_record is None:
+        raise PromotionError(
+            "A0.2: promote() requires both `run` (the full run record) and `approval_record` "
+            "(the immutable object from create_approval_record()) — a candidate/run_id pair "
+            "alone is no longer sufficient to self-verify acceptance."
+        )
+    _verify_acceptance_for_promotion(run, candidate, approval_record, run_dir)
     workspace = Path(workspace)
     branch = branch or _current_branch(workspace)
     current_tip = _git(["rev-parse", branch], workspace).stdout.strip()
@@ -153,6 +240,8 @@ def promote(workspace: Path, run_dir: Path, candidate: dict[str, Any], run_id: s
         "promoted_commit": candidate["candidate_commit"], "candidate_tree": candidate["candidate_tree"],
         "previous_tip": current_tip, "promoted_worktree": str(sterile_dir),
         "verified": True, "verified_tree": candidate["candidate_tree"],
+        "approval_record": approval_record,
+        "acceptance_self_verified": True,
         "rollback_command": ["git", "-C", str(workspace), "update-ref",
                              f"refs/heads/{branch}", current_tip, candidate["candidate_commit"]],
     }

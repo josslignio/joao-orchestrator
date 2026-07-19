@@ -281,6 +281,7 @@ def run_sandboxed(argv: list[str], *, cwd: Path, timeout: int,
                    extra_read_paths: list[str] | None = None,
                    extra_write_paths: list[str] | None = None,
                    protected: bool = False,
+                   preserve_host_environment: bool = False,
                    cpu_seconds: int | None = DEFAULT_CPU_SECONDS,
                    memory_bytes: int | None = DEFAULT_MEMORY_BYTES,
                    max_open_files: int | None = DEFAULT_MAX_OPEN_FILES,
@@ -295,7 +296,25 @@ def run_sandboxed(argv: list[str], *, cwd: Path, timeout: int,
     `env-only` enforcement when no real kernel sandbox (Seatbelt) is present
     on this host — the caller must be told outright rather than getting a
     weaker boundary than it asked for.
+
+    `preserve_host_environment=True` (A0.2, §13.2/ExecutionBackend): skips the
+    fresh-temp-HOME/env-stripping/Seatbelt wrapping entirely and inherits the
+    real process environment untouched — needed by callers (e.g. a local
+    Codex CLI review) whose own auth/config lives under the real `$HOME` and
+    would break under a wiped one. Process-group tracking, the timeout-kill
+    sweep, resource rlimits and the RSS watchdog still apply unchanged — this
+    flag narrows only the env/HOME/Seatbelt layer, never the lifecycle
+    tracking. `protected=True` is refused together with this flag: a
+    passthrough-environment dispatch is by definition not a kernel-sandboxed
+    one, so claiming `protected` for it would be dishonest.
     """
+    if protected and preserve_host_environment:
+        return {"ok": False, "argv": argv, "returncode": -1, "enforcement": "refused-incompatible-flags",
+                "protected": True, "network": bool(network), "pid": None, "duration_seconds": 0.0,
+                "stdout": "", "timed_out": False,
+                "stderr": "protected=True and preserve_host_environment=True are mutually exclusive: "
+                          "a host-environment passthrough dispatch cannot also claim kernel-sandbox "
+                          "protection."}
     if protected and not SANDBOX_EXEC:
         return {"ok": False, "argv": argv, "returncode": -1, "enforcement": "refused-no-kernel-sandbox",
                 "protected": True, "network": bool(network), "pid": None, "duration_seconds": 0.0,
@@ -306,20 +325,29 @@ def run_sandboxed(argv: list[str], *, cwd: Path, timeout: int,
     with tempfile.TemporaryDirectory(prefix="joao-sandbox-home-") as home:
         home_dir = Path(home)
         token = secrets.token_hex(16)
-        env = sandboxed_env(profile_allowlist or [], home_dir, token=token)
         write_paths = [str(Path(cwd).resolve()), str(home_dir)] + [str(p) for p in (extra_write_paths or [])]
-        enforcement = "env-only"
         full_argv = list(argv)
-        if SANDBOX_EXEC:
-            profile = seatbelt_profile(
-                network=network,
-                read_write_paths=write_paths,
-                extra_read_paths=[str(p) for p in (extra_read_paths or [])],
-            )
-            profile_path = home_dir / "profile.sb"
-            profile_path.write_text(profile)
-            full_argv = [SANDBOX_EXEC, "-f", str(profile_path)] + list(argv)
-            enforcement = "seatbelt"
+        if preserve_host_environment:
+            # A0.2: no env stripping, no fresh HOME, no Seatbelt — the caller
+            # explicitly needs the real host environment (e.g. reviewer CLI
+            # auth). Still routed through this single dispatch point so
+            # lifecycle tracking (pid/pgid, timeout kill, resource limits,
+            # RSS watchdog) is uniform across every subprocess JOAO launches.
+            env = None
+            enforcement = "host-passthrough-tracked"
+        else:
+            env = sandboxed_env(profile_allowlist or [], home_dir, token=token)
+            enforcement = "env-only"
+            if SANDBOX_EXEC:
+                profile = seatbelt_profile(
+                    network=network,
+                    read_write_paths=write_paths,
+                    extra_read_paths=[str(p) for p in (extra_read_paths or [])],
+                )
+                profile_path = home_dir / "profile.sb"
+                profile_path.write_text(profile)
+                full_argv = [SANDBOX_EXEC, "-f", str(profile_path)] + list(argv)
+                enforcement = "seatbelt"
         nproc_ceiling = (_current_uid_process_count() + max_new_processes) if max_new_processes else None
         preexec = _resource_limits_preexec(cpu_seconds, memory_bytes, max_open_files, nproc_ceiling)
         started = time.monotonic()

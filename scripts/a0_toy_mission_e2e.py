@@ -34,7 +34,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from joao_orchestrator.bubble.candidate import recompute_candidate_tree  # noqa: E402
 from joao_orchestrator.bubble.runtime import LocalProfileAdapter, RunRuntime, SandboxBuilder  # noqa: E402
-from joao_orchestrator.bubble.promotion import promote, rollback  # noqa: E402
+from joao_orchestrator.bubble.promotion import rollback  # noqa: E402
 
 
 class InspectingReviewer:
@@ -167,7 +167,10 @@ def main() -> int:
         # and independently verifies the promotion in a brand-new sterile
         # worktree instead. The branch ref itself IS moved (verified via
         # `git rev-parse`, never by inspecting `workspace`'s files).
-        manifest = promote(workspace, run_dir, candidate, run_id)
+        # A0.2 §15: routed through RunRuntime.promote(), which reads the
+        # approval-record.json approve() just wrote and hands it to
+        # promotion.promote() for independent self-verification.
+        manifest = rt.promote(run_id)
         trace["promotion_manifest"] = manifest
         assert manifest["verified"] is True
         promoted_tree = _git(["rev-parse", f"{manifest['promoted_commit']}^{{tree}}"], workspace).stdout.strip()
