@@ -24,6 +24,7 @@ from .candidate import CandidateError, freeze_baseline, freeze_candidate, recomp
 from .change_capture import EMPTY_DIFF_SHA256, capture_full_diff, ignored_files_inventory
 from .reviewer_contract import validate_reviewer_verdict
 from . import promotion as promotion_mod
+from .gates import build_frozen_mission
 
 
 def _memory_dir() -> Path:
@@ -545,7 +546,10 @@ class RunRuntime:
         except Exception as exc:  # a sync failure must never block a mission — inject what we have
             return {"synced": False, "reason": f"{type(exc).__name__}: {exc}"}
 
-    def start(self, *, project_id: str, workspace: Path, mission: str, targeted_tests: list[list[str]], full_tests: list[list[str]], profile: ProjectProfile | None = None, critical: bool = False, recurrence: bool = False, tags: list[str] | None = None, smoke: bool = False, declared_baseline: str | None = None, network_capability: bool = False, read_only: bool = False, required_backend: str = "local_untrusted") -> str:
+    def start(self, *, project_id: str, workspace: Path, mission: str, targeted_tests: list[list[str]], full_tests: list[list[str]], profile: ProjectProfile | None = None, critical: bool = False, recurrence: bool = False, tags: list[str] | None = None, smoke: bool = False, declared_baseline: str | None = None, network_capability: bool = False, read_only: bool = False, required_backend: str = "local_untrusted",
+             risk_tier: str | None = None, canary_required: bool = False, spec_sha: str | None = None,
+             roadmap_sha: str | None = None, authority_instruction_hash: str | None = None,
+             forbidden_paths: list[str] | None = None, criterion_bindings: dict[str, Any] | None = None) -> str:
         ledger_status = self._sync_ledger() if self.ledger_sync else None
         if self.enforce_phase0:
             from .kickoff import spec_is_signed  # noqa: PLC0415
@@ -593,6 +597,18 @@ class RunRuntime:
         run = {"schema_version": 1, "run_id": run_id, "project_id": project_id, "workspace": str(workspace), "mission": mission, "status": "pending", "created_at": now(), "updated_at": now(), "current_step": "created", "profile": profile.to_dict(), "targeted_tests": targeted_tests, "full_tests": full_tests, "corrections_used": 0, "max_corrections": 1, "critical": bool(critical), "recurrence": bool(recurrence), "tags": list(tags or []), "smoke": bool(smoke), "tasks": tasks, "declared_baseline": declared_baseline, "baseline_paths_at_start": baseline_paths, "baseline": None, "network_capability": bool(network_capability), "read_only": bool(read_only), "provider_transport_network": bool(getattr(self.builder, "requires_network_transport", False)), "required_backend": required_backend, "builder_provider": self.builder.provider, "builder_model": self.builder.model}
         atomic_write_text(folder / "mission.md", mission + "\n"); atomic_write_json(folder / "project-profile.json", profile.to_dict())
         atomic_write_json(folder / "task-graph.json", {"tasks": tasks}); atomic_write_json(folder / "plan.json", {"status": "pending", "bounded": True, "max_corrections": 1}); self._write(run)
+        # C8-A / G-FROZEN-FINISH-LINE: an immutable frozen_mission.json, written
+        # exactly once here (never rewritten by any later call) — the real
+        # artefact `bubble/gates.py::gate_frozen_finish_line` compares a run's
+        # actual changed paths/corrections against. Written unconditionally
+        # (risk_tier defaults to None for callers that don't pass one — the
+        # gate itself, not start(), fails closed on a missing risk_tier per D1;
+        # start()'s legacy behavior for existing callers is unchanged).
+        frozen_mission = build_frozen_mission(
+            spec_sha=spec_sha, roadmap_sha=roadmap_sha, authority_instruction_hash=authority_instruction_hash,
+            risk_tier=risk_tier, canary_required=canary_required, forbidden_paths=forbidden_paths,
+            criterion_bindings=criterion_bindings)
+        atomic_write_json(folder / "frozen_mission.json", frozen_mission)
         self._event(run, "run_created", builder_provider=self.builder.provider, builder_model=self.builder.model)
 
         # A0.2 §13/§18: a run requiring a backend stronger than local_untrusted

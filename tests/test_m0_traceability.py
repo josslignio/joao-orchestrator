@@ -9,7 +9,7 @@ import yaml
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
-from build_traceability import DEFAULT_EXTERNAL_SPECS, TraceabilityError, build_traceability  # noqa: E402
+from build_traceability import TraceabilityError, build_traceability  # noqa: E402
 
 
 def _write_spec(path: Path, requirements: list[dict]) -> None:
@@ -94,25 +94,93 @@ def test_unmapped_ledger_defects_are_explicit_not_dropped(tmp_path):
     assert any(r["defect"] == "D-999" for r in unmapped)
 
 
-def test_real_repo_specs_produce_no_orphans():
-    """Integration proof: the ACTUAL specs/*.yaml this run generated pass G2 for real."""
+def test_real_repo_specs_produce_no_orphans(tmp_path):
+    """Integration proof: the ACTUAL specs/*.yaml this run generated pass G2 for real.
+
+    C8-A / G-HERMETIC: `external_specs=[]` and a nonexistent `ledger_path`
+    under `tmp_path` pin this to repo-source specs only (legitimate,
+    always-allowed repo content) — this test's own stated intent ("the
+    ACTUAL specs/*.yaml this run generated") never depended on the sibling
+    `~/job-opportunity-radar` repo or the real `~/Claude-HQ` ledger; both
+    were only ever incidental (`build_traceability`'s default arguments),
+    not this test's purpose. The 0-UNMAPPED-with-external-specs claim
+    belongs solely to `test_d044_hermetic_frozen_fixture_produces_zero_unmapped`
+    below, which proves it deterministically against a frozen fixture instead.
+    """
     repo = Path(__file__).resolve().parents[1]
-    rows = build_traceability(specs_dir=repo / "specs")
+    rows = build_traceability(specs_dir=repo / "specs", ledger_path=tmp_path / "no-ledger.md", external_specs=[])
     assert len(rows) > 0
     # every requirement-linked row has both gate and milestone (enforced by build_traceability
     # not raising) — this assertion is redundant with "it didn't raise" but documents intent
     assert all(r.get("gate") and r.get("milestone") for r in rows if r["status"] != "UNMAPPED_PENDING_SPEC")
 
 
-def test_real_repo_produces_zero_unmapped_with_cv_bot_specs():
-    """M0.1 patch (deliverable 6): with the external cv_bot specs included, 0 UNMAPPED_PENDING_SPEC.
-
-    Requires ~/job-opportunity-radar/governance/{PROJECT_SPEC_V4,cv_bot_business_rules}.yaml to
-    exist on disk (M0.1 deliverables 4 and 6) — skipped if that sibling repo isn't checked out.
+def _write_frozen_d044_fixture(tmp_path: Path) -> tuple[Path, Path, list[Path]]:
+    """C8-A / G-HERMETIC (`JOAO_C8_GATE_CONTRACTS.md`, finding GPT v2 #2): the
+    frozen fixture that determinizes D-044 — a fully self-contained, frozen
+    `DEFECTS_LEDGER` + frozen copies of the cv_bot-style external specs, all
+    under `tmp_path`. Never resolves to `~/Claude-HQ` or
+    `~/job-opportunity-radar` — the suite's dependency on those live external
+    roots is what this fixture removes (D-044's ORIGINAL bug — a real,
+    still-open traceability gap in the product backlog — is untouched by this
+    fixture and stays open there; only the TEST SUITE's dependency on live
+    content disappears). The `D-044` row below is an explicit SYNTHETIC
+    demo stand-in (roadmap: "incluant un D-044 de démonstration"), never the
+    real product defect — it is fully mapped here on purpose, to prove the
+    mechanism, and this in no way marks the real backlog D-044 as resolved.
     """
-    repo = Path(__file__).resolve().parents[1]
-    if not all(p.is_file() for p in DEFAULT_EXTERNAL_SPECS):
-        pytest.skip("~/job-opportunity-radar governance specs not present in this environment")
-    rows = build_traceability(specs_dir=repo / "specs")
+    specs_dir = tmp_path / "specs"
+    specs_dir.mkdir()
+    _write_spec(specs_dir / "fixture.yaml", [{
+        "id": "FX-DEMO-1", "statement": "frozen demo requirement", "severity": 2,
+        "verification_gate": "attack test demo", "roadmap_milestone": "M-DEMO",
+        "owner": "contrôleur", "status": "PLANNED", "source_defects": ["D-901"],
+        "derivation": "verbatim",
+    }])
+
+    external_dir = tmp_path / "external"
+    external_dir.mkdir()
+    cv_bot_a = external_dir / "PROJECT_SPEC_V4.yaml"
+    _write_spec(cv_bot_a, [{
+        "id": "CVB-DEMO-1", "statement": "frozen cv_bot demo requirement A", "severity": 2,
+        "verification_gate": "attack test demo cv_bot A", "roadmap_milestone": "M-DEMO-CVB",
+        "owner": "contrôleur", "status": "PLANNED", "source_defects": ["D-902", "D-044"],
+        "derivation": "verbatim",
+    }])
+    cv_bot_b = external_dir / "cv_bot_business_rules.yaml"
+    _write_spec(cv_bot_b, [{
+        "id": "CVB-DEMO-2", "statement": "frozen cv_bot demo requirement B", "severity": 2,
+        "verification_gate": "attack test demo cv_bot B", "roadmap_milestone": "M-DEMO-CVB",
+        "owner": "contrôleur", "status": "PLANNED", "source_defects": ["D-903"],
+        "derivation": "verbatim",
+    }])
+
+    ledger = tmp_path / "DEFECTS_LEDGER.md"
+    ledger.write_text(
+        "| ID | Produit | Symptôme | Cause racine | Leçon | Statut |\n|---|---|---|---|---|---|\n"
+        "| D-901 | demo | frozen demo defect 1 | **CODE** | fixed | FIXÉ |\n"
+        "| D-902 | demo | frozen demo defect 2 | **CODE** | fixed | FIXÉ |\n"
+        "| D-903 | demo | frozen demo defect 3 | **CODE** | fixed | FIXÉ |\n"
+        "| D-044 | demo | SYNTHETIC demo stand-in for D-044 — NOT the real product defect | "
+        "**CODE** | fixed | FIXÉ |\n"
+    )
+    return specs_dir, ledger, [cv_bot_a, cv_bot_b]
+
+
+def test_d044_hermetic_frozen_fixture_produces_zero_unmapped(tmp_path):
+    """C8-A / G-HERMETIC: D-044 determinized by a fully frozen, self-contained
+    fixture (`JOAO_C8_GATE_CONTRACTS.md` G-HERMETIC red->green,
+    `G_HERMETIC_EXTERNAL_LEDGER_DEPENDENCY`). Replaces the prior
+    `test_real_repo_produces_zero_unmapped_with_cv_bot_specs`, which either
+    silently skipped (sibling repo absent) or asserted against live,
+    machine-dependent content (sibling repo present) — neither is hermetic
+    or deterministic. This test always runs (no skip, no xfail) and asserts
+    a fixed, known mapping — the suite no longer depends on the live content
+    of `~/Claude-HQ` or `~/job-opportunity-radar` at all.
+    """
+    specs_dir, ledger, external_specs = _write_frozen_d044_fixture(tmp_path)
+    rows = build_traceability(specs_dir=specs_dir, ledger_path=ledger, external_specs=external_specs)
     unmapped = [r for r in rows if r["status"] == "UNMAPPED_PENDING_SPEC"]
-    assert unmapped == [], f"expected 0 UNMAPPED_PENDING_SPEC, got: {unmapped}"
+    assert unmapped == [], f"frozen fixture must map every defect deterministically, got: {unmapped}"
+    mapped_defect_ids = {r["defect"] for r in rows if r["status"] != "UNMAPPED_PENDING_SPEC"}
+    assert mapped_defect_ids == {"D-901", "D-902", "D-903", "D-044"}
