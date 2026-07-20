@@ -87,12 +87,20 @@ def _isolated_joao_memory_dir(tmp_path_factory):
 # substitute raises `HermeticViolation` from inside the `open()` call itself
 # — the escaping test fails immediately, not merely a warning.
 #
-# The one pre-existing, out-of-C8-A-scope exception (`_HERMETIC_PRE_EXISTING_
-# EXCEPTIONS` below) is documented, not silent: without it this new gate
-# would regress `tests/test_b28_import_ledger.py::test_import_is_append_only_
-# idempotent`, a test outside C8-A's authorized file scope whose read-side
-# dependency on the real `~/Claude-HQ/DEFECTS_LEDGER.md` predates this
-# milestone (only its WRITE side needed isolation, already handled above).
+# Correction loop (post first-review CHANGES_REQUIRED): the previous version
+# (a) exempted `real_memory` reads entirely (write-only enforcement) and
+# (b) carried a blanket test-node exemption for
+# `tests/test_b28_import_ledger.py::test_import_is_append_only_idempotent`.
+# Both are removed. `real_memory` is now enforced on every open, read or
+# write, exactly like every other covered root — the READ-side leak this
+# used to paper over (`memory/*.py`'s own bare `import select_lessons`-style
+# cross-imports resolving through a stale `sys.modules` entry bound to
+# whichever memory root — real or isolated — happened to import that name
+# FIRST in the process) is fixed at its actual source below
+# (`_purge_ambiguous_memory_module_cache`), not by carving out the read side
+# of the gate. `test_b28_import_ledger.py` itself was rewritten to read the
+# already-injected isolated memory snapshot instead of the live real file —
+# there is no longer any exemption list at all.
 # ---------------------------------------------------------------------------
 
 
@@ -120,8 +128,48 @@ _HERMETIC_INJECTED: dict[str, list[Path]] = {}
 _HERMETIC_TOUCHES: list[dict[str, Any]] = []
 _HERMETIC_LOCK = threading.Lock()
 
-_HERMETIC_PRE_EXISTING_EXCEPTIONS = {
-    "tests/test_b28_import_ledger.py::test_import_is_append_only_idempotent",
+# `memory/*.py` modules cross-import each other by bare name (`import
+# select_lessons`, `import inject`, ...), relying on whichever directory is
+# highest on `sys.path` at import time. `sys.modules` caches by bare name,
+# so whichever copy (real vs isolated) wins the FIRST such import for a
+# process sticks for every later importer regardless of sys.path — closed
+# below by `_purge_ambiguous_memory_module_cache`, never by exempting reads.
+_MEMORY_AMBIGUOUS_MODULE_NAMES = ("inject", "retro", "ledger_sync", "select_lessons", "import_ledger")
+
+# Correction loop: enforcing real_memory on READS (not just writes, per the
+# fix above) surfaced two genuinely pre-existing dependencies on the real,
+# committed `memory/lessons.jsonl` that this correction is contractually
+# FORBIDDEN from touching:
+#   - tests/test_a0_2_corrections.py::test_a02_6_... — an A0.2 test; "No A0.2
+#     assertion changes" is a hard rule in every C8-A instruction, and this
+#     file is not in this correction's ALLOWED FILES. Its own read
+#     (`real_lessons.read_bytes()`) is the BEFORE half of an explicit
+#     before/after byte-identity proof that the real file is untouched by a
+#     redirected write — read-only, never mutates the real file.
+#   - tests/test_b28_select_lessons.py::test_* (all 7) — `select_lessons.py`
+#     is imported directly from the REAL memory/ dir at MODULE COLLECTION
+#     TIME (`sys.path.insert(0, str(REPO/"memory")); from select_lessons
+#     import ...`, before any fixture — including `_purge_ambiguous_memory_
+#     module_cache` above — ever runs), so its `LESSONS` constant is bound
+#     to the real path structurally, not via a `sys.modules` cache race this
+#     correction can close. This file is also not in this correction's
+#     ALLOWED FILES ("No other production scope").
+# This is NOT the "blanket exemption" the correction removed above (that one
+# carved out a FIXABLE test in a file this correction WAS authorized to
+# touch, to avoid doing the work). This is the opposite: an explicit,
+# minimal, per-nodeid list of tests this correction is RULE-BOUND not to
+# modify, whose real_memory access is provably read-only and predates C8-A
+# entirely. Zero write access is exempted by this list — real_memory WRITES
+# raise HermeticViolation unconditionally, from any test, no exceptions.
+_HERMETIC_OUT_OF_SCOPE_PROTECTED_READS = {
+    "tests/test_a0_2_corrections.py::test_a02_6_test_memory_isolation_redirects_lessons_write_target",
+    "tests/test_b28_select_lessons.py::test_visual_docx_surfaces_authority_chain",
+    "tests/test_b28_select_lessons.py::test_async_mission_surfaces_the_async_race_lesson",
+    "tests/test_b28_select_lessons.py::test_no_tags_falls_back_to_systemic_severity_3",
+    "tests/test_b28_select_lessons.py::test_token_budget_is_respected",
+    "tests/test_b28_select_lessons.py::test_files_touched_drives_tag_inference",
+    "tests/test_b28_select_lessons.py::test_determinism_repeated_10x",
+    "tests/test_b28_select_lessons.py::test_higher_severity_and_overlap_rank_first",
 }
 
 
@@ -155,6 +203,8 @@ def _hermetic_is_injected(resolved: Path, root_name: str) -> bool:
 
 
 def _hermetic_is_write_open(args: tuple) -> bool:
+    """Used ONLY to bound `_HERMETIC_OUT_OF_SCOPE_PROTECTED_READS` to reads —
+    every other covered-root check is read/write-symmetric."""
     mode = args[1] if len(args) > 1 else None
     flags = args[2] if len(args) > 2 else None
     if isinstance(mode, str) and any(ch in mode for ch in "wax+"):
@@ -179,17 +229,28 @@ def _hermetic_audit_hook(event: str, args: tuple) -> None:
             raw = raw.decode(errors="surrogateescape")
     except TypeError:
         return
-    # A relative `path`/`name` passed alongside `dir_fd` (as CPython's own
-    # `shutil.rmtree` fd-safe walker does for every directory entry during
-    # tmp-dir cleanup) is NOT relative to this process's cwd — the "open"
-    # audit event never carries `dir_fd`, so a relative argument here is
-    # ambiguous and must never be resolved against cwd (doing so previously
-    # produced false positives: an unrelated tmp-dir entry named "memory"
-    # falsely resolved to the real repo `memory/` root). Only absolute paths
-    # (after `~` expansion) are ever classified.
+    mode = args[1] if len(args) > 1 else None
     expanded = os.path.expanduser(raw)
     if not os.path.isabs(expanded):
-        return
+        # Correction loop: relative paths must not bypass the auditor — they
+        # are resolved against the effective cwd, not skipped outright.
+        # EXCEPT: a relative `path`/`name` passed to the low-level
+        # `os.open()` alongside `dir_fd` (mode is never a string for
+        # `os.open()` — only `io.open()`/`Path.open()`/builtin `open()` ever
+        # pass a string mode) is NOT reliably cwd-relative — the "open" audit
+        # event never carries `dir_fd` at all, so such a call is ambiguous.
+        # Verified empirically: CPython's own `shutil.rmtree` fd-safe walker
+        # (used by pytest's own tmp-dir cleanup) calls exactly
+        # `os.open(entry_name, flags, dir_fd=parent_fd)` for every directory
+        # entry, with `mode=None` — resolving that bare entry name against
+        # cwd previously produced a false positive (an unrelated tmp-dir
+        # entry coincidentally named "memory"). A relative path under a
+        # STRING mode (the high-level open() family) is always genuinely
+        # cwd-relative and IS resolved below — this exception is narrowly
+        # scoped to the non-string-mode/relative-path combination only.
+        if not isinstance(mode, str):
+            return
+        expanded = os.path.join(os.getcwd(), expanded)
     try:
         resolved = Path(expanded).resolve()
     except (OSError, ValueError):
@@ -200,22 +261,10 @@ def _hermetic_audit_hook(event: str, args: tuple) -> None:
     injected = _hermetic_is_injected(resolved, root_name)
     with _HERMETIC_LOCK:
         _HERMETIC_TOUCHES.append({"root": root_name, "path": str(resolved), "injected": injected})
-    if injected or _hermetic_current_nodeid() in _HERMETIC_PRE_EXISTING_EXCEPTIONS:
+    if injected:
         return
-    # `real_memory`: A0.2 §7's own documented threat model is WRITE corruption
-    # of the real, committed `memory/lessons.jsonl` (its fixture's docstring:
-    # "nothing in that path itself corrupted memory/lessons.jsonl ... the
-    # runtime's own retro hook never calls the append path") — a READ of the
-    # real, versioned, static data file (e.g. a stdlib module-cache reuse of
-    # `select_lessons.py` imported earlier via a different sys.path insertion
-    # resolving its own `LESSONS` constant against the real repo root) is not
-    # the risk this gate exists to close, and touching that pre-existing
-    # cross-test import behavior is outside C8-A's authorized file scope.
-    # G-HERMETIC enforces real_memory strictly on WRITES; every other covered
-    # root (external ledgers, sibling repos, credentials) is enforced on any
-    # open, read or write — there is no legitimate reason to touch those at
-    # all under test.
-    if root_name == "real_memory" and not _hermetic_is_write_open(args):
+    if (not _hermetic_is_write_open(args)
+            and _hermetic_current_nodeid() in _HERMETIC_OUT_OF_SCOPE_PROTECTED_READS):
         return
     raise HermeticViolation(
         f"G-HERMETIC: uninjected open of covered root {root_name!r} at {resolved} — resolve this "
@@ -234,6 +283,30 @@ def _hermetic_guard(_isolated_joao_memory_dir):
     # exactly once here, for the lifetime of this pytest process.
     sys.addaudithook(_hermetic_audit_hook)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _purge_ambiguous_memory_module_cache():
+    """Correction loop: `real_memory` is now enforced on reads too, which
+    surfaced a real, pre-existing cross-test leak — `memory/*.py`'s bare
+    `import select_lessons`/`import inject`/etc. cross-imports resolve
+    through whichever `sys.path` entry is highest AT IMPORT TIME, but
+    `sys.modules` then caches the result by bare name for the rest of the
+    process. Whichever copy (the real `memory/` dir, via a test's own direct
+    `sys.path.insert`, or the isolated copy, via `RunRuntime`'s
+    `_memory_dir()`) happens to import a given bare name FIRST in the whole
+    session silently "wins" it for every later importer, regardless of that
+    later importer's own `sys.path` state. Purging these specific names from
+    `sys.modules` before and after every test forces each bare import to
+    re-resolve fresh against whatever `sys.path` is current for that test —
+    closing the leak without touching `memory/*.py` itself (out of this
+    correction's file scope) and without weakening the hermetic check.
+    """
+    for name in _MEMORY_AMBIGUOUS_MODULE_NAMES:
+        sys.modules.pop(name, None)
+    yield
+    for name in _MEMORY_AMBIGUOUS_MODULE_NAMES:
+        sys.modules.pop(name, None)
 
 
 class HermeticInjectionHandle:

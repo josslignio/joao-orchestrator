@@ -109,6 +109,114 @@ def test_g_dbl_audit_red_tree_mismatch():
     assert result["reason_code"] == "G_DBL_AUDIT_TREE_MISMATCH"
 
 
+# --- correction loop: mandatory-input fail-closed cases -------------------
+
+
+def test_g_dbl_audit_red_candidate_tree_missing():
+    result = gates.gate_dbl_audit(risk_tier="normal", builder_provider="zai-coding-plan",
+                                  builder_family="zai",
+                                  reviewer_verdicts=[_verdict("codex-subscription", "openai", tree=None)],
+                                  candidate_tree=None)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_INSUFFICIENT_REVIEWERS"
+    assert "candidate_tree" in result["reason"]
+
+
+def test_g_dbl_audit_red_candidate_tree_empty_string():
+    result = gates.gate_dbl_audit(risk_tier="normal", builder_provider="zai-coding-plan",
+                                  builder_family="zai", reviewer_verdicts=[], candidate_tree="")
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_INSUFFICIENT_REVIEWERS"
+
+
+def test_g_dbl_audit_red_builder_provider_missing():
+    result = gates.gate_dbl_audit(risk_tier="normal", builder_provider=None, builder_family="zai",
+                                  reviewer_verdicts=[], candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_INSUFFICIENT_REVIEWERS"
+
+
+def test_g_dbl_audit_red_builder_family_missing():
+    result = gates.gate_dbl_audit(risk_tier="normal", builder_provider="zai-coding-plan", builder_family=None,
+                                  reviewer_verdicts=[], candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_INSUFFICIENT_REVIEWERS"
+
+
+def test_g_dbl_audit_red_reviewer_inventory_none_is_zero_accepted():
+    # `reviewer_verdicts=None` (inventory genuinely absent, not merely empty)
+    # must fail exactly like an empty list — never treated differently.
+    result = gates.gate_dbl_audit(risk_tier="normal", builder_provider="zai-coding-plan",
+                                  builder_family="zai", reviewer_verdicts=None, candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_INSUFFICIENT_REVIEWERS"
+    assert result["accepted_count"] == 0
+
+
+# --- correction loop: EXACT reviewer cardinality (finding #3) -------------
+
+
+def test_g_dbl_audit_red_normal_zero_accepted_blocks():
+    result = gates.gate_dbl_audit(risk_tier="normal", builder_provider="zai-coding-plan",
+                                  builder_family="zai", reviewer_verdicts=[], candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_INSUFFICIENT_REVIEWERS"
+
+
+def test_g_dbl_audit_red_normal_two_accepted_blocks_too_many():
+    result = gates.gate_dbl_audit(risk_tier="normal", builder_provider="zai-coding-plan",
+                                  builder_family="zai",
+                                  reviewer_verdicts=[_verdict("codex-subscription", "openai"),
+                                                     _verdict("claude-cli", "anthropic")],
+                                  candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_TOO_MANY_REVIEWERS"
+
+
+def test_g_dbl_audit_green_normal_exactly_one_accepted_passes():
+    result = gates.gate_dbl_audit(risk_tier="normal", builder_provider="zai-coding-plan",
+                                  builder_family="zai",
+                                  reviewer_verdicts=[_verdict("codex-subscription", "openai")],
+                                  candidate_tree=TREE)
+    assert result["ok"] is True
+
+
+def test_g_dbl_audit_red_critical_zero_accepted_blocks():
+    result = gates.gate_dbl_audit(risk_tier="critical", builder_provider="zai-coding-plan",
+                                  builder_family="zai", reviewer_verdicts=[], candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_NO_DISTINCT_FAMILY_AVAILABLE"
+
+
+def test_g_dbl_audit_red_critical_one_accepted_blocks():
+    result = gates.gate_dbl_audit(risk_tier="critical", builder_provider="zai-coding-plan",
+                                  builder_family="zai",
+                                  reviewer_verdicts=[_verdict("codex-subscription", "openai")],
+                                  candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_NO_DISTINCT_FAMILY_AVAILABLE"
+
+
+def test_g_dbl_audit_red_critical_three_accepted_distinct_families_blocks_too_many():
+    result = gates.gate_dbl_audit(risk_tier="critical", builder_provider="zai-coding-plan",
+                                  builder_family="zai",
+                                  reviewer_verdicts=[_verdict("codex-subscription", "openai"),
+                                                     _verdict("claude-cli", "anthropic"),
+                                                     _verdict("mistral-cli", "mistral")],
+                                  candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_TOO_MANY_REVIEWERS"
+
+
+def test_g_dbl_audit_green_critical_exactly_two_distinct_families_passes():
+    result = gates.gate_dbl_audit(risk_tier="critical", builder_provider="zai-coding-plan",
+                                  builder_family="zai",
+                                  reviewer_verdicts=[_verdict("codex-subscription", "openai"),
+                                                     _verdict("claude-cli", "anthropic")],
+                                  candidate_tree=TREE)
+    assert result["ok"] is True
+
+
 # ---------------------------------------------------------------------------
 # G-HERMETIC
 # ---------------------------------------------------------------------------
@@ -240,6 +348,29 @@ def test_g_no_stale_green_single_canonical_protected_entrypoint():
     assert result["ok"] is True and result["reason_code"] == "G_NO_STALE_OK"
 
 
+def test_g_no_stale_red_empty_discovered_callables_never_vacuously_passes():
+    result = gates.gate_no_stale_entrypoint(discovered_callables=[],
+                                            canonical_entrypoints=["ExecutionBackend.execute"])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_NO_STALE_UNLISTED_DISPATCH"
+
+
+def test_g_no_stale_red_none_discovered_callables_never_vacuously_passes():
+    result = gates.gate_no_stale_entrypoint(discovered_callables=None,
+                                            canonical_entrypoints=["ExecutionBackend.execute"])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_NO_STALE_UNLISTED_DISPATCH"
+
+
+def test_g_no_stale_red_empty_canonical_entrypoints_never_vacuously_passes():
+    result = gates.gate_no_stale_entrypoint(
+        discovered_callables=[{"name": "ExecutionBackend.execute", "effect": "dispatch",
+                               "canonical": True, "protected": True, "predates_gates": False}],
+        canonical_entrypoints=[])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_NO_STALE_UNLISTED_DISPATCH"
+
+
 # ---------------------------------------------------------------------------
 # G-SHA-BOUND-PROOF
 # ---------------------------------------------------------------------------
@@ -268,6 +399,21 @@ def test_g_sha_bound_green_exact_match():
     result = gates.gate_sha_bound_proof(artifact={"candidate_tree": TREE}, expected_candidate_tree=TREE,
                                         recomputed_candidate_tree=TREE)
     assert result["ok"] is True and result["reason_code"] == "G_SHA_BOUND_OK"
+
+
+def test_g_sha_bound_red_expected_candidate_tree_missing_never_vacuously_passes():
+    # A missing expected_candidate_tree previously skipped the CROSS_CANDIDATE
+    # check entirely — any artifact.candidate_tree would then pass, since
+    # nothing was compared against. Must BLOCK instead.
+    result = gates.gate_sha_bound_proof(artifact={"candidate_tree": TREE}, expected_candidate_tree=None)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_SHA_BOUND_MISSING"
+
+
+def test_g_sha_bound_red_expected_candidate_tree_empty_string():
+    result = gates.gate_sha_bound_proof(artifact={"candidate_tree": TREE}, expected_candidate_tree="")
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_SHA_BOUND_MISSING"
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +453,16 @@ def test_g_canary_first_green_exact_green_canary():
                                      canary_record={"candidate_tree": TREE, "passed": True},
                                      candidate_tree=TREE)
     assert result["ok"] is True and result["reason_code"] == "G_CANARY_FIRST_OK"
+
+
+def test_g_canary_first_red_candidate_tree_missing_never_vacuously_matches_none():
+    # Without a real candidate_tree, a canary_record with candidate_tree=None
+    # would otherwise "match" by coincidence (None == None) — must BLOCK.
+    result = gates.gate_canary_first(canary_required=True,
+                                     canary_record={"candidate_tree": None, "passed": True},
+                                     candidate_tree=None)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_CANARY_FIRST_MISSING"
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +555,51 @@ def test_g_frozen_finish_line_red_required_test_cross_candidate():
         required_test_results={test_id: {"passed": True, "candidate_tree": OTHER_TREE}}, candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
+
+
+def test_g_frozen_finish_line_red_spec_sha_missing():
+    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(spec_sha=None), changed_paths=[])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
+    assert result["missing_field"] == "spec_sha"
+
+
+def test_g_frozen_finish_line_red_roadmap_sha_missing():
+    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(roadmap_sha=""), changed_paths=[])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
+    assert result["missing_field"] == "roadmap_sha"
+
+
+def test_g_frozen_finish_line_red_authority_instruction_hash_missing():
+    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(authority_instruction_hash=None),
+                                           changed_paths=[])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
+    assert result["missing_field"] == "authority_instruction_hash"
+
+
+def test_g_frozen_finish_line_red_criterion_bindings_missing():
+    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(criterion_bindings={}),
+                                           changed_paths=[])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
+    assert "criterion_bindings" in result["reason"]
+
+
+def test_g_frozen_finish_line_red_ac_binding_with_empty_required_tests_never_vacuously_satisfiable():
+    empty_required_tests_bindings = {
+        "AC-C8-EMPTY": {
+            "allowed_paths": ["src/joao_orchestrator/bubble/gates.py"],
+            "required_tests": [],
+            "allowed_actions": ["modify"],
+        }
+    }
+    result = gates.gate_frozen_finish_line(
+        frozen_mission=_frozen_mission(criterion_bindings=empty_required_tests_bindings), changed_paths=[])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
+    assert result["offending_ac"] == "AC-C8-EMPTY"
 
 
 def test_g_frozen_finish_line_green_mapped_path_and_tree_bound_passing_test():

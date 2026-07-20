@@ -69,11 +69,13 @@ def gate_dbl_audit(*, risk_tier: str | None, builder_provider: str | None,
     verdict, exactly as `validate_reviewer_verdict`'s `proof.reviewer` +
     the controller-computed `candidate_tree` binding would produce.
 
-    `normal` requires 1 ACCEPT from a provider whose family != builder's.
-    `critical` requires 2 ACCEPTs from providers whose families are mutually
-    distinct AND != builder's family — matching two tools of the SAME family
-    (e.g. Codex + a formal-GPT import: both `provider_family="openai"`) does
-    NOT satisfy critical (finding GPT v3).
+    `normal` requires EXACTLY 1 ACCEPT from a provider whose family !=
+    builder's — 0 or 2+ accepted verdicts both BLOCK (correction loop:
+    exact cardinality, not a floor). `critical` requires EXACTLY 2 ACCEPTs
+    from providers whose families are mutually distinct AND != builder's
+    family — 0, 1 or 3+ accepted verdicts all BLOCK. Matching two tools of
+    the SAME family (e.g. Codex + a formal-GPT import: both
+    `provider_family="openai"`) does NOT satisfy critical (finding GPT v3).
     """
     # D1: risk_tier absent/invalid => BLOCK, never a silent "normal" default.
     if risk_tier not in _DBL_AUDIT_REQUIRED_ACCEPTS:
@@ -84,6 +86,13 @@ def gate_dbl_audit(*, risk_tier: str | None, builder_provider: str | None,
     if not builder_provider or not builder_family:
         return _block("G_DBL_AUDIT_INSUFFICIENT_REVIEWERS",
                       "run.builder_provider/builder_family missing — cannot verify reviewer independence",
+                      candidate_tree)
+    if not candidate_tree:
+        # correction loop finding #2: a missing/empty candidate_tree means
+        # there is nothing concrete for any verdict to be bound to — never a
+        # vacuous pass just because no mismatch could be detected.
+        return _block("G_DBL_AUDIT_INSUFFICIENT_REVIEWERS",
+                      "candidate_tree is missing/empty — cannot bind or verify any reviewer verdict",
                       candidate_tree)
     verdicts = reviewer_verdicts or []
 
@@ -125,19 +134,33 @@ def gate_dbl_audit(*, risk_tier: str | None, builder_provider: str | None,
             # verdicts is fail-closed BLOCK — never silently accepted with 2 same-family
             # verdicts, and never a claim that a 3rd automatic reviewer was invented.
             return _block("G_DBL_AUDIT_NO_DISTINCT_FAMILY_AVAILABLE",
-                          f"critical tier requires {required} ACCEPT verdicts of mutually distinct "
+                          f"critical tier requires exactly {required} ACCEPT verdicts of mutually distinct "
                           f"provider_family (all != builder family {builder_family!r}); only "
                           f"{len(accepted)} qualifying verdict(s) present",
                           candidate_tree, accepted_count=len(accepted), required=required)
-        return _pass("G_DBL_AUDIT_OK", "critical tier: 2 ACCEPT verdicts, distinct families, tree-bound",
+        if len(accepted) > required:
+            # correction loop finding #3: EXACT cardinality, not a floor — a
+            # 3rd+ accepted verdict is never silently ignored/tolerated, even
+            # if it is itself distinct-family and non-builder.
+            return _block("G_DBL_AUDIT_TOO_MANY_REVIEWERS",
+                          f"critical tier requires exactly {required} ACCEPT verdicts; "
+                          f"{len(accepted)} qualifying verdicts present",
+                          candidate_tree, accepted_count=len(accepted), required=required)
+        return _pass("G_DBL_AUDIT_OK", "critical tier: exactly 2 ACCEPT verdicts, distinct families, tree-bound",
                     candidate_tree, providers=providers, families=families)
 
     if len(accepted) < required:
         return _block("G_DBL_AUDIT_INSUFFICIENT_REVIEWERS",
-                      f"{risk_tier} tier requires {required} ACCEPT verdict(s) from a provider != builder; "
-                      f"only {len(accepted)} qualifying verdict(s) present",
+                      f"{risk_tier} tier requires exactly {required} ACCEPT verdict(s) from a provider != "
+                      f"builder; only {len(accepted)} qualifying verdict(s) present",
                       candidate_tree, accepted_count=len(accepted), required=required)
-    return _pass("G_DBL_AUDIT_OK", f"{risk_tier} tier: {required} ACCEPT verdict(s), tree-bound",
+    if len(accepted) > required:
+        # correction loop finding #3: exactly 1 for normal, never 2+.
+        return _block("G_DBL_AUDIT_TOO_MANY_REVIEWERS",
+                      f"{risk_tier} tier requires exactly {required} ACCEPT verdict(s); "
+                      f"{len(accepted)} qualifying verdicts present",
+                      candidate_tree, accepted_count=len(accepted), required=required)
+    return _pass("G_DBL_AUDIT_OK", f"{risk_tier} tier: exactly {required} ACCEPT verdict(s), tree-bound",
                 candidate_tree, providers=providers)
 
 
@@ -246,7 +269,22 @@ def gate_no_stale_entrypoint(*, discovered_callables: list[dict[str, Any]] | Non
     canonical, allowlisted one (`G_NO_STALE_DUPLICATE_PATH`) — both are real,
     non-overlapping failure shapes the contract names separately.
     """
-    canonical = set(canonical_entrypoints or [])
+    # correction loop finding #2: an "exhaustive inventory" gate that receives
+    # NO inventory (or no allowlist to check it against) can prove nothing —
+    # an empty/missing input must never vacuously pass as "nothing wrong
+    # found". A genuinely empty repo inventory is not a real-world case this
+    # gate is ever evaluated against; treat it as malformed/unusable input.
+    if not discovered_callables:
+        return _block("G_NO_STALE_UNLISTED_DISPATCH",
+                      "discovered_callables is missing/empty — cannot prove an exhaustive entrypoint "
+                      "inventory ran; a vacuous pass is never accepted as evidence",
+                      candidate_tree)
+    if not canonical_entrypoints:
+        return _block("G_NO_STALE_UNLISTED_DISPATCH",
+                      "canonical_entrypoints allowlist is missing/empty — cannot verify any discovered "
+                      "callable against it",
+                      candidate_tree)
+    canonical = set(canonical_entrypoints)
     effects: dict[str, list[dict[str, Any]]] = {}
     for callable_ in discovered_callables or []:
         effects.setdefault(callable_.get("effect"), []).append(callable_)
@@ -294,6 +332,14 @@ def gate_sha_bound_proof(*, artifact: dict[str, Any] | None, expected_candidate_
     specific check (the write-time-only call site has nothing to recompute
     against yet).
     """
+    if not expected_candidate_tree:
+        # correction loop finding #2: without knowing what tree the artifact
+        # is being consumed FOR, no binding check below can mean anything —
+        # a missing expected_candidate_tree must never let a mismatch check
+        # be silently skipped into a pass.
+        return _block("G_SHA_BOUND_MISSING",
+                      "expected_candidate_tree is missing/empty — cannot verify any artifact binding",
+                      expected_candidate_tree)
     if not isinstance(artifact, dict) or not artifact.get("candidate_tree"):
         return _block("G_SHA_BOUND_MISSING", "artifact has no candidate_tree field", expected_candidate_tree)
     artifact_tree = artifact["candidate_tree"]
@@ -303,7 +349,7 @@ def gate_sha_bound_proof(*, artifact: dict[str, Any] | None, expected_candidate_
                       f"consumption time yields {recomputed_candidate_tree!r} — candidate mutated between "
                       "proof write and proof consumption",
                       expected_candidate_tree, artifact_tree=artifact_tree)
-    if expected_candidate_tree is not None and artifact_tree != expected_candidate_tree:
+    if artifact_tree != expected_candidate_tree:
         return _block("G_SHA_BOUND_CROSS_CANDIDATE",
                       f"artifact is bound to candidate_tree {artifact_tree!r}, but is being presented as "
                       f"proof for a different candidate {expected_candidate_tree!r}",
@@ -327,6 +373,13 @@ def gate_canary_first(*, canary_required: bool, canary_record: dict[str, Any] | 
     if not canary_required:
         return _pass("G_CANARY_FIRST_NOT_REQUIRED", "policy does not require a canary for this run",
                     candidate_tree, skipped=True)
+    if not candidate_tree:
+        # correction loop finding #2: without a real candidate_tree there is
+        # nothing to bind a canary record to — never let a None==None
+        # coincidence between an absent candidate_tree and an absent/stale
+        # canary_record.candidate_tree read as "matched".
+        return _block("G_CANARY_FIRST_MISSING",
+                      "candidate_tree is missing/empty — cannot verify any canary binding", candidate_tree)
     if not isinstance(canary_record, dict):
         return _block("G_CANARY_FIRST_MISSING", "canary_required=true but no canary record exists for this candidate",
                       candidate_tree)
@@ -414,8 +467,34 @@ def gate_frozen_finish_line(*, frozen_mission: dict[str, Any] | None,
                       "frozen_mission is missing or has no valid risk_tier (D1) — cannot evaluate scope",
                       candidate_tree)
 
+    # correction loop finding #2: every one of these frozen_mission fields is
+    # itself a mandatory, contractually-required part of the artefact
+    # (JOAO_C8_GATE_CONTRACTS.md G-FROZEN-FINISH-LINE) — missing/empty must
+    # BLOCK, never be silently treated as "not applicable this run".
+    for field in ("spec_sha", "roadmap_sha", "authority_instruction_hash"):
+        if not frozen_mission.get(field):
+            return _block("G_FROZEN_FINISH_LINE_SCOPE_CREEP",
+                          f"frozen_mission.{field} is missing/empty — a mission cannot be frozen without it",
+                          candidate_tree, missing_field=field)
+    if not frozen_mission.get("criterion_bindings"):
+        return _block("G_FROZEN_FINISH_LINE_SCOPE_CREEP",
+                      "frozen_mission.criterion_bindings is missing/empty — no acceptance criterion could "
+                      "ever be satisfied; a criterion_bindings-free mission can never map a changed path",
+                      candidate_tree)
+
     forbidden_paths = list(frozen_mission.get("forbidden_paths") or [])
     bindings: dict[str, Any] = dict(frozen_mission.get("criterion_bindings") or {})
+    for ac_id, binding in bindings.items():
+        if not (binding or {}).get("required_tests"):
+            # finding GPT v3, sharpened by the correction loop: an AC binding
+            # with an EMPTY required_tests list would otherwise be "satisfied
+            # by declaration alone" the instant it's touched — exactly the
+            # loophole this gate exists to close. Malformed at freeze time,
+            # not just at consumption time.
+            return _block("G_FROZEN_FINISH_LINE_SCOPE_CREEP",
+                          f"criterion_bindings[{ac_id!r}].required_tests is missing/empty — this AC could "
+                          "never be provably satisfied",
+                          candidate_tree, offending_ac=ac_id)
 
     touched_acs: set[str] = set()
 

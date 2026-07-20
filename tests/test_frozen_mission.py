@@ -116,7 +116,9 @@ def test_real_frozen_mission_artifact_gates_a_compliant_changeset(tmp_path):
     run_id = value.start(project_id="fixture", workspace=workspace, mission="fix",
                          targeted_tests=[[sys.executable, "-c", "pass"]],
                          full_tests=[[sys.executable, "-c", "pass"]],
-                         risk_tier="normal", forbidden_paths=["memory/lessons.jsonl"],
+                         risk_tier="normal", spec_sha="s" * 40, roadmap_sha="r" * 40,
+                         authority_instruction_hash="h" * 64,
+                         forbidden_paths=["memory/lessons.jsonl"],
                          criterion_bindings=bindings)
     frozen = json.loads((tmp_path / "state" / "runs" / run_id / "frozen_mission.json").read_text())
 
