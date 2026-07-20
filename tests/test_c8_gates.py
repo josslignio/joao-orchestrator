@@ -12,6 +12,8 @@ it consumes) — proven separately in `tests/test_frozen_mission.py`.
 """
 from __future__ import annotations
 
+import pytest
+
 from src.joao_orchestrator.bubble import gates
 
 TREE = "a" * 40
@@ -489,40 +491,47 @@ def _frozen_mission(**overrides) -> dict:
 
 
 def test_g_frozen_finish_line_red_missing_risk_tier():
-    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(risk_tier=None), changed_paths=[])
+    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(risk_tier=None), changed_paths=[],
+                                           candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
+    assert "risk_tier" in result["reason"]
 
 
 def test_g_frozen_finish_line_red_forbidden_path():
     result = gates.gate_frozen_finish_line(
         frozen_mission=_frozen_mission(),
-        changed_paths=[{"path": "memory/lessons.jsonl", "action": "modify"}])
+        changed_paths=[{"path": "memory/lessons.jsonl", "action": "modify"}], candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
+    assert result["offending_path"] == "memory/lessons.jsonl"
 
 
 def test_g_frozen_finish_line_red_scope_creep_unmapped_path_eighth_gate_style():
     # simulates "an 8th gate appearing" — a changed path with no covering AC at all
     result = gates.gate_frozen_finish_line(
         frozen_mission=_frozen_mission(),
-        changed_paths=[{"path": "src/joao_orchestrator/bubble/eighth_gate.py", "action": "create"}])
+        changed_paths=[{"path": "src/joao_orchestrator/bubble/eighth_gate.py", "action": "create"}],
+        candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
+    assert result["offending_path"] == "src/joao_orchestrator/bubble/eighth_gate.py"
 
 
 def test_g_frozen_finish_line_red_correction_without_acceptance_criterion_id():
     result = gates.gate_frozen_finish_line(
         frozen_mission=_frozen_mission(), changed_paths=[],
-        corrections=[{"acceptance_criterion_id": None}])
+        corrections=[{"acceptance_criterion_id": None}], candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
+    assert "acceptance_criterion_id" in result["reason"]
 
 
 def test_g_frozen_finish_line_red_correction_requires_new_authority():
     result = gates.gate_frozen_finish_line(
         frozen_mission=_frozen_mission(), changed_paths=[],
-        corrections=[{"acceptance_criterion_id": None, "out_of_scope_but_valid": True}])
+        corrections=[{"acceptance_criterion_id": None, "out_of_scope_but_valid": True}],
+        candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_FROZEN_FINISH_LINE_REQUIRES_NEW_AUTHORITY"
 
@@ -558,14 +567,16 @@ def test_g_frozen_finish_line_red_required_test_cross_candidate():
 
 
 def test_g_frozen_finish_line_red_spec_sha_missing():
-    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(spec_sha=None), changed_paths=[])
+    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(spec_sha=None), changed_paths=[],
+                                           candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
     assert result["missing_field"] == "spec_sha"
 
 
 def test_g_frozen_finish_line_red_roadmap_sha_missing():
-    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(roadmap_sha=""), changed_paths=[])
+    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(roadmap_sha=""), changed_paths=[],
+                                           candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
     assert result["missing_field"] == "roadmap_sha"
@@ -573,7 +584,7 @@ def test_g_frozen_finish_line_red_roadmap_sha_missing():
 
 def test_g_frozen_finish_line_red_authority_instruction_hash_missing():
     result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(authority_instruction_hash=None),
-                                           changed_paths=[])
+                                           changed_paths=[], candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
     assert result["missing_field"] == "authority_instruction_hash"
@@ -581,7 +592,7 @@ def test_g_frozen_finish_line_red_authority_instruction_hash_missing():
 
 def test_g_frozen_finish_line_red_criterion_bindings_missing():
     result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(criterion_bindings={}),
-                                           changed_paths=[])
+                                           changed_paths=[], candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
     assert "criterion_bindings" in result["reason"]
@@ -596,7 +607,8 @@ def test_g_frozen_finish_line_red_ac_binding_with_empty_required_tests_never_vac
         }
     }
     result = gates.gate_frozen_finish_line(
-        frozen_mission=_frozen_mission(criterion_bindings=empty_required_tests_bindings), changed_paths=[])
+        frozen_mission=_frozen_mission(criterion_bindings=empty_required_tests_bindings), changed_paths=[],
+        candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
     assert result["offending_ac"] == "AC-C8-EMPTY"
@@ -612,3 +624,185 @@ def test_g_frozen_finish_line_green_mapped_path_and_tree_bound_passing_test():
         required_test_results={test_id: {"passed": True, "candidate_tree": TREE}}, candidate_tree=TREE)
     assert result["ok"] is True and result["reason_code"] == "G_FROZEN_FINISH_LINE_OK"
     assert result["touched_acceptance_criteria"] == ["AC-C8-001"]
+
+
+# ===========================================================================
+# Correction loop 3 — one adversarial test per audited fail-open, each
+# reproducing the counter-audit's EXACT repro case (red before the fix in
+# gates.py, green after). Findings #1-#6; #7 lives in
+# tests/test_g_hermetic_self_check.py (it is a conftest/fixture defect).
+# ===========================================================================
+
+
+def test_c8a_l3_finding1_verdict_with_no_identity_fields_is_malformed_not_accepted():
+    # REPRO (was: ok=True G_DBL_AUDIT_OK with providers=[None]) — a verdict
+    # carrying no provider/provider_family/model at all was counted as a
+    # valid independent reviewer.
+    result = gates.gate_dbl_audit(
+        risk_tier="normal", builder_provider="zai-coding-plan", builder_family="zai",
+        reviewer_verdicts=[{"ok": True, "decision": "pass", "candidate_tree": TREE}],
+        candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_MALFORMED_VERDICT"
+    assert set(result["missing_fields"]) == {"provider", "provider_family", "model"}
+
+
+@pytest.mark.parametrize("missing_field", ["provider", "provider_family", "model"])
+def test_c8a_l3_finding1_each_identity_field_is_individually_required(missing_field):
+    verdict = _verdict("codex-subscription", "openai")
+    verdict.pop(missing_field)
+    result = gates.gate_dbl_audit(
+        risk_tier="normal", builder_provider="zai-coding-plan", builder_family="zai",
+        reviewer_verdicts=[verdict], candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_MALFORMED_VERDICT"
+    assert result["missing_fields"] == [missing_field]
+
+
+@pytest.mark.parametrize("blank", ["", "   ", None, 123])
+def test_c8a_l3_finding1_blank_or_non_string_identity_is_also_malformed(blank):
+    verdict = _verdict("codex-subscription", "openai")
+    verdict["provider"] = blank
+    result = gates.gate_dbl_audit(
+        risk_tier="normal", builder_provider="zai-coding-plan", builder_family="zai",
+        reviewer_verdicts=[verdict], candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_MALFORMED_VERDICT"
+
+
+def test_c8a_l3_finding2_codex_pass_claude_pass_mistral_block_is_a_disagreement():
+    # REPRO (was: ok=True G_DBL_AUDIT_OK) — the dissenting BLOCK verdict was
+    # silently filtered out, so a correct distinct-family ACCEPT count
+    # out-voted it. D4 forbids any automatic tie-break.
+    result = gates.gate_dbl_audit(
+        risk_tier="critical", builder_provider="zai-coding-plan", builder_family="zai",
+        reviewer_verdicts=[_verdict("codex-subscription", "openai"),
+                           _verdict("claude-cli", "anthropic"),
+                           _verdict("mistral-cli", "mistral", ok=False, decision="block")],
+        candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_REVIEWER_DISAGREEMENT"
+    assert result["dissenting_providers"] == ["mistral-cli"]
+
+
+@pytest.mark.parametrize("decision,ok", [("block", False), ("p1", False), ("p1", True)])
+def test_c8a_l3_finding2_any_dissent_shape_blocks_a_critical_run(decision, ok):
+    result = gates.gate_dbl_audit(
+        risk_tier="critical", builder_provider="zai-coding-plan", builder_family="zai",
+        reviewer_verdicts=[_verdict("codex-subscription", "openai"),
+                           _verdict("claude-cli", "anthropic"),
+                           _verdict("mistral-cli", "mistral", ok=ok, decision=decision)],
+        candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_REVIEWER_DISAGREEMENT"
+
+
+def test_c8a_l3_finding2_dissent_cannot_be_outvoted_by_adding_more_accepts():
+    # The dissent check runs BEFORE any counting, so piling on ACCEPTs can
+    # never drown out a single BLOCK.
+    result = gates.gate_dbl_audit(
+        risk_tier="critical", builder_provider="zai-coding-plan", builder_family="zai",
+        reviewer_verdicts=[_verdict("codex-subscription", "openai"),
+                           _verdict("claude-cli", "anthropic"),
+                           _verdict("gemini-cli", "google"),
+                           _verdict("mistral-cli", "mistral", ok=False, decision="block")],
+        candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_REVIEWER_DISAGREEMENT"
+
+
+def test_c8a_l3_finding2_unanimous_critical_still_passes():
+    # GREEN contrast: no dissent present -> the tier's normal rules apply.
+    result = gates.gate_dbl_audit(
+        risk_tier="critical", builder_provider="zai-coding-plan", builder_family="zai",
+        reviewer_verdicts=[_verdict("codex-subscription", "openai"),
+                           _verdict("claude-cli", "anthropic")],
+        candidate_tree=TREE)
+    assert result["ok"] is True and result["reason_code"] == "G_DBL_AUDIT_OK"
+
+
+def test_c8a_l3_finding3_frozen_finish_line_none_tree_no_longer_self_matches():
+    # REPRO (was: ok=True G_FROZEN_FINISH_LINE_OK) — candidate_tree=None and
+    # evidence candidate_tree=None matched each other by coincidence.
+    frozen = gates.build_frozen_mission(
+        spec_sha="s" * 40, roadmap_sha="r" * 40, authority_instruction_hash="h" * 64,
+        risk_tier="normal", canary_required=False, forbidden_paths=[],
+        criterion_bindings={"AC-1": {"allowed_paths": ["src/x.py"],
+                                     "required_tests": ["t::a"],
+                                     "allowed_actions": ["modify"]}})
+    result = gates.gate_frozen_finish_line(
+        frozen_mission=frozen, changed_paths=[{"path": "src/x.py", "action": "modify"}],
+        required_test_results={"t::a": {"passed": True, "candidate_tree": None}},
+        candidate_tree=None)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
+    assert "candidate_tree" in result["reason"]
+
+
+def test_c8a_l3_finding3_frozen_finish_line_empty_string_tree_also_blocks():
+    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(), changed_paths=[],
+                                           candidate_tree="")
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_FROZEN_FINISH_LINE_SCOPE_CREEP"
+    assert "candidate_tree" in result["reason"]
+
+
+def test_c8a_l3_finding4_hermetic_missing_audit_journal_blocks():
+    # REPRO (was: ok=True G_HERMETIC_OK) — `touches or []` made an absent
+    # journal indistinguishable from a clean one.
+    result = gates.gate_hermetic(touches=None)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_HERMETIC_MISSING_AUDIT_JOURNAL"
+
+
+def test_c8a_l3_finding4_hermetic_empty_journal_is_still_a_clean_pass():
+    # GREEN contrast: an EXPLICITLY empty journal means the auditor ran and
+    # saw nothing — that remains a pass, distinct from `None`.
+    result = gates.gate_hermetic(touches=[])
+    assert result["ok"] is True and result["reason_code"] == "G_HERMETIC_OK"
+
+
+def test_c8a_l3_finding5_callable_without_effect_field_is_malformed_inventory():
+    # REPRO (was: ok=True G_NO_STALE_OK) — a record with no `effect` key was
+    # grouped under None and passed because it was otherwise canonical=True.
+    result = gates.gate_no_stale_entrypoint(
+        discovered_callables=[{"name": "X.run", "canonical": True,
+                               "protected": True, "predates_gates": False}],
+        canonical_entrypoints=["X.run"])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_NO_STALE_UNLISTED_DISPATCH"
+    assert result["missing_fields"] == ["effect"]
+
+
+def test_c8a_l3_finding5_callable_without_name_field_is_malformed_inventory():
+    result = gates.gate_no_stale_entrypoint(
+        discovered_callables=[{"effect": "dispatch", "canonical": True,
+                               "protected": True, "predates_gates": False}],
+        canonical_entrypoints=["X.run"])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_NO_STALE_UNLISTED_DISPATCH"
+    assert result["missing_fields"] == ["name"]
+
+
+def test_c8a_l3_finding5_non_dict_inventory_entry_is_malformed():
+    result = gates.gate_no_stale_entrypoint(
+        discovered_callables=["ExecutionBackend.execute"], canonical_entrypoints=["ExecutionBackend.execute"])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_NO_STALE_UNLISTED_DISPATCH"
+
+
+@pytest.mark.parametrize("bad_name", ["", "   ", None, 7])
+def test_c8a_l3_finding6_auth_io_requires_a_real_gate_name(bad_name):
+    # REPRO (was: ok=True G_AUTH_IO_OK with gate_name="") — a verdict was
+    # attributed to an unnamed gate.
+    result = gates.gate_auth_io(gate_name=bad_name, required_entrypoint_symbols=["A.b"],
+                                referenced_symbols=["A.b"], resolvable_symbols=["A.b"])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_AUTH_IO_HELPER_ONLY_COVERAGE"
+    assert "gate_name" in result["reason"]
+
+
+def test_c8a_l3_finding6_auth_io_named_gate_still_passes():
+    result = gates.gate_auth_io(gate_name="G-AUTH-IO", required_entrypoint_symbols=["A.b"],
+                                referenced_symbols=["A.b"], resolvable_symbols=["A.b"])
+    assert result["ok"] is True and result["reason_code"] == "G_AUTH_IO_OK"

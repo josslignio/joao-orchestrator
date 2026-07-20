@@ -7,6 +7,11 @@ __pycache__/
 !memory/lessons.jsonl
 !TRACEABILITY_V4.jsonl
 !DECISION_LOG.jsonl
+# C8-A / G-HERMETIC: the isolated memory root is seeded from these FROZEN,
+# COMMITTED fixtures instead of the live memory/ data — they are only frozen
+# if git actually versions them, so the blanket *.jsonl rule must not swallow
+# them (same explicit-negation pattern as memory/lessons.jsonl above).
+!tests/fixtures/*.jsonl
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

@@ -96,7 +96,44 @@ def gate_dbl_audit(*, risk_tier: str | None, builder_provider: str | None,
                       candidate_tree)
     verdicts = reviewer_verdicts or []
 
+    # Correction loop 3, finding #2 (D4 — no automatic tie-break): a
+    # reviewer that answered BLOCK or P1 is a genuine DISAGREEMENT and must
+    # halt a critical run outright, even when the required number of
+    # distinct-family ACCEPTs is otherwise satisfied. The previous
+    # `accepted = [... if decision == "pass"]` filter silently DISCARDED
+    # every dissenting verdict, so Codex PASS + Claude PASS + Mistral BLOCK
+    # reported G_DBL_AUDIT_OK. Checked BEFORE any counting so a dissent can
+    # never be out-voted by adding more ACCEPTs. Scoped to `critical`,
+    # matching D4's own wording (`JOAO_C8_OPEN_DECISIONS.md`).
+    if risk_tier == "critical":
+        dissenting = [v for v in verdicts
+                      if v.get("decision") in ("block", "p1") or v.get("ok") is False]
+        if dissenting:
+            return _block("G_DBL_AUDIT_REVIEWER_DISAGREEMENT",
+                          f"critical tier: {len(dissenting)} reviewer verdict(s) dissent "
+                          f"(decision block/p1 or ok=false) — D4 forbids any automatic tie-break; "
+                          "a disagreement BLOCKs and escalates to the Boss, it is never out-voted",
+                          candidate_tree,
+                          dissenting_providers=[v.get("provider") for v in dissenting])
+
     accepted = [v for v in verdicts if v.get("ok") is True and v.get("decision") == "pass"]
+
+    # Correction loop 3, finding #1: a verdict counted toward the tier's
+    # reviewer requirement must carry a real, non-empty identity. Without
+    # this, `{"ok": True, "decision": "pass", "candidate_tree": TREE}` — no
+    # provider, no family, no model — counted as a valid independent
+    # reviewer (providers=[None]), and the builder-self-review and
+    # distinct-family checks below silently compared None against None.
+    for verdict in accepted:
+        # A non-str value (or a blank/whitespace one) is just as unusable as
+        # an absent key — both are malformed, neither is coerced.
+        missing = [field for field in ("provider", "provider_family", "model")
+                   if not isinstance(verdict.get(field), str) or not verdict.get(field).strip()]
+        if missing:
+            return _block("G_DBL_AUDIT_MALFORMED_VERDICT",
+                          f"an accepted verdict is missing required identity field(s) {missing} — "
+                          "an unidentified verdict can never prove reviewer independence",
+                          candidate_tree, missing_fields=missing)
 
     # Tree binding: every accepted verdict must be bound to the exact frozen candidate.
     for verdict in accepted:
@@ -190,8 +227,21 @@ def gate_hermetic(*, touches: list[dict[str, Any]] | None, candidate_tree: str |
 
     `ok=true` only if every touch of a covered root was `injected=True`
     (resolved under `tmp_path`/an explicitly injected substitute root).
+
+    `touches=None` means the audit journal is ABSENT — the auditor never ran,
+    or its output was lost. That is unprovable, not clean: it BLOCKs
+    (`G_HERMETIC_MISSING_AUDIT_JOURNAL`). Only an explicitly EMPTY list `[]`
+    means "the auditor ran and recorded no covered-root touch".
     """
-    for touch in touches or []:
+    if touches is None:
+        # Correction loop 3, finding #4: `for touch in touches or []` made a
+        # missing journal indistinguishable from a clean one, so an absent
+        # auditor silently reported G_HERMETIC_OK.
+        return _block("G_HERMETIC_MISSING_AUDIT_JOURNAL",
+                      "no file-open audit journal was supplied — hermeticity cannot be proven "
+                      "without one; an absent journal is never a clean journal",
+                      candidate_tree)
+    for touch in touches:
         if touch.get("injected") is True:
             continue
         root = touch.get("root")
@@ -222,6 +272,13 @@ def gate_auth_io(*, gate_name: str, required_entrypoint_symbols: list[str] | Non
     can still be imported/constructed (a stale name after a refactor is
     unresolvable).
     """
+    # Correction loop 3, finding #6: the gate's own identity is a required
+    # input — every message below names it, and a result attributed to an
+    # unnamed gate is unauditable. Checked first, before anything else.
+    if not isinstance(gate_name, str) or not gate_name.strip():
+        return _block("G_AUTH_IO_HELPER_ONLY_COVERAGE",
+                      "gate_name is missing/empty — a coverage verdict cannot be attributed to an unnamed gate",
+                      candidate_tree)
     required = list(required_entrypoint_symbols or [])
     if not required:
         return _block("G_AUTH_IO_HELPER_ONLY_COVERAGE",
@@ -287,7 +344,21 @@ def gate_no_stale_entrypoint(*, discovered_callables: list[dict[str, Any]] | Non
     canonical = set(canonical_entrypoints)
     effects: dict[str, list[dict[str, Any]]] = {}
     for callable_ in discovered_callables or []:
-        effects.setdefault(callable_.get("effect"), []).append(callable_)
+        # Correction loop 3, finding #5: a record with no `effect` key was
+        # silently grouped under the key None, so a malformed inventory entry
+        # passed as long as it was otherwise canonical=True. An inventory
+        # this gate cannot interpret is malformed input, not a clean result.
+        if not isinstance(callable_, dict):
+            return _block("G_NO_STALE_UNLISTED_DISPATCH",
+                          f"malformed discovered_callable (not an object): {callable_!r}", candidate_tree)
+        missing = [field for field in ("name", "effect")
+                   if not isinstance(callable_.get(field), str) or not callable_.get(field).strip()]
+        if missing:
+            return _block("G_NO_STALE_UNLISTED_DISPATCH",
+                          f"malformed discovered_callable missing required field(s) {missing}: {callable_!r} — "
+                          "an uninterpretable inventory entry can never prove an exhaustive inventory",
+                          candidate_tree, missing_fields=missing)
+        effects.setdefault(callable_["effect"], []).append(callable_)
 
     for effect, group in effects.items():
         non_canonical = [c for c in group if not _no_stale_is_canonical(c, canonical)]
@@ -462,6 +533,16 @@ def gate_frozen_finish_line(*, frozen_mission: dict[str, Any] | None,
     different tree than `candidate_tree` BLOCKs (finding GPT v3: a
     `criterion_bindings` entry is never satisfied by declaration alone).
     """
+    # Correction loop 3, finding #3: this was the only gate that never
+    # validated its own candidate_tree (unlike gate_dbl_audit /
+    # gate_sha_bound_proof). Without it, candidate_tree=None and a
+    # required_test evidence record carrying candidate_tree=None matched each
+    # other by coincidence (None == None) and the whole gate reported OK.
+    if not candidate_tree:
+        return _block("G_FROZEN_FINISH_LINE_SCOPE_CREEP",
+                      "candidate_tree is missing/empty — required_test evidence cannot be bound to, "
+                      "or verified against, a candidate that has no identity",
+                      candidate_tree)
     if not isinstance(frozen_mission, dict) or frozen_mission.get("risk_tier") not in ("normal", "critical"):
         return _block("G_FROZEN_FINISH_LINE_SCOPE_CREEP",
                       "frozen_mission is missing or has no valid risk_tier (D1) — cannot evaluate scope",

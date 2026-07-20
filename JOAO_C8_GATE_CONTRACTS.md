@@ -34,7 +34,10 @@ Chemins zéro-coût pour le 3ᵉ provider (décision d'implémentation, pas de n
 **Inputs :** `run.risk_tier` (`normal`|`critical` — D1 : absence → BLOCK) ; les verdicts du stage final, chacun avec son `reviewer.provider` **calculé par le contrôleur** (`reviewer_contract.py`, jamais l'identité auto-déclarée) ; `run.builder_provider`.
 **Output / reason codes :**
 - `ok=true` ssi : `normal` → exactement 1 verdict ACCEPT d'un provider ≠ builder ; `critical` → 2 verdicts ACCEPT de 2 providers **distincts entre eux ET distincts du builder**.
-- `G_DBL_AUDIT_INSUFFICIENT_REVIEWERS` — moins de verdicts ACCEPT que requis pour le tier.
+- `G_DBL_AUDIT_INSUFFICIENT_REVIEWERS` — moins de verdicts ACCEPT que requis pour le tier (couvre aussi : `risk_tier` absent/invalide, `builder_provider`/`builder_family` absent, `candidate_tree` absent/vide — entrées obligatoires, fail-closed).
+- `G_DBL_AUDIT_TOO_MANY_REVIEWERS` — **cardinalité EXACTE** : plus de verdicts ACCEPT que le tier n'en exige (`normal` > 1, `critical` > 2). Un verdict ACCEPT surnuméraire n'est jamais silencieusement ignoré ni toléré, même s'il est lui-même de famille distincte et non-builder.
+- `G_DBL_AUDIT_MALFORMED_VERDICT` — un verdict compté comme ACCEPT n'a pas d'identité exploitable : `provider`, `provider_family` ou `model` absent, vide, blanc, ou non-`str`. Un verdict non identifié ne peut jamais prouver l'indépendance du reviewer (sans ce garde, `{"ok": true, "decision": "pass", "candidate_tree": …}` comptait comme reviewer valide avec `providers=[None]`, et les checks builder-self-review / distinct-family comparaient `None` à `None`).
+- `G_DBL_AUDIT_REVIEWER_DISAGREEMENT` — **(D4)** tier critical : au moins un verdict dissident (`decision` ∈ {`block`,`p1`} ou `ok=false`) est présent. Évalué **AVANT** tout comptage, donc un dissident ne peut jamais être « out-voté » en ajoutant des ACCEPT. D4 interdit tout tie-break automatique : désaccord → BLOCK + escalade Boss.
 - `G_DBL_AUDIT_SAME_PROVIDER` — deux verdicts partagent un `reviewer.provider`.
 - `G_DBL_AUDIT_SAME_FAMILY` — tier critical : deux verdicts partagent un `provider_family` (ex. Codex+GPT = openai).
 - `G_DBL_AUDIT_BUILDER_SELF_REVIEW` — un reviewer a `provider == run.builder_provider` (ou `provider_family == builder_family`).
@@ -77,9 +80,12 @@ Après M2 (lot C8-A), la suite par défaut = **`EXIT=0`**. Le **défaut** D-044 
 
 **Inputs :** la valeur résolue de chaque root surchargable en début de session (`JOAO_MEMORY_DIR`, déjà A0.2 correctif 7 ; + équivalents ledger/specs que C8-A ajoute) ; le journal des chemins réellement ouverts pendant un run de test.
 **Output / reason codes :**
+- `G_HERMETIC_MISSING_AUDIT_JOURNAL` — **aucun journal d'ouvertures n'a été fourni** (`touches=None`) : l'auditeur n'a pas tourné, ou sa sortie est perdue. Un journal absent n'est jamais un journal propre — seule une liste **explicitement vide** (`[]`) signifie « l'auditeur a tourné et n'a vu aucune racine couverte ».
 - `G_HERMETIC_REAL_MEMORY_TOUCHED` — lecture/écriture hors de la copie isolée `JOAO_MEMORY_DIR`.
 - `G_HERMETIC_EXTERNAL_LEDGER_DEPENDENCY` — un test dépend d'un fichier hors repo et hors `tmp_path` (cas D-044 : `scripts/build_traceability.py` `DEFAULT_LEDGER = Path.home()/"Claude-HQ"/"DEFECTS_LEDGER.md"` — à injecter via fixture).
 - `G_HERMETIC_UNINJECTED_ROOT` — un module a résolu une constante de root vers un chemin réel non injecté.
+
+**Seeding de la racine mémoire isolée (correctif L3 #7) :** la fixture `_isolated_joao_memory_dir` sème les fichiers `.py` depuis les **sources du repo** (immuables, versionnées, hors périmètre du gate) mais toute **donnée** exclusivement depuis une **fixture gelée et committée** (`tests/fixtures/frozen_lessons.jsonl`), jamais depuis le `memory/` vivant. Auparavant elle copiait *chaque* fichier du vrai `memory/` avant même l'installation du hook — donc jamais interceptée, et le contenu « isolé » suivait le contenu live (remplacer `memory/lessons.jsonl` par 1 seul record faisait échouer `test_at_least_40_lessons` *à travers* la fixture « isolée »). Fixture gelée absente → `RuntimeError`, jamais un repli silencieux sur le fichier vivant.
 
 **Real entrypoint :** fixture autouse de session dans `tests/conftest.py` (étend `_isolated_joao_memory_dir` à TOUT root externe) + un auditeur d'ouvertures de fichier qui FAIL un test qui s'échappe. C'est un gate de **détection et d'échec**, pas seulement de fourniture d'une copie isolée.
 
@@ -93,7 +99,7 @@ Après M2 (lot C8-A), la suite par défaut = **`EXIT=0`**. Le **défaut** D-044 
 
 **Inputs :** pour chaque fichier de test de gate, la liste statique des call-sites dont dépendent ses assertions.
 **Output / reason codes :**
-- `G_AUTH_IO_HELPER_ONLY_COVERAGE` — un gate a des tests d'attaque mais aucun ne traverse le vrai entrypoint (le défaut d'origine du correctif A0.2 #5).
+- `G_AUTH_IO_HELPER_ONLY_COVERAGE` — un gate a des tests d'attaque mais aucun ne traverse le vrai entrypoint (le défaut d'origine du correctif A0.2 #5). Couvre aussi (correctif L3 #6) : `gate_name` absent/vide/blanc/non-`str` → BLOCK **avant toute autre vérification** — un verdict de couverture attribué à un gate anonyme est inauditable.
 - `G_AUTH_IO_ENTRYPOINT_UNREACHABLE` — l'entrypoint réel nommé ne peut être construit/appelé depuis un test (doc de contrat périmée / entrypoint refactoré).
 
 **Real entrypoint :** un **auditeur statique de suite de tests** (`scripts/audit_test_entrypoints.py`, nouveau) qui mappe chaque fichier de test de gate aux symboles d'entrypoint qu'il doit référencer ; exécuté en pre-close/CI (la cible auditée EST la suite de tests).
@@ -108,7 +114,7 @@ Après M2 (lot C8-A), la suite par défaut = **`EXIT=0`**. Le **défaut** D-044 
 
 **Inputs :** un inventaire AST (même technique que `test_a02_single_dispatch_point_ast_guard_no_direct_subprocess_in_adapters`) de tout callable atteignant (a) `ExecutionBackend.execute()`, (b) `RunRuntime.promote()`/`.approve()`, (c) une lecture de `PKG_ROOT`/artefact ; croisé contre une allowlist des entrypoints canoniques.
 **Output / reason codes :**
-- `G_NO_STALE_UNLISTED_DISPATCH` — un nouveau callable atteint le dispatch/promotion/lecture sans être dans l'allowlist (forme permanente et généralisée du garde single-dispatch d'A0.2, étendu « adapters seulement » → « tout le repo »).
+- `G_NO_STALE_UNLISTED_DISPATCH` — un nouveau callable atteint le dispatch/promotion/lecture sans être dans l'allowlist (forme permanente et généralisée du garde single-dispatch d'A0.2, étendu « adapters seulement » → « tout le repo »). Couvre aussi : inventaire absent/vide, allowlist absente/vide, et (correctif L3 #5) **entrée d'inventaire malformée** — un `discovered_callable` sans clé `name` ou `effect` exploitable (ou qui n'est pas un objet) était silencieusement groupé sous `None` et passait tant qu'il était par ailleurs `canonical=True` ; un inventaire ininterprétable ne peut jamais prouver un inventaire exhaustif.
 - `G_NO_STALE_DUPLICATE_PATH` — deux callables atteignent un effet équivalent, l'un non canonique.
 - `G_NO_STALE_LEGACY_UNPROTECTED` — un entrypoint inventorié prédate un gate et n'appelle pas la chaîne de gates courante.
 
@@ -180,7 +186,7 @@ pour chaque AC couvert par le run : CHACUN de ses required_tests doit produire u
 
 **Inputs :** `frozen_mission.json` ; l'ensemble des chemins modifiés du candidat ; toute correction/finding proposé en cours de run.
 **Output / reason codes :**
-- `G_FROZEN_FINISH_LINE_SCOPE_CREEP` — un changement ne mappe vers aucun critère gelé, ou touche un `forbidden_path`, ou sort d'`allowed_write_paths` (ex. un 8ᵉ gate, une claim OS-security, un changement de roadmap en cours de run).
+- `G_FROZEN_FINISH_LINE_SCOPE_CREEP` — un changement ne mappe vers aucun critère gelé, ou touche un `forbidden_path`, ou sort d'`allowed_write_paths` (ex. un 8ᵉ gate, une claim OS-security, un changement de roadmap en cours de run). Couvre aussi les entrées obligatoires manquantes : `spec_sha`, `roadmap_sha`, `authority_instruction_hash`, `criterion_bindings` vide, un AC dont `required_tests` est vide, et (correctif L3 #3) **`candidate_tree` absent/vide** — c'était le seul gate à ne pas valider son propre `candidate_tree` (contrairement à `gate_dbl_audit`/`gate_sha_bound_proof`), si bien qu'un `candidate_tree=None` et une preuve de test portant `candidate_tree=None` s'auto-appariaient par coïncidence (`None == None`) et validaient le gate.
 - `G_FROZEN_FINISH_LINE_REQUIRES_NEW_AUTHORITY` — le changement est réel et souhaitable mais exige un nouveau run/document Boss distinct — jamais une inclusion silencieuse.
 
 **Real entrypoint :** `RunRuntime.start()` écrit `frozen_mission.json` ; une fonction `bubble/gates.py` est appelée avant freeze/review (dans `_execute`) et compare l'état git réel du candidat au `frozen_mission.json`. Renforcé mécaniquement par les allowlists de G-NO-STALE-ENTRYPOINT et G-DBL-AUDIT. **Ce gate a désormais un vrai call-site et un vrai artefact, il n'est plus documentaire.**

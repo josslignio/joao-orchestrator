@@ -39,6 +39,51 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REAL_MEMORY_DIR = REPO_ROOT / "memory"
 
+# Correction loop 3, finding #7: the isolated memory root used to be seeded by
+# copying EVERY file out of the real `memory/` — including the live, mutable
+# `lessons.jsonl`. The copy happened before the audit hook was installed, so it
+# was never intercepted, and the "isolated" content therefore tracked whatever
+# the live brain currently held: replacing `memory/lessons.jsonl` with a single
+# record made `test_at_least_40_lessons` fail *through the isolated fixture*.
+# That is not isolation, it is a delayed read of live data.
+#
+# Seeding is now split by file KIND:
+#   - `.py` modules  -> copied from the repo's own source tree. These are
+#     immutable, versioned repo SOURCE (explicitly out of G-HERMETIC's scope,
+#     see `_hermetic_classify`), and the memory subsystem must execute its real
+#     code for `RunRuntime` injection/retro/ledger-sync to be exercised at all.
+#   - DATA files     -> copied from a FROZEN, COMMITTED fixture under
+#     `tests/fixtures/`, never from the live `memory/` directory. Content is
+#     pinned by git, so no test's assertions can drift with the live brain.
+FROZEN_MEMORY_DATA_FIXTURES: dict[str, Path] = {
+    "lessons.jsonl": Path(__file__).resolve().parent / "fixtures" / "frozen_lessons.jsonl",
+}
+
+
+def seed_isolated_memory_dir(destination: Path, *, module_source_dir: Path | None = None) -> Path:
+    """Populate `destination` as an isolated `memory/` root: real `.py` sources
+    from the repo, DATA exclusively from the frozen committed fixtures.
+
+    `module_source_dir` is injectable so the adversarial test can prove that a
+    decoy "live" memory directory can never influence the seeded DATA content.
+    """
+    module_source_dir = REAL_MEMORY_DIR if module_source_dir is None else Path(module_source_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    if module_source_dir.is_dir():
+        for item in module_source_dir.iterdir():
+            if item.name == "__pycache__" or not item.is_file():
+                continue
+            if item.suffix == ".py":  # repo SOURCE only — never live data
+                shutil.copy2(item, destination / item.name)
+    for name, frozen_source in FROZEN_MEMORY_DATA_FIXTURES.items():
+        if not frozen_source.is_file():
+            raise RuntimeError(
+                f"frozen memory data fixture is missing: {frozen_source} — the isolated memory root "
+                "must never fall back to copying the live memory/ data file"
+            )
+        shutil.copy2(frozen_source, destination / name)
+    return destination
+
 
 @pytest.fixture(autouse=True, scope="session")
 def _isolated_joao_memory_dir(tmp_path_factory):
@@ -52,13 +97,7 @@ def _isolated_joao_memory_dir(tmp_path_factory):
     # containing its own `memory/` subdirectory.
     fake_repo_root = tmp_path_factory.mktemp("joao-memory-isolated")
     isolated = fake_repo_root / "memory"
-    isolated.mkdir()
-    if REAL_MEMORY_DIR.is_dir():
-        for item in REAL_MEMORY_DIR.iterdir():
-            if item.name == "__pycache__":
-                continue
-            if item.is_file():
-                shutil.copy2(item, isolated / item.name)
+    seed_isolated_memory_dir(isolated)
     previous = os.environ.get("JOAO_MEMORY_DIR")
     os.environ["JOAO_MEMORY_DIR"] = str(isolated)
     try:

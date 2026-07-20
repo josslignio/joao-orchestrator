@@ -14,6 +14,7 @@ depending on any real machine path for the bulk of the coverage).
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -197,3 +198,74 @@ def test_hermetic_ignores_already_open_fd_argument():
     touches_before = len(conftest._HERMETIC_TOUCHES)
     conftest._hermetic_audit_hook("open", (3, "r", None))
     assert len(conftest._HERMETIC_TOUCHES) == touches_before
+
+
+# ---------------------------------------------------------------------------
+# Correction loop 3, finding #7: the "isolated" memory fixture must not track
+# the LIVE memory/ content. Adversarial repro of the audited case.
+# ---------------------------------------------------------------------------
+
+
+def _decoy_live_memory(root: Path) -> Path:
+    """A stand-in 'live' memory/ dir holding a single lesson record — exactly
+    the audited repro ('remplacer memory/lessons.jsonl par 1 seul record')."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "lessons.jsonl").write_text(
+        json.dumps({"id": "L-999", "source_defect": "D-999", "severity": 1,
+                    "rule": "decoy", "tags": ["decoy"], "applies_to": ["builder"],
+                    "trigger_contexts": [], "recurrences": 0, "date": "2026-07-20",
+                    "project": "decoy"}, ensure_ascii=False) + "\n",
+        encoding="utf-8")
+    (root / "select_lessons.py").write_text("# decoy module source\n", encoding="utf-8")
+    return root
+
+
+def test_isolated_memory_seeding_ignores_live_lessons_content(tmp_path):
+    """REPRO: before the fix, seeding copied EVERY file (including the live,
+    mutable `lessons.jsonl`) out of the real `memory/` dir, so a 1-record live
+    file produced a 1-record 'isolated' file and `test_at_least_40_lessons`
+    failed THROUGH the supposedly isolated fixture. DATA now comes only from
+    the frozen, committed fixture, so a decoy live root cannot influence it.
+    """
+    decoy = _decoy_live_memory(tmp_path / "decoy-live-memory")
+    destination = tmp_path / "isolated" / "memory"
+
+    conftest.seed_isolated_memory_dir(destination, module_source_dir=decoy)
+
+    records = [json.loads(line) for line in
+               (destination / "lessons.jsonl").read_text().splitlines() if line.strip()]
+    assert len(records) >= 40, "seeded DATA must come from the frozen fixture, not the live/decoy file"
+    assert not any(r["id"] == "L-999" for r in records), "the decoy live record must never be seeded"
+
+
+def test_isolated_memory_seeding_is_byte_identical_to_the_committed_frozen_fixture(tmp_path):
+    destination = tmp_path / "isolated" / "memory"
+    conftest.seed_isolated_memory_dir(destination, module_source_dir=_decoy_live_memory(tmp_path / "decoy"))
+    frozen = conftest.FROZEN_MEMORY_DATA_FIXTURES["lessons.jsonl"]
+    assert (destination / "lessons.jsonl").read_bytes() == frozen.read_bytes()
+
+
+def test_isolated_memory_seeding_still_provides_the_real_module_sources(tmp_path):
+    # The .py modules ARE seeded from the repo source tree — the memory
+    # subsystem must run its real code under RunRuntime; only DATA is frozen.
+    destination = tmp_path / "isolated" / "memory"
+    conftest.seed_isolated_memory_dir(destination)
+    for module_name in ("inject.py", "retro.py", "select_lessons.py", "import_ledger.py"):
+        assert (destination / module_name).is_file(), f"{module_name} must be seeded from repo source"
+        assert (destination / module_name).read_bytes() == (conftest.REAL_MEMORY_DIR / module_name).read_bytes()
+
+
+def test_isolated_memory_seeding_refuses_to_fall_back_when_frozen_fixture_is_absent(tmp_path, monkeypatch):
+    # Fail closed: a missing frozen fixture must raise, never silently
+    # re-introduce a copy of the live data file.
+    monkeypatch.setitem(conftest.FROZEN_MEMORY_DATA_FIXTURES, "lessons.jsonl",
+                        tmp_path / "does-not-exist.jsonl")
+    with pytest.raises(RuntimeError, match="frozen memory data fixture is missing"):
+        conftest.seed_isolated_memory_dir(tmp_path / "isolated" / "memory")
+
+
+def test_session_isolated_memory_dir_matches_the_frozen_fixture(_isolated_joao_memory_dir):
+    # End-to-end: the ACTUAL session-wide fixture every other test consumes is
+    # seeded from the frozen committed content, not from live memory/.
+    assert (_isolated_joao_memory_dir / "lessons.jsonl").read_bytes() == \
+        conftest.FROZEN_MEMORY_DATA_FIXTURES["lessons.jsonl"].read_bytes()
