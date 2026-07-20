@@ -24,6 +24,7 @@ from .candidate import CandidateError, freeze_baseline, freeze_candidate, recomp
 from .change_capture import EMPTY_DIFF_SHA256, capture_full_diff, ignored_files_inventory
 from .reviewer_contract import validate_reviewer_verdict
 from . import promotion as promotion_mod
+from . import secure_import as secure_import_mod
 from .gates import build_frozen_mission
 
 
@@ -127,7 +128,15 @@ NEXT = {
     # ever start, not merely before promotion.
     RunStatus.PENDING: {RunStatus.PLANNING, RunStatus.STOPPED, RunStatus.BLOCKED},
     RunStatus.PLANNING: {RunStatus.READY, RunStatus.FAILED, RunStatus.STOPPED},
-    RunStatus.READY: {RunStatus.BUILDING, RunStatus.PAUSED, RunStatus.STOPPED},
+    # C8-B correction: READY -> BLOCKED is a pre-existing edge `run_once()`
+    # already tried to take (`"Codex plan review blocked"`) whenever the
+    # PRIMARY reviewer implements `review_stage` (e.g. `CodexCLIReviewer`,
+    # `GLMReviewer`) and its real "plan" stage verdict is not ok — the
+    # default `CodexEvidenceReviewer` has no `review_stage`, so this path
+    # was previously unreachable and untested with it. A real reviewer's
+    # negative plan verdict is a legitimate, expected outcome, not a
+    # programming error; the state machine must be able to record it.
+    RunStatus.READY: {RunStatus.BUILDING, RunStatus.PAUSED, RunStatus.STOPPED, RunStatus.BLOCKED},
     RunStatus.BUILDING: {RunStatus.TESTING, RunStatus.BLOCKED, RunStatus.FAILED, RunStatus.PAUSED, RunStatus.STOPPED},
     RunStatus.TESTING: {RunStatus.REVIEWING, RunStatus.FAILED, RunStatus.BLOCKED, RunStatus.PAUSED, RunStatus.STOPPED},
     RunStatus.REVIEWING: {RunStatus.NEEDS_APPROVAL, RunStatus.CORRECTING, RunStatus.BLOCKED, RunStatus.FAILED, RunStatus.PAUSED, RunStatus.STOPPED},
@@ -145,7 +154,12 @@ class RuntimeStateError(RuntimeError):
 
 
 class BuilderAdapter(ABC):
-    provider = "unknown"; model = "unknown"
+    # `provider_family` (C8-B, `JOAO_C8_GATE_CONTRACTS.md` G-DBL-AUDIT v4):
+    # the coarse identity `bubble.gates.gate_dbl_audit` actually compares —
+    # two adapters of the same underlying vendor (e.g. Codex + a GPT-formal
+    # import) must never be countable as two independent families. Declared
+    # per-class, alongside `provider`/`model`, never caller-settable.
+    provider = "unknown"; model = "unknown"; provider_family = "unknown"
     # A0.2 §12.1/§12.2: does this builder's own CLI need to phone its
     # provider (provider_transport_network) independent of the mission's
     # task_network? Declared per-class (not caller-settable) so it cannot be
@@ -168,7 +182,7 @@ class BuilderAdapter(ABC):
 
 
 class ReviewerAdapter(ABC):
-    provider = "unknown"; model = "unknown"
+    provider = "unknown"; model = "unknown"; provider_family = "unknown"
     @abstractmethod
     def review(self, run: dict[str, Any], run_dir: Path) -> dict[str, Any]: ...
 
@@ -260,7 +274,7 @@ class LocalTestRunner(TestRunnerAdapter):
 
 
 class SandboxBuilder(BuilderAdapter):
-    provider = "sandbox"; model = "deterministic-fixture"
+    provider = "sandbox"; model = "deterministic-fixture"; provider_family = "sandbox"
     def __init__(self, callback): self.callback = callback
     def build(self, mission, workspace, run_dir, allowed, correction): return self.callback(mission, workspace, correction)
 
@@ -288,7 +302,7 @@ class GLMBuilder(BuilderAdapter):
     reach only Z.AI while the mission's own commands stay network-denied)
     needs domain-scoped egress, which is a `container`/`vm` ExecutionBackend
     property, reported and not implemented in A0.2."""
-    provider = "zai-coding-plan"; model = "zai-coding-plan/glm-4.5-air"
+    provider = "zai-coding-plan"; model = "zai-coding-plan/glm-4.5-air"; provider_family = "zai"
     requires_network_transport = True
 
     def __init__(self, executable: Path = Path("~/.local/bin/joao-glm").expanduser(), backend: ExecutionBackend | None = None):
@@ -322,7 +336,7 @@ class CodexEvidenceReviewer(ReviewerAdapter):
     # M0 safe-stop (D-043/C-3): "exact-SHA" is an unqualified claim — the label now states
     # exactly what is proven: a worktree SHA at review time, NOT yet an immutable candidate
     # (that guarantee is RI-3, delivered by A0/M1-A — see SYSTEM_CONSTITUTION_V4.md §4).
-    provider = "codex"; model = "worktree-sha-at-review-time"
+    provider = "codex"; model = "worktree-sha-at-review-time"; provider_family = "openai"
     def review(self, run, run_dir):
         proof = run_dir / "review-import.json"
         if not proof.exists():
@@ -332,6 +346,91 @@ class CodexEvidenceReviewer(ReviewerAdapter):
                     "expected_candidate_tree": run.get("candidate_tree")}
         return validate_reviewer_verdict(proof.read_text(), expected_candidate_tree=run.get("candidate_tree"),
                                          provider=self.provider, model=self.model)
+
+
+class GPTFormalEvidenceReviewer(ReviewerAdapter):
+    """Secure-import-only reviewer for a formal GPT counter-audit
+    (`JOAO_WORKER_INTEGRATION_SPEC.md` §5, pre-C8-B correction #2). Identity
+    is fixed by the adapter/controller — NEVER by the imported JSON — exactly
+    like `CodexEvidenceReviewer`.
+
+    `provider_family == "openai"`, the SAME family as `CodexCLIReviewer`/
+    `CodexEvidenceReviewer`: this reviewer can NEVER satisfy a critical
+    tier's second, mutually-distinct family requirement alongside Codex
+    (`G_DBL_AUDIT_SAME_FAMILY`) — it is only ever valid as the sole
+    `normal`-tier reviewer, or as an additional non-family-critical opinion.
+
+    `inbox_dir` is the controller-owned inbox the orchestrator minted a
+    challenge into — never a builder-writable path (see
+    `bubble/orchestrator.py` and `bubble/secure_import.py`).
+    """
+    provider = "openai-gpt"
+    model = os.environ.get("JOAO_GPT_MODEL", "gpt-5.6-thinking")
+    provider_family = "openai"
+
+    def __init__(self, inbox_dir: Path, import_filename: str = "gpt-review-import.json"):
+        self.inbox_dir = Path(inbox_dir)
+        self.import_filename = import_filename
+
+    def review_secure(self, *, run_id: str, mission_id: str, candidate_tree: str) -> dict[str, Any]:
+        import_path = self.inbox_dir / self.import_filename
+        if not import_path.is_file():
+            # Fail-closed (RI-4/RI-5): an absent import is not an implicit pass.
+            return {"ok": False, "decision": "block", "required": True,
+                    "reason": "no GPT-formal review evidence has been imported yet",
+                    "expected_candidate_tree": candidate_tree}
+        return secure_import_mod.consume_import(
+            self.inbox_dir, import_path.read_text(), run_id=run_id, mission_id=mission_id,
+            candidate_tree=candidate_tree, expected_reviewer_provider=self.provider,
+            expected_model=self.model, now=now())
+
+    def review(self, run, run_dir):
+        # `run` has no distinct "mission_id" field in this schema — the
+        # closest stable identifier RunRuntime tracks is `project_id`.
+        return self.review_secure(run_id=run.get("run_id", ""), mission_id=run.get("project_id", ""),
+                                  candidate_tree=run.get("candidate_tree", ""))
+
+
+def _extract_codex_final_answer(raw_stdout: str) -> str:
+    """C8-B correction (found via the real synthetic NORMAL mission,
+    `scripts/c8b_synthetic_normal_mission.py`): `codex exec --json`'s real
+    stdout is an NDJSON event stream (`thread.started`/`item.started`/
+    `item.completed`/`turn.completed`), not a single bare JSON verdict
+    object — the verdict is the LAST `item.completed` event whose
+    `item.type == "agent_message"`, in that item's `text` field.
+
+    Tries a direct `json.loads` of the WHOLE string FIRST — every existing
+    A0/A0.1/A0.2 test's fake `codex` wrapper prints exactly one bare JSON
+    line (`print(json.dumps({...}))`), which already IS a valid single
+    verdict object; that exact, already-audited shape must keep working
+    unchanged. Only when that direct parse fails does this fall back to
+    NDJSON extraction. Returns the original string unchanged if neither
+    shape is found — `validate_reviewer_verdict` then reports its own
+    unparseable-response BLOCK exactly as it already does today, never a
+    fabricated fallback."""
+    stripped = raw_stdout.strip()
+    try:
+        obj = json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        obj = None
+    if isinstance(obj, dict):
+        return stripped
+
+    last_text = None
+    for line in raw_stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(event, dict) or event.get("type") != "item.completed":
+            continue
+        item = event.get("item")
+        if isinstance(item, dict) and item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+            last_text = item["text"]
+    return last_text if last_text is not None else raw_stdout
 
 
 class CodexCLIReviewer(ReviewerAdapter):
@@ -349,7 +448,7 @@ class CodexCLIReviewer(ReviewerAdapter):
     the pre-candidate "plan" stage (which by construction has no candidate
     yet) still reviews `run["workspace"]`.
     """
-    provider = "codex-subscription"; model = "local-codex-review"
+    provider = "codex-subscription"; model = "local-codex-review"; provider_family = "openai"
 
     def __init__(self, executable: str = "codex", timeout: int = 900, backend: ExecutionBackend | None = None):
         self.executable = executable
@@ -460,12 +559,164 @@ class CodexCLIReviewer(ReviewerAdapter):
                         "expected_candidate_tree": candidate_tree, "recomputed_tree_after_review": post_tree,
                         "returncode": proc.returncode, "output": str(output), "output_sha256": digest(output)}
 
-        result = validate_reviewer_verdict(proc.stdout, expected_candidate_tree=candidate_tree,
+        answer_text = _extract_codex_final_answer(proc.stdout)
+        result = validate_reviewer_verdict(answer_text, expected_candidate_tree=candidate_tree,
                                           provider=self.provider, model=self.model,
                                           returncode=proc.returncode)
         return {**result, "stage": stage, "returncode": proc.returncode, "output": str(output),
                 "output_sha256": digest(output), "stderr": proc.stderr[-4000:],
                 "reviewed_path": str(review_root),
+                "candidate_commit": candidate.get("candidate_commit") if candidate else None,
+                "recomputed_tree_before_review": pre_tree, "recomputed_tree_after_review": post_tree}
+
+    def review(self, run, run_dir):
+        return self.review_stage(run, run_dir, "final")
+
+
+_GLM_REVIEW_CONTRACT = (
+    "Respond with EXACTLY one JSON object as your FINAL answer (no markdown fences, "
+    "no prose before or after, nothing after it) shaped like: "
+    '{"candidate_tree": "<the exact candidate_tree given below>", '
+    '"verdict": "ACCEPT"|"P1"|"BLOCK", "findings": ["..."], '
+    '"reviewer": {"provider": "zai-coding-plan", "model": "<your model>"}}. '
+    "A P1 finding must name the concrete repair."
+)
+
+
+def _extract_glm_final_answer(ndjson_text: str) -> str:
+    """`joao-glm`'s `--output` file is OpenCode's raw NDJSON event stream
+    (`step_start`/`text`/`tool_use`/`step_finish`, one JSON object per line),
+    not a single clean answer. The reviewer's actual verdict is the LAST
+    `type == "text"` event's `part.text` — everything else is tool-call
+    narration, not the verdict. Returns "" (never a guess) if no text event
+    is found; `validate_reviewer_verdict` then correctly rejects it as
+    unparseable rather than this function inventing a fallback."""
+    last_text = ""
+    for line in ndjson_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(obj, dict) and obj.get("type") == "text":
+            part = obj.get("part")
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                last_text = part["text"]
+    return last_text
+
+
+class GLMReviewer(ReviewerAdapter):
+    """Mirror of `CodexCLIReviewer`, dispatch target substituted
+    (`JOAO_WORKER_INTEGRATION_SPEC.md` §2.1).
+
+    `GLMReviewer.provider == GLMBuilder.provider == "zai-coding-plan"` —
+    G-DBL-AUDIT's `G_DBL_AUDIT_BUILDER_SELF_REVIEW` therefore fires whenever
+    the orchestrator tries to count this reviewer against a GLM-built
+    candidate; it is only ever a valid independent reviewer when the builder
+    is NOT GLM.
+    """
+    provider = "zai-coding-plan"
+    model = os.environ.get("JOAO_GLM_MODEL", "zai-coding-plan/glm-4.5-air")
+    provider_family = "zai"
+
+    def __init__(self, executable: Path = Path("~/.local/bin/joao-glm").expanduser(),
+                 backend: ExecutionBackend | None = None, timeout: int = 900):
+        self.executable = executable
+        self.timeout = timeout
+        # A0.2 (§12.2 single dispatch point): routed through ExecutionBackend
+        # like every other builder/test/reviewer subprocess — the same
+        # `joao-glm` binary GLMBuilder dispatches, invoked `--mode read-only`.
+        self.backend = backend or LocalUntrustedBackend()
+
+    def available(self) -> bool:
+        return Path(self.executable).expanduser().is_file()
+
+    def review_stage(self, run, run_dir, stage: str, active_rules: str = ""):
+        # Identical candidate-binding discipline to `CodexCLIReviewer`: bind
+        # to the frozen read-only candidate copy for build/final, recompute
+        # the tree immediately before AND after dispatch, refuse the verdict
+        # outright on any mismatch (a tamper just before or during review).
+        candidate = run.get("candidate") if stage != "plan" else None
+        candidate_tree = candidate.get("candidate_tree") if candidate else None
+
+        if stage != "plan":
+            if not candidate or not candidate.get("readonly_copy"):
+                return {"ok": False, "decision": "block", "stage": stage,
+                        "reason": "no frozen candidate readonly_copy available for this review stage"}
+            review_root = Path(candidate["readonly_copy"])
+            try:
+                pre_tree = recompute_candidate_tree(review_root)
+            except Exception as exc:  # fail-closed: cannot verify => cannot review
+                return {"ok": False, "decision": "block", "stage": stage,
+                        "reason": f"could not verify candidate before review: {type(exc).__name__}: {exc}"}
+            if pre_tree != candidate_tree:
+                return {"ok": False, "decision": "block", "stage": stage,
+                        "reason": "candidate was tampered before the reviewer ever ran",
+                        "reviewed_path": str(review_root), "candidate_commit": candidate.get("candidate_commit"),
+                        "expected_candidate_tree": candidate_tree, "recomputed_tree_before_review": pre_tree}
+        else:
+            review_root = Path(run["workspace"])
+            pre_tree = None
+
+        rules_prefix = (active_rules + "\n\n") if active_rules else ""
+        tree_line = f"The candidate under review has candidate_tree = {candidate_tree!r}.\n" if candidate_tree else ""
+        prompt = (
+            f"{rules_prefix}"
+            "You are the independent JOAO reviewer. Work read-only. Review the "
+            f"{stage} gate for this bounded mission:\n\n{run['mission']}\n\n"
+            f"{tree_line}"
+            "Inspect only the current worktree, task evidence and git diff. Do not "
+            "edit, commit, push, install packages or call external services. "
+            f"{_GLM_REVIEW_CONTRACT}"
+        )
+        task_file = run_dir / f"glm-{stage}-review-task.md"
+        atomic_write_text(task_file, prompt)
+        output = run_dir / f"glm-{stage}-review.jsonl"
+
+        argv = [str(self.executable), "--workspace", str(review_root), "--task-file", str(task_file),
+                "--output", str(output), "--mode", "read-only", "--budget", "small", "--model", self.model]
+        # A0.2 (§12.2): `network=True` here is `provider_transport_network`
+        # (GLM must reach Z.AI to answer at all), never the mission's own
+        # `task_network` — identical framing to `CodexCLIReviewer` above.
+        # `joao-glm --mode read-only` additionally denies edit/bash at its
+        # own OpenCode permission layer; the JOAO sandbox layer independently
+        # never grants write access to `review_root` either (only `run_dir`,
+        # for the task/output files themselves) — defense in depth.
+        dispatch = self.backend.execute(argv, cwd=review_root, timeout=self.timeout, network=True,
+                                        environment_allowlist=_GLM_ENV_ALLOWLIST,
+                                        extra_write_paths=[str(run_dir)])
+        if not dispatch.get("pid"):
+            return {"ok": False, "decision": "block", "stage": stage,
+                    "reason": f"GLM reviewer unavailable: {dispatch.get('stderr', '')}",
+                    "reviewed_path": str(review_root)}
+
+        raw_output = output.read_text() if output.exists() else dispatch.get("stdout", "")
+        answer_text = _extract_glm_final_answer(raw_output)
+        atomic_write_text(run_dir / f"glm-{stage}-review-answer.txt", answer_text)
+
+        post_tree = None
+        if stage != "plan":
+            try:
+                post_tree = recompute_candidate_tree(review_root)
+            except Exception as exc:  # fail-closed: cannot verify => the verdict cannot be trusted
+                return {"ok": False, "decision": "block", "stage": stage,
+                        "reason": f"could not verify candidate after review: {type(exc).__name__}: {exc}",
+                        "reviewed_path": str(review_root), "candidate_commit": candidate.get("candidate_commit"),
+                        "returncode": dispatch.get("returncode", -1), "output": str(output)}
+            if post_tree != candidate_tree:
+                return {"ok": False, "decision": "block", "stage": stage,
+                        "reason": "candidate was tampered during or after the review",
+                        "reviewed_path": str(review_root), "candidate_commit": candidate.get("candidate_commit"),
+                        "expected_candidate_tree": candidate_tree, "recomputed_tree_after_review": post_tree,
+                        "returncode": dispatch.get("returncode", -1), "output": str(output)}
+
+        result = validate_reviewer_verdict(answer_text, expected_candidate_tree=candidate_tree,
+                                          provider=self.provider, model=self.model,
+                                          returncode=dispatch.get("returncode", -1))
+        return {**result, "stage": stage, "returncode": dispatch.get("returncode", -1), "output": str(output),
+                "stderr": dispatch.get("stderr", "")[-4000:], "reviewed_path": str(review_root),
                 "candidate_commit": candidate.get("candidate_commit") if candidate else None,
                 "recomputed_tree_before_review": pre_tree, "recomputed_tree_after_review": post_tree}
 

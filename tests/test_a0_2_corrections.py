@@ -547,6 +547,10 @@ _FORBIDDEN_ATTR_CALLS = {("subprocess", "run"), ("subprocess", "Popen")}
 _GUARDED_METHODS = {
     "GLMBuilder": {"build"},
     "CodexCLIReviewer": {"review_stage"},
+    # C8-B (JOAO_C8_GATES_ROADMAP.md LOT C8-B): additive entry, no existing
+    # A0.2 assertion changed — GLMReviewer dispatches through
+    # ExecutionBackend.execute() exactly like the two adapters above.
+    "GLMReviewer": {"review_stage"},
 }
 
 
