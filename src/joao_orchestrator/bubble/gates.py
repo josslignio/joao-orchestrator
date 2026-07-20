@@ -485,10 +485,14 @@ def gate_no_stale_entrypoint(*, discovered_callables: list[dict[str, Any]] | Non
     # an empty/missing input must never vacuously pass as "nothing wrong
     # found". A genuinely empty repo inventory is not a real-world case this
     # gate is ever evaluated against; treat it as malformed/unusable input.
-    if not discovered_callables:
+    if not isinstance(discovered_callables, list) or not discovered_callables:
+        # A tuple/generator/mapping/string is iterable but is never accepted
+        # as "an inventory" — that coercion is exactly how a truthy-but-wrong
+        # container slipped past this check before.
         return _block("G_NO_STALE_UNLISTED_DISPATCH",
-                      "discovered_callables is missing/empty — cannot prove an exhaustive entrypoint "
-                      "inventory ran; a vacuous pass is never accepted as evidence",
+                      "discovered_callables is missing/empty or not an actual list (a tuple, generator, "
+                      "mapping or string is never accepted as an exhaustive entrypoint inventory) — cannot "
+                      "prove an exhaustive entrypoint inventory ran; a vacuous pass is never accepted as evidence",
                       candidate_tree)
     if not canonical_entrypoints:
         return _block("G_NO_STALE_UNLISTED_DISPATCH",
@@ -623,6 +627,15 @@ def gate_sha_bound_proof(*, artifact: dict[str, Any] | None, expected_candidate_
 # ---------------------------------------------------------------------------
 
 
+def _require_canary_record(value: Any, label: str = "canary_record") -> tuple[str, bool]:
+    record = _require_mapping(value, label)
+    record_tree = _require_candidate_tree(record.get("candidate_tree"), f"{label}.candidate_tree")
+    # A canary "pass" is only evidence if it says where the raw proof is.
+    _require_nonempty_string(record.get("proof_path"), f"{label}.proof_path")
+    passed = _require_exact_bool(record.get("passed"), f"{label}.passed")
+    return record_tree, passed
+
+
 def gate_canary_first(*, canary_required: bool, canary_record: dict[str, Any] | None,
                       candidate_tree: str | None) -> dict[str, Any]:
     """`JOAO_C8_GATE_CONTRACTS.md` G-CANARY-FIRST.
@@ -637,9 +650,9 @@ def gate_canary_first(*, canary_required: bool, canary_record: dict[str, Any] | 
     except _MalformedInput as exc:
         return _block("G_CANARY_FIRST_MALFORMED_INPUT", str(exc), None)
 
-    if not canary_required:
-        return _pass("G_CANARY_FIRST_NOT_REQUIRED", "policy does not require a canary for this run",
-                    candidate_tree if isinstance(candidate_tree, str) else None, skipped=True)
+    # candidate_tree is validated BEFORE any canary_required branching — a
+    # policy that skips the canary requirement never skips the requirement
+    # that the run itself have a real, identified candidate.
     try:
         # correction loop finding #2: without a real candidate_tree there is
         # nothing to bind a canary record to — never let a None==None
@@ -649,14 +662,28 @@ def gate_canary_first(*, canary_required: bool, canary_record: dict[str, Any] | 
     except _MalformedInput as exc:
         return _block("G_CANARY_FIRST_MISSING",
                       f"candidate_tree is unusable ({exc}) — cannot verify any canary binding", None)
+
+    if not canary_required:
+        if canary_record is None:
+            return _pass("G_CANARY_FIRST_NOT_REQUIRED", "policy does not require a canary for this run",
+                        candidate_tree, skipped=True)
+        # A canary_record MAY be supplied even when not required, but if it
+        # is, it must still be a well-formed record — a garbage value here is
+        # never silently ignored just because the gate would have passed anyway.
+        try:
+            _require_canary_record(canary_record)
+        except _MalformedInput as exc:
+            return _block("G_CANARY_FIRST_MALFORMED_INPUT",
+                          f"canary_required=false but the supplied canary_record is malformed ({exc})",
+                          candidate_tree)
+        return _pass("G_CANARY_FIRST_NOT_REQUIRED", "policy does not require a canary for this run",
+                    candidate_tree, skipped=True)
+
     if not isinstance(canary_record, Mapping):
         return _block("G_CANARY_FIRST_MISSING", "canary_required=true but no canary record exists for this candidate",
                       candidate_tree)
     try:
-        record_tree = _require_candidate_tree(canary_record.get("candidate_tree"), "canary_record.candidate_tree")
-        # A canary "pass" is only evidence if it says where the raw proof is.
-        _require_nonempty_string(canary_record.get("proof_path"), "canary_record.proof_path")
-        passed = _require_exact_bool(canary_record.get("passed"), "canary_record.passed")
+        record_tree, passed = _require_canary_record(canary_record)
     except _MalformedInput as exc:
         return _block("G_CANARY_FIRST_MALFORMED_INPUT", str(exc), candidate_tree)
     if record_tree != candidate_tree:
@@ -757,6 +784,14 @@ def gate_frozen_finish_line(*, frozen_mission: dict[str, Any] | None,
         changed_entries = _require_mapping_list(changed_paths if changed_paths is not None else [],
                                                 "changed_paths", required_keys=("path", "action"))
         correction_entries = _require_mapping_list(corrections if corrections is not None else [], "corrections")
+        for index, correction in enumerate(correction_entries):
+            # `out_of_scope_but_valid` is a contract boolean: "false" (a
+            # truthy STRING) must never be read as True, and must never be
+            # silently accepted as a valid falsey value either — when the
+            # field is present at all it must be an exact bool.
+            if "out_of_scope_but_valid" in correction:
+                _require_exact_bool(correction.get("out_of_scope_but_valid"),
+                                    f"corrections[{index}].out_of_scope_but_valid")
         results_map = _require_mapping(required_test_results if required_test_results is not None else {},
                                        "required_test_results")
         for test_id, evidence in results_map.items():
@@ -789,7 +824,12 @@ def gate_frozen_finish_line(*, frozen_mission: dict[str, Any] | None,
                       candidate_tree)
 
     try:
-        forbidden_paths = _require_string_list(frozen_mission.get("forbidden_paths") or [],
+        # `or []` here would silently coerce a malformed falsey value (e.g.
+        # `forbidden_paths=""`) into a clean empty list — only an absent key
+        # (None) means "no forbidden paths declared"; anything else must be a
+        # real list or BLOCK.
+        raw_forbidden_paths = frozen_mission.get("forbidden_paths")
+        forbidden_paths = _require_string_list(raw_forbidden_paths if raw_forbidden_paths is not None else [],
                                                "frozen_mission.forbidden_paths")
         bindings_map = _require_mapping(frozen_mission.get("criterion_bindings"),
                                         "frozen_mission.criterion_bindings")
@@ -797,9 +837,16 @@ def gate_frozen_finish_line(*, frozen_mission: dict[str, Any] | None,
         for ac_id, binding in bindings_map.items():
             _require_nonempty_string(ac_id, "criterion_bindings key")
             binding = _require_mapping(binding, f"criterion_bindings[{ac_id!r}]")
-            _require_string_list(binding.get("allowed_paths") or [], f"criterion_bindings[{ac_id!r}].allowed_paths")
-            _require_string_list(binding.get("allowed_actions") or [],
-                                 f"criterion_bindings[{ac_id!r}].allowed_actions")
+            # No `or []` coercion: a binding's allowed_paths/allowed_actions
+            # must themselves be actual, non-empty lists — a binding that
+            # could never cover any path/action is as useless as a missing
+            # one, and a malformed falsey value (e.g. `""`) must BLOCK rather
+            # than silently becoming an empty (and therefore also useless,
+            # but wrongly *accepted*) list.
+            _require_string_list(binding.get("allowed_paths"), f"criterion_bindings[{ac_id!r}].allowed_paths",
+                                 allow_empty=False)
+            _require_string_list(binding.get("allowed_actions"), f"criterion_bindings[{ac_id!r}].allowed_actions",
+                                 allow_empty=False)
             if binding.get("required_tests") is not None:
                 _require_string_list(binding.get("required_tests"),
                                      f"criterion_bindings[{ac_id!r}].required_tests")

@@ -379,6 +379,27 @@ def test_g_no_stale_red_empty_canonical_entrypoints_never_vacuously_passes():
     assert result["reason_code"] == "G_NO_STALE_UNLISTED_DISPATCH"
 
 
+_VALID_NO_STALE_CALLABLE = {"name": "ExecutionBackend.execute", "effect": "dispatch",
+                            "canonical": True, "protected": True, "predates_gates": False}
+
+
+@pytest.mark.parametrize("wrapped", [
+    (_VALID_NO_STALE_CALLABLE,),
+    (c for c in [_VALID_NO_STALE_CALLABLE]),
+    {"only": _VALID_NO_STALE_CALLABLE},
+    "ExecutionBackend.execute",
+], ids=["tuple", "generator", "mapping", "string"])
+def test_g_no_stale_red_non_list_container_never_vacuously_passes(wrapped):
+    # REPRO (Boss micro-patch): `if not discovered_callables:` is only True
+    # for FALSEY values — a non-empty tuple/generator/mapping/string is
+    # truthy and previously slipped past the guard (a string would then be
+    # iterated character-by-character as `for callable_ in discovered_callables`).
+    result = gates.gate_no_stale_entrypoint(discovered_callables=wrapped,
+                                            canonical_entrypoints=["ExecutionBackend.execute"])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_NO_STALE_UNLISTED_DISPATCH"
+
+
 # ---------------------------------------------------------------------------
 # G-SHA-BOUND-PROOF
 # ---------------------------------------------------------------------------
@@ -473,6 +494,34 @@ def test_g_canary_first_red_candidate_tree_missing_never_vacuously_matches_none(
                                      candidate_tree=None)
     assert result["ok"] is False
     assert result["reason_code"] == "G_CANARY_FIRST_MISSING"
+
+
+@pytest.mark.parametrize("bad_candidate_tree", [123, "   "])
+def test_g_canary_first_red_candidate_tree_invalid_even_when_not_required(bad_candidate_tree):
+    # REPRO (Boss micro-patch): canary_required=false previously returned
+    # NOT_REQUIRED without ever validating candidate_tree — a wrong-typed or
+    # blank-string tree slipped through as an accidental PASS.
+    result = gates.gate_canary_first(canary_required=False, canary_record=None,
+                                     candidate_tree=bad_candidate_tree)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_CANARY_FIRST_MISSING"
+
+
+def test_g_canary_first_red_garbage_record_blocks_even_when_not_required():
+    # REPRO (Boss micro-patch): canary_required=false previously
+    # short-circuited straight to PASS without ever inspecting a supplied
+    # canary_record — a garbage (non-mapping) value was silently ignored.
+    result = gates.gate_canary_first(canary_required=False, canary_record="garbage", candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_CANARY_FIRST_MALFORMED_INPUT"
+
+
+def test_g_canary_first_green_well_formed_record_still_passes_when_not_required():
+    result = gates.gate_canary_first(
+        canary_required=False,
+        canary_record={"candidate_tree": TREE, "passed": True, "proof_path": "evidence/canary.json"},
+        candidate_tree=TREE)
+    assert result["ok"] is True and result["reason_code"] == "G_CANARY_FIRST_NOT_REQUIRED"
 
 
 # ---------------------------------------------------------------------------
@@ -632,6 +681,44 @@ def test_g_frozen_finish_line_green_mapped_path_and_tree_bound_passing_test():
         required_test_results={test_id: {"passed": True, "candidate_tree": TREE}}, candidate_tree=TREE)
     assert result["ok"] is True and result["reason_code"] == "G_FROZEN_FINISH_LINE_OK"
     assert result["touched_acceptance_criteria"] == ["AC-C8-001"]
+
+
+def test_g_frozen_finish_line_red_forbidden_paths_string_never_vacuously_coerced():
+    # REPRO (Boss micro-patch): `frozen_mission.get("forbidden_paths") or []`
+    # coerced the falsey string "" into a clean empty list, hiding a
+    # malformed field instead of BLOCKing it.
+    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(forbidden_paths=""),
+                                           changed_paths=[], candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_FROZEN_FINISH_LINE_MALFORMED_INPUT"
+
+
+def test_g_frozen_finish_line_red_allowed_paths_string_never_vacuously_coerced():
+    bindings = {"AC-EMPTY": {"allowed_paths": "", "required_tests": ["t::x"], "allowed_actions": ["modify"]}}
+    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(criterion_bindings=bindings),
+                                           changed_paths=[], candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_FROZEN_FINISH_LINE_MALFORMED_INPUT"
+
+
+def test_g_frozen_finish_line_red_allowed_actions_string_never_vacuously_coerced():
+    bindings = {"AC-EMPTY": {"allowed_paths": ["src/x.py"], "required_tests": ["t::x"], "allowed_actions": ""}}
+    result = gates.gate_frozen_finish_line(frozen_mission=_frozen_mission(criterion_bindings=bindings),
+                                           changed_paths=[], candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_FROZEN_FINISH_LINE_MALFORMED_INPUT"
+
+
+def test_g_frozen_finish_line_red_out_of_scope_but_valid_string_false_never_vacuously_true():
+    # REPRO (Boss micro-patch): `if correction.get("out_of_scope_but_valid"):`
+    # read the truthy STRING "false" as True, escalating a plain scope-creep
+    # correction into REQUIRES_NEW_AUTHORITY instead of BLOCKing the malformed field.
+    result = gates.gate_frozen_finish_line(
+        frozen_mission=_frozen_mission(), changed_paths=[],
+        corrections=[{"acceptance_criterion_id": None, "out_of_scope_but_valid": "false"}],
+        candidate_tree=TREE)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_FROZEN_FINISH_LINE_MALFORMED_INPUT"
 
 
 # ===========================================================================
