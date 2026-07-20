@@ -9,6 +9,45 @@ par ce document. **Exactement 7 gates, pas de 8ᵉ.** D-046 : JOÃO = control pl
 
 Convention : chaque gate rend `{"ok": bool, "decision": "pass"|"block", "reason_code": str, "reason": str, "candidate_tree": sha|null, ...champs}` — même vocabulaire que les adaptateurs existants (`execution_backend.py` `PREFLIGHT_UNAVAILABLE`, `reviewer_contract.py` `"decision": "block"`). Fail-closed : doute/entrée manquante/exception → BLOCK. Reason codes = chaînes stables contractuelles.
 
+## Politique d'entrée stricte (fail-closed sur toute entrée malformée)
+
+Une couche de validation interne unique et réutilisable (`_require_*` dans `bubble/gates.py`) valide **chaque entrée contractuelle à la frontière de chaque gate**, avant toute logique métier. Elle remplace la correction champ-par-champ : c'est la **classe entière** des entrées malformées qui est fermée, pas seulement les charges utiles déjà observées.
+
+**Règle 1 — aucune truthiness Python sur une valeur contractuelle.**
+```
+booléen contractuel : type(value) is bool           # STRICT
+  REJETÉS : "true", "false", 1, 0, None, ""         # "false" est une chaîne TRUTHY en Python
+chaîne obligatoire  : isinstance(value, str) and value.strip()
+  REJETÉS : None, " ", "", 7, True                  # aucune conversion implicite
+liste obligatoire   : isinstance(value, list)       # une str/mapping n'est jamais « une liste de »
+  éléments typés ; None/int refusés ; vide refusé quand le contrat exige une preuve
+mapping obligatoire : isinstance(value, Mapping) + toutes les clés requises présentes
+```
+
+**Règle 2 — seules les erreurs de VALIDATION deviennent un BLOCK.** `_MalformedInput` est une exception interne dédiée, levée uniquement par les validateurs ; chaque gate n'intercepte que ce type. Il n'existe **aucun `except Exception`** générique : un vrai défaut de programmation reste visible en développement au lieu d'être masqué en « BLOCK ».
+
+**Garantie publique des sept gates.** Pour toute entrée, même arbitrairement malformée : jamais de `PASS` ; jamais d'`AttributeError`/`TypeError`/`KeyError` qui s'échappe ; toujours la forme de résultat normale avec `decision="block"` ; `candidate_tree` n'est présent dans le résultat que lorsqu'il est valide (sinon `null`).
+
+**Reason codes d'entrée malformée** — au plus **un** code stable par gate, jamais un code par champ :
+
+| Gate | Code |
+|---|---|
+| G-DBL-AUDIT | `G_DBL_AUDIT_MALFORMED_INPUT` |
+| G-HERMETIC | `G_HERMETIC_MALFORMED_INPUT` |
+| G-AUTH-IO | `G_AUTH_IO_MALFORMED_INPUT` |
+| G-NO-STALE-ENTRYPOINT | `G_NO_STALE_ENTRYPOINT_MALFORMED_INPUT` |
+| G-SHA-BOUND-PROOF | `G_SHA_BOUND_PROOF_MALFORMED_INPUT` |
+| G-CANARY-FIRST | `G_CANARY_FIRST_MALFORMED_INPUT` |
+| G-FROZEN-FINISH-LINE | `G_FROZEN_FINISH_LINE_MALFORMED_INPUT` |
+
+Là où un code existant décrit déjà précisément la faute, il est **réutilisé** plutôt que doublé (ex. une identité reviewer incomplète reste `G_DBL_AUDIT_MALFORMED_VERDICT` ; un `candidate_tree` inutilisable en G-DBL-AUDIT reste `G_DBL_AUDIT_INSUFFICIENT_REVIEWERS`).
+
+**Preuves obligatoires ajoutées (une preuve sans localisation n'est pas une preuve) :** `G-CANARY-FIRST` exige `canary_record.proof_path` non vide **et** `passed is True` exactement ; `G-SHA-BOUND-PROOF` exige `artifact.proof_path` non vide **et** un `candidate_tree` non vide des deux côtés.
+
+**G-NO-STALE-ENTRYPOINT — `protected is True` obligatoire.** Tout entrypoint inventorié dont `protected` n'est pas exactement `True` **BLOQUE** (`G_NO_STALE_LEGACY_UNPROTECTED`), qu'il soit ancien ou tout neuf. Auparavant le blocage exigeait aussi `predates_gates=true`, si bien qu'un entrypoint de dispatch **neuf et non protégé** passait et le gate annonçait « every discovered callable is gate-protected » — ce qui était faux.
+
+**G-HERMETIC — résolution obligatoire de `dir_fd`.** L'événement d'audit CPython `"open"` ne transporte **jamais** `dir_fd`. Un chemin relatif ouvert contre un descripteur de répertoire (`os.open("memory/lessons.jsonl", O_RDONLY, dir_fd=repo_fd)`) atteignait donc le vrai fichier sans être vu. `os.open` est désormais enveloppé et le descripteur est **résolu pour de vrai** (`fcntl F_GETPATH` sur macOS ; `/proc/self/fd` puis `/dev/fd` ailleurs), puis normalisé avant classification. Un `dir_fd` non résolvable **échoue fermé** (`HermeticViolation`), jamais ignoré. Aucune exemption de nom de fichier, de chemin, de module ou de node-id n'est introduite — et l'ancien faux positif sur le parcours fd de `shutil.rmtree` disparaît de lui-même, puisque ces entrées se résolvent maintenant vers leur vrai chemin `tmp`.
+
 **Reason codes de succès (`ok=true`).** Chaque gate émet exactement un code de succès, stable et contractuel au même titre que ses codes de blocage : `G_DBL_AUDIT_OK`, `G_HERMETIC_OK`, `G_AUTH_IO_OK`, `G_NO_STALE_OK`, `G_SHA_BOUND_OK`, `G_CANARY_FIRST_OK`, `G_FROZEN_FINISH_LINE_OK`. Un seul code de succès supplémentaire existe, pour un gate dont la politique ne s'applique pas au run : `G_CANARY_FIRST_NOT_REQUIRED` (`canary_required=false`) — jamais un « pass » de fait obtenu par absence de vérification.
 
 ---

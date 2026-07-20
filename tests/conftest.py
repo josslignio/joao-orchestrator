@@ -166,6 +166,9 @@ _HERMETIC_EXTRA_COVERED: dict[str, Path] = {}
 _HERMETIC_INJECTED: dict[str, list[Path]] = {}
 _HERMETIC_TOUCHES: list[dict[str, Any]] = []
 _HERMETIC_LOCK = threading.Lock()
+# Marks the window inside `_hermetic_os_open` where the real os.open re-fires
+# the audit event for an open this module has already resolved and enforced.
+_HERMETIC_TLS = threading.local()
 
 # `memory/*.py` modules cross-import each other by bare name (`import
 # select_lessons`, `import inject`, ...), relying on whichever directory is
@@ -240,8 +243,116 @@ def _hermetic_is_write_open(args: tuple) -> bool:
     return False
 
 
+def _hermetic_fd_to_path(fd: int) -> str | None:
+    """Resolve an OPEN DIRECTORY DESCRIPTOR to its real filesystem path.
+
+    macOS has no /proc, and `os.readlink('/dev/fd/N')` returns EINVAL for a
+    directory fd there, so the portable-looking symlink trick silently fails on
+    the very platform this suite runs on. `fcntl(fd, F_GETPATH)` is the
+    supported macOS mechanism and is verified present here; /proc/self/fd is
+    kept as the Linux path so the same code works in CI.
+    """
+    try:
+        import fcntl  # noqa: PLC0415
+        if hasattr(fcntl, "F_GETPATH"):
+            raw = fcntl.fcntl(fd, fcntl.F_GETPATH, b"\0" * 1024)
+            resolved = os.fsdecode(raw.split(b"\0", 1)[0])
+            if resolved:
+                return resolved
+    except (OSError, ValueError, ImportError):
+        pass
+    for base in ("/proc/self/fd", "/dev/fd"):
+        try:
+            return os.readlink(f"{base}/{fd}")
+        except OSError:
+            continue
+    return None
+
+
+def _hermetic_enforce(resolved: Path, *, is_write: bool) -> None:
+    """The single decision point shared by the audit hook and the os.open
+    wrapper: classify an already-fully-resolved absolute path and raise."""
+    root_name = _hermetic_classify(resolved)
+    if root_name is None:
+        return
+    injected = _hermetic_is_injected(resolved, root_name)
+    with _HERMETIC_LOCK:
+        _HERMETIC_TOUCHES.append({"root": root_name, "path": str(resolved), "injected": injected})
+    if injected:
+        return
+    if not is_write and _hermetic_current_nodeid() in _HERMETIC_OUT_OF_SCOPE_PROTECTED_READS:
+        return
+    raise HermeticViolation(
+        f"G-HERMETIC: uninjected open of covered root {root_name!r} at {resolved} — resolve this "
+        "root under tmp_path, or register an injected substitute via the `hermetic_injection` fixture"
+    )
+
+
+_REAL_OS_OPEN = os.open
+
+
+def _hermetic_os_open(path, flags, mode=0o777, *, dir_fd=None):
+    """Wrapper around `os.open` that closes the `dir_fd` escape.
+
+    The CPython "open" audit event carries only (path, mode, flags) — it NEVER
+    carries `dir_fd`. So a relative path opened against a directory descriptor
+    (`os.open("memory/lessons.jsonl", O_RDONLY, dir_fd=repo_fd)`) reached the
+    real file while the hook saw only an unresolvable relative name. The
+    previous code skipped exactly that shape to avoid a false positive on
+    CPython's own `shutil.rmtree` fd-walker — which is what made it an escape.
+
+    Resolving the descriptor for real removes both problems at once: the escape
+    is closed AND the rmtree false positive disappears, because those entries
+    now resolve to their true tmp paths instead of being guessed against cwd.
+    No allowlist, no filename exemption, no os.open bypass.
+    """
+    try:
+        raw = os.fspath(path)
+        if isinstance(raw, bytes):
+            raw = raw.decode(errors="surrogateescape")
+    except TypeError:
+        raw = None
+
+    if raw is not None:
+        expanded = os.path.expanduser(raw)
+        resolved: Path | None = None
+        if os.path.isabs(expanded):
+            resolved = Path(expanded)
+        elif dir_fd is not None:
+            base = _hermetic_fd_to_path(dir_fd)
+            if base is None:
+                # Fail closed: an unresolvable dir_fd is never assumed harmless.
+                raise HermeticViolation(
+                    f"G-HERMETIC: cannot resolve dir_fd={dir_fd} for relative path {raw!r} — "
+                    "failing closed rather than allowing an unverifiable open"
+                )
+            resolved = Path(base) / expanded
+        else:
+            resolved = Path(os.getcwd()) / expanded
+        try:
+            resolved = resolved.resolve()
+        except (OSError, ValueError):
+            resolved = None
+        if resolved is not None:
+            _hermetic_enforce(resolved, is_write=_hermetic_is_write_open((raw, None, flags)))
+
+    # The real call re-fires the audit event; the flag tells the hook this open
+    # was already authoritatively resolved and enforced above.
+    _HERMETIC_TLS.in_os_open = True
+    try:
+        if dir_fd is not None:
+            return _REAL_OS_OPEN(path, flags, mode, dir_fd=dir_fd)
+        return _REAL_OS_OPEN(path, flags, mode)
+    finally:
+        _HERMETIC_TLS.in_os_open = False
+
+
 def _hermetic_audit_hook(event: str, args: tuple) -> None:
     if event != "open":
+        return
+    if getattr(_HERMETIC_TLS, "in_os_open", False):
+        # Already resolved and enforced by _hermetic_os_open (which has the
+        # dir_fd this event does not carry) — never re-guess it against cwd.
         return
     file_arg = args[0]
     if isinstance(file_arg, int):
@@ -252,47 +363,17 @@ def _hermetic_audit_hook(event: str, args: tuple) -> None:
             raw = raw.decode(errors="surrogateescape")
     except TypeError:
         return
-    mode = args[1] if len(args) > 1 else None
     expanded = os.path.expanduser(raw)
     if not os.path.isabs(expanded):
-        # Correction loop: relative paths must not bypass the auditor — they
-        # are resolved against the effective cwd, not skipped outright.
-        # EXCEPT: a relative `path`/`name` passed to the low-level
-        # `os.open()` alongside `dir_fd` (mode is never a string for
-        # `os.open()` — only `io.open()`/`Path.open()`/builtin `open()` ever
-        # pass a string mode) is NOT reliably cwd-relative — the "open" audit
-        # event never carries `dir_fd` at all, so such a call is ambiguous.
-        # Verified empirically: CPython's own `shutil.rmtree` fd-safe walker
-        # (used by pytest's own tmp-dir cleanup) calls exactly
-        # `os.open(entry_name, flags, dir_fd=parent_fd)` for every directory
-        # entry, with `mode=None` — resolving that bare entry name against
-        # cwd previously produced a false positive (an unrelated tmp-dir
-        # entry coincidentally named "memory"). A relative path under a
-        # STRING mode (the high-level open() family) is always genuinely
-        # cwd-relative and IS resolved below — this exception is narrowly
-        # scoped to the non-string-mode/relative-path combination only.
-        if not isinstance(mode, str):
-            return
+        # Every remaining relative path here comes from the high-level open()
+        # family, which has no dir_fd — so the effective cwd is the correct and
+        # only base. No shape is skipped any more.
         expanded = os.path.join(os.getcwd(), expanded)
     try:
         resolved = Path(expanded).resolve()
     except (OSError, ValueError):
         return
-    root_name = _hermetic_classify(resolved)
-    if root_name is None:
-        return
-    injected = _hermetic_is_injected(resolved, root_name)
-    with _HERMETIC_LOCK:
-        _HERMETIC_TOUCHES.append({"root": root_name, "path": str(resolved), "injected": injected})
-    if injected:
-        return
-    if (not _hermetic_is_write_open(args)
-            and _hermetic_current_nodeid() in _HERMETIC_OUT_OF_SCOPE_PROTECTED_READS):
-        return
-    raise HermeticViolation(
-        f"G-HERMETIC: uninjected open of covered root {root_name!r} at {resolved} — resolve this "
-        "root under tmp_path, or register an injected substitute via the `hermetic_injection` fixture"
-    )
+    _hermetic_enforce(resolved, is_write=_hermetic_is_write_open(args))
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -305,6 +386,15 @@ def _hermetic_guard(_isolated_joao_memory_dir):
     # sys.addaudithook cannot be removed once installed (by design) — added
     # exactly once here, for the lifetime of this pytest process.
     sys.addaudithook(_hermetic_audit_hook)
+    # os.open is wrapped so that dir_fd-relative opens can be resolved for
+    # real; the audit event alone never carries dir_fd. Installed for the
+    # PROCESS LIFETIME, deliberately never restored: `sys.addaudithook` cannot
+    # be uninstalled either, and pytest's own tmp-dir cleanup runs AFTER
+    # session fixtures tear down. Restoring os.open there would leave the hook
+    # active with no dir_fd resolver, so `shutil.rmtree`'s fd-walker would be
+    # re-guessed against cwd and raise a false positive during cleanup. The
+    # two must stay in lockstep.
+    os.open = _hermetic_os_open
     yield
 
 

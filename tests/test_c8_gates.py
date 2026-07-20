@@ -391,21 +391,22 @@ def test_g_sha_bound_red_missing():
 
 
 def test_g_sha_bound_red_mismatch_mutated_between_write_and_consumption():
-    result = gates.gate_sha_bound_proof(artifact={"candidate_tree": TREE}, expected_candidate_tree=TREE,
-                                        recomputed_candidate_tree=OTHER_TREE)
+    result = gates.gate_sha_bound_proof(artifact={"candidate_tree": TREE, "proof_path": "evidence/x.json"},
+                                        expected_candidate_tree=TREE, recomputed_candidate_tree=OTHER_TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_SHA_BOUND_MISMATCH"
 
 
 def test_g_sha_bound_red_cross_candidate():
-    result = gates.gate_sha_bound_proof(artifact={"candidate_tree": OTHER_TREE}, expected_candidate_tree=TREE)
+    result = gates.gate_sha_bound_proof(artifact={"candidate_tree": OTHER_TREE, "proof_path": "evidence/x.json"},
+                                        expected_candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_SHA_BOUND_CROSS_CANDIDATE"
 
 
 def test_g_sha_bound_green_exact_match():
-    result = gates.gate_sha_bound_proof(artifact={"candidate_tree": TREE}, expected_candidate_tree=TREE,
-                                        recomputed_candidate_tree=TREE)
+    result = gates.gate_sha_bound_proof(artifact={"candidate_tree": TREE, "proof_path": "evidence/x.json"},
+                                        expected_candidate_tree=TREE, recomputed_candidate_tree=TREE)
     assert result["ok"] is True and result["reason_code"] == "G_SHA_BOUND_OK"
 
 
@@ -437,7 +438,7 @@ def test_g_canary_first_red_missing():
 
 def test_g_canary_first_red_failed():
     result = gates.gate_canary_first(canary_required=True,
-                                     canary_record={"candidate_tree": TREE, "passed": False},
+                                     canary_record={"candidate_tree": TREE, "passed": False, "proof_path": "evidence/canary.json"},
                                      candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_CANARY_FIRST_FAILED"
@@ -445,7 +446,7 @@ def test_g_canary_first_red_failed():
 
 def test_g_canary_first_red_stale_candidate():
     result = gates.gate_canary_first(canary_required=True,
-                                     canary_record={"candidate_tree": OTHER_TREE, "passed": True},
+                                     canary_record={"candidate_tree": OTHER_TREE, "passed": True, "proof_path": "evidence/canary.json"},
                                      candidate_tree=TREE)
     assert result["ok"] is False
     assert result["reason_code"] == "G_CANARY_FIRST_STALE_CANDIDATE"
@@ -458,7 +459,8 @@ def test_g_canary_first_green_not_required_skips():
 
 def test_g_canary_first_green_exact_green_canary():
     result = gates.gate_canary_first(canary_required=True,
-                                     canary_record={"candidate_tree": TREE, "passed": True},
+                                     canary_record={"candidate_tree": TREE, "passed": True,
+                                                   "proof_path": "evidence/canary.json"},
                                      candidate_tree=TREE)
     assert result["ok"] is True and result["reason_code"] == "G_CANARY_FIRST_OK"
 
@@ -966,3 +968,262 @@ def test_l4_invalid_decision_value_is_malformed():
     result = _l4_gate("normal", [_l4("codex-subscription", "openai", decision="approved")])
     assert result["ok"] is False
     assert result["reason_code"] == "G_DBL_AUDIT_MALFORMED_VERDICT"
+
+
+# ===========================================================================
+# Correction loop 4, Phase 4 — TABLE-DRIVEN MALFORMED-INPUT MATRIX
+#
+# One reusable table covering the whole malformed-input CLASS across all seven
+# gates, not just the individual payloads named in the audit. Every row asserts
+# the same four properties: no exception escapes, decision == "block",
+# ok is False, and a stable non-empty reason_code. Rows marked from the GPT
+# report are called out explicitly.
+# ===========================================================================
+
+_M_TREE = "c" * 40
+_M_OTHER = "d" * 40
+
+
+def _mv(**over):
+    verdict = {"provider": "acme-rev", "provider_family": "acme", "model": "acme-m",
+               "ok": True, "decision": "pass", "candidate_tree": _M_TREE}
+    verdict.update(over)
+    return verdict
+
+
+def _mfm(**over):
+    frozen = gates.build_frozen_mission(
+        spec_sha="s" * 40, roadmap_sha="r" * 40, authority_instruction_hash="h" * 64,
+        risk_tier="normal", canary_required=False, forbidden_paths=["memory/lessons.jsonl"],
+        criterion_bindings={"AC-M": {"allowed_paths": ["src/m.py"], "required_tests": ["t::m"],
+                                     "allowed_actions": ["modify"]}})
+    frozen.update(over)
+    return frozen
+
+
+_M_BUILDER = dict(builder_provider="anthropic-claude", builder_family="anthropic")
+_M_CHANGED = [{"path": "src/m.py", "action": "modify"}]
+_M_EVIDENCE = {"t::m": {"passed": True, "candidate_tree": _M_TREE}}
+
+
+def _dbl(**over):
+    kwargs = dict(risk_tier="normal", reviewer_verdicts=[_mv()], candidate_tree=_M_TREE, **_M_BUILDER)
+    kwargs.update(over)
+    return lambda: gates.gate_dbl_audit(**kwargs)
+
+
+def _herm(touches):
+    return lambda: gates.gate_hermetic(touches=touches)
+
+
+def _auth(**over):
+    kwargs = dict(gate_name="G-X", required_entrypoint_symbols=["A.b"],
+                  referenced_symbols=["A.b"], resolvable_symbols=["A.b"])
+    kwargs.update(over)
+    return lambda: gates.gate_auth_io(**kwargs)
+
+
+def _nostale(**over):
+    kwargs = dict(discovered_callables=[{"name": "E.x", "effect": "dispatch", "canonical": True,
+                                         "protected": True, "predates_gates": False}],
+                  canonical_entrypoints=["E.x"])
+    kwargs.update(over)
+    return lambda: gates.gate_no_stale_entrypoint(**kwargs)
+
+
+def _sha(**over):
+    kwargs = dict(artifact={"candidate_tree": _M_TREE, "proof_path": "evidence/p.json"},
+                  expected_candidate_tree=_M_TREE)
+    kwargs.update(over)
+    return lambda: gates.gate_sha_bound_proof(**kwargs)
+
+
+def _canary(**over):
+    kwargs = dict(canary_required=True,
+                  canary_record={"candidate_tree": _M_TREE, "passed": True, "proof_path": "evidence/c.json"},
+                  candidate_tree=_M_TREE)
+    kwargs.update(over)
+    return lambda: gates.gate_canary_first(**kwargs)
+
+
+def _frozen(**over):
+    kwargs = dict(frozen_mission=_mfm(), changed_paths=_M_CHANGED,
+                  required_test_results=_M_EVIDENCE, candidate_tree=_M_TREE)
+    kwargs.update(over)
+    return lambda: gates.gate_frozen_finish_line(**kwargs)
+
+
+# (label, callable) — every one must BLOCK without raising.
+MALFORMED_INPUT_MATRIX = [
+    # ---- G-DBL-AUDIT ----
+    ("dbl: risk_tier None",                 _dbl(risk_tier=None)),
+    ("dbl: risk_tier invalid string",       _dbl(risk_tier="urgent")),
+    ("dbl: risk_tier wrong type",           _dbl(risk_tier=1)),
+    ("dbl: candidate_tree None",            _dbl(candidate_tree=None, reviewer_verdicts=[_mv(candidate_tree=None)])),
+    ("dbl: candidate_tree blank [GPT]",     _dbl(candidate_tree=" ", reviewer_verdicts=[_mv(candidate_tree=" ")])),
+    ("dbl: candidate_tree wrong type",      _dbl(candidate_tree=7, reviewer_verdicts=[_mv(candidate_tree=7)])),
+    ("dbl: builder_provider blank [GPT]",   _dbl(builder_provider=" ")),
+    ("dbl: builder_provider None",          _dbl(builder_provider=None)),
+    ("dbl: builder_family blank",           _dbl(builder_family="   ")),
+    ("dbl: verdicts is a string",           _dbl(reviewer_verdicts="nope")),
+    ("dbl: verdicts is a mapping",          _dbl(reviewer_verdicts={"a": 1})),
+    ("dbl: verdict element None",           _dbl(reviewer_verdicts=[None])),
+    ("dbl: verdict element int",            _dbl(reviewer_verdicts=[7])),
+    ("dbl: verdict missing provider",       _dbl(reviewer_verdicts=[{k: v for k, v in _mv().items() if k != "provider"}])),
+    ("dbl: verdict blank provider",         _dbl(reviewer_verdicts=[_mv(provider="  ")])),
+    ("dbl: verdict provider is int",        _dbl(reviewer_verdicts=[_mv(provider=3)])),
+    ("dbl: verdict ok='true' [GPT]",        _dbl(reviewer_verdicts=[_mv(ok="true")])),
+    ("dbl: verdict ok=1",                   _dbl(reviewer_verdicts=[_mv(ok=1)])),
+    ("dbl: verdict ok=None",                _dbl(reviewer_verdicts=[_mv(ok=None)])),
+    ("dbl: verdict decision invalid",       _dbl(reviewer_verdicts=[_mv(decision="approved")])),
+    ("dbl: verdict decision None",          _dbl(reviewer_verdicts=[_mv(decision=None)])),
+    ("dbl: verdict tree mismatch",          _dbl(reviewer_verdicts=[_mv(candidate_tree=_M_OTHER)])),
+    ("dbl: verdict tree blank",             _dbl(reviewer_verdicts=[_mv(candidate_tree="  ")])),
+    # ---- G-HERMETIC ----
+    ("hermetic: touches None",              _herm(None)),
+    ("hermetic: touches [None] [GPT]",      _herm([None])),
+    ("hermetic: touches is a string",       _herm("nope")),
+    ("hermetic: touches [int]",             _herm([7])),
+    ("hermetic: touch missing root",        _herm([{"path": "/x", "injected": False}])),
+    ("hermetic: touch blank root",          _herm([{"root": " ", "path": "/x", "injected": False}])),
+    ("hermetic: touch path is int",         _herm([{"root": "real_memory", "path": 5, "injected": False}])),
+    ("hermetic: injected='false' [GPT]",    _herm([{"root": "real_memory", "path": "/x", "injected": "false"}])),
+    ("hermetic: injected=1",                _herm([{"root": "real_memory", "path": "/x", "injected": 1}])),
+    ("hermetic: injected=None",             _herm([{"root": "real_memory", "path": "/x", "injected": None}])),
+    # ---- G-AUTH-IO ----
+    ("auth_io: gate_name blank",            _auth(gate_name="   ")),
+    ("auth_io: gate_name None",             _auth(gate_name=None)),
+    ("auth_io: gate_name int",              _auth(gate_name=5)),
+    ("auth_io: required has int [GPT]",     _auth(required_entrypoint_symbols=["A.b", 7])),
+    ("auth_io: required has None",          _auth(required_entrypoint_symbols=["A.b", None])),
+    ("auth_io: required has blank",         _auth(required_entrypoint_symbols=["A.b", "  "])),
+    ("auth_io: referenced has int",         _auth(referenced_symbols=["A.b", 7])),
+    ("auth_io: resolvable has int",         _auth(resolvable_symbols=["A.b", 7])),
+    ("auth_io: required is a string",       _auth(required_entrypoint_symbols="A.b")),
+    ("auth_io: no required symbols",        _auth(required_entrypoint_symbols=[])),
+    # ---- G-NO-STALE-ENTRYPOINT ----
+    ("no_stale: inventory None",            _nostale(discovered_callables=None)),
+    ("no_stale: inventory empty",           _nostale(discovered_callables=[])),
+    ("no_stale: allowlist empty",           _nostale(canonical_entrypoints=[])),
+    ("no_stale: allowlist has int",         _nostale(canonical_entrypoints=["E.x", 7])),
+    ("no_stale: element None",              _nostale(discovered_callables=[None])),
+    ("no_stale: element is a string",       _nostale(discovered_callables=["E.x"])),
+    ("no_stale: missing effect",            _nostale(discovered_callables=[{"name": "E.x", "canonical": True, "protected": True, "predates_gates": False}])),
+    ("no_stale: canonical='false' [GPT]",   _nostale(discovered_callables=[{"name": "E.x", "effect": "dispatch", "canonical": "false", "protected": "false", "predates_gates": False}])),
+    ("no_stale: protected='false' [GPT]",   _nostale(discovered_callables=[{"name": "E.x", "effect": "dispatch", "canonical": True, "protected": "false", "predates_gates": False}])),
+    ("no_stale: protected=1",               _nostale(discovered_callables=[{"name": "E.x", "effect": "dispatch", "canonical": True, "protected": 1, "predates_gates": False}])),
+    ("no_stale: unprotected current [GPT]", _nostale(discovered_callables=[{"name": "new", "effect": "dispatch", "canonical": True, "protected": False, "predates_gates": False}], canonical_entrypoints=["new"])),
+    # ---- G-SHA-BOUND-PROOF ----
+    ("sha: expected tree None",             _sha(expected_candidate_tree=None)),
+    ("sha: expected tree blank",            _sha(expected_candidate_tree="  ")),
+    ("sha: artifact None",                  _sha(artifact=None)),
+    ("sha: artifact is a list",             _sha(artifact=[])),
+    ("sha: artifact is a string",           _sha(artifact="proof")),
+    ("sha: artifact tree missing",          _sha(artifact={"proof_path": "p"})),
+    ("sha: artifact tree blank",            _sha(artifact={"candidate_tree": "  ", "proof_path": "p"})),
+    ("sha: proof_path missing [GPT]",       _sha(artifact={"candidate_tree": _M_TREE})),
+    ("sha: proof_path blank [GPT]",         _sha(artifact={"candidate_tree": _M_TREE, "proof_path": " "})),
+    ("sha: cross candidate",                _sha(artifact={"candidate_tree": _M_OTHER, "proof_path": "p"})),
+    # ---- G-CANARY-FIRST ----
+    ("canary: required='true'",             _canary(canary_required="true")),
+    ("canary: required=1",                  _canary(canary_required=1)),
+    ("canary: required=None",               _canary(canary_required=None)),
+    ("canary: record None",                 _canary(canary_record=None)),
+    ("canary: record is a list",            _canary(canary_record=[])),
+    ("canary: passed='false' [GPT]",        _canary(canary_record={"candidate_tree": _M_TREE, "passed": "false", "proof_path": "p"})),
+    ("canary: passed='true' [GPT]",         _canary(canary_record={"candidate_tree": _M_TREE, "passed": "true", "proof_path": "p"})),
+    ("canary: passed=1 [GPT]",              _canary(canary_record={"candidate_tree": _M_TREE, "passed": 1, "proof_path": "p"})),
+    ("canary: missing proof_path [GPT]",    _canary(canary_record={"candidate_tree": _M_TREE, "passed": True})),
+    ("canary: blank proof_path [GPT]",      _canary(canary_record={"candidate_tree": _M_TREE, "passed": True, "proof_path": "  "})),
+    ("canary: record tree missing [GPT]",   _canary(canary_record={"passed": True, "proof_path": "p"})),
+    ("canary: record tree blank [GPT]",     _canary(canary_record={"candidate_tree": " ", "passed": True, "proof_path": "p"})),
+    ("canary: candidate_tree blank",        _canary(candidate_tree="  ")),
+    # ---- G-FROZEN-FINISH-LINE ----
+    ("frozen: candidate_tree None",         _frozen(candidate_tree=None)),
+    ("frozen: candidate_tree blank [GPT]",  _frozen(candidate_tree="  ")),
+    ("frozen: mission None",                _frozen(frozen_mission=None)),
+    ("frozen: mission is a list",           _frozen(frozen_mission=[])),
+    ("frozen: spec_sha blank",              _frozen(frozen_mission=_mfm(spec_sha="  "))),
+    ("frozen: roadmap_sha None",            _frozen(frozen_mission=_mfm(roadmap_sha=None))),
+    ("frozen: authority hash blank",        _frozen(frozen_mission=_mfm(authority_instruction_hash=" "))),
+    ("frozen: bindings empty",              _frozen(frozen_mission=_mfm(criterion_bindings={}))),
+    ("frozen: bindings is a list",          _frozen(frozen_mission=_mfm(criterion_bindings=[]))),
+    ("frozen: changed_paths [None] [GPT]",  _frozen(changed_paths=[None])),
+    ("frozen: changed_paths is a string",   _frozen(changed_paths="src/m.py")),
+    ("frozen: changed_paths [int]",         _frozen(changed_paths=[7])),
+    ("frozen: changed path blank",          _frozen(changed_paths=[{"path": " ", "action": "modify"}])),
+    ("frozen: changed action missing",      _frozen(changed_paths=[{"path": "src/m.py"}])),
+    ("frozen: results is a list",           _frozen(required_test_results=[])),
+    ("frozen: evidence None",               _frozen(required_test_results={"t::m": None})),
+    ("frozen: passed='false' [GPT]",        _frozen(required_test_results={"t::m": {"passed": "false", "candidate_tree": _M_TREE}})),
+    ("frozen: passed='true' [GPT]",         _frozen(required_test_results={"t::m": {"passed": "true", "candidate_tree": _M_TREE}})),
+    ("frozen: passed=1",                    _frozen(required_test_results={"t::m": {"passed": 1, "candidate_tree": _M_TREE}})),
+    ("frozen: evidence tree blank",         _frozen(required_test_results={"t::m": {"passed": True, "candidate_tree": " "}})),
+    ("frozen: evidence tree missing",       _frozen(required_test_results={"t::m": {"passed": True}})),
+    ("frozen: forbidden_paths [None]",      _frozen(frozen_mission=_mfm(forbidden_paths=[None]))),
+]
+
+
+@pytest.mark.parametrize("label,call", MALFORMED_INPUT_MATRIX, ids=[row[0] for row in MALFORMED_INPUT_MATRIX])
+def test_malformed_input_matrix_always_blocks_without_raising(label, call):
+    try:
+        result = call()
+    except Exception as exc:  # noqa: BLE001 — the whole point is that NOTHING escapes
+        raise AssertionError(
+            f"{label}: malformed input escaped as {type(exc).__name__}: {exc} — "
+            "a gate must return BLOCK, never raise, on contract-invalid input"
+        ) from exc
+    assert isinstance(result, dict), f"{label}: gate did not return a result mapping"
+    assert result["ok"] is False, f"{label}: malformed input produced ok={result['ok']!r} (accidental PASS)"
+    assert result["decision"] == "block", f"{label}: decision={result['decision']!r}"
+    assert isinstance(result.get("reason_code"), str) and result["reason_code"].strip(), \
+        f"{label}: missing/blank reason_code"
+    assert result["reason_code"].startswith("G_"), f"{label}: unstable reason_code {result['reason_code']!r}"
+
+
+def test_malformed_input_matrix_is_comprehensive():
+    """Guard against the matrix silently shrinking, and prove every gate is covered."""
+    assert len(MALFORMED_INPUT_MATRIX) >= 90
+    prefixes = {row[0].split(":")[0] for row in MALFORMED_INPUT_MATRIX}
+    assert prefixes == {"dbl", "hermetic", "auth_io", "no_stale", "sha", "canary", "frozen"}
+    gpt_rows = [row[0] for row in MALFORMED_INPUT_MATRIX if "[GPT]" in row[0]]
+    assert len(gpt_rows) >= 18, f"every payload named in the GPT report must be present, got {len(gpt_rows)}"
+
+
+# --- positive controls: the valid shapes must still PASS --------------------
+
+def test_positive_control_valid_normal_review_passes():
+    assert gates.gate_dbl_audit(risk_tier="normal", reviewer_verdicts=[_mv()],
+                                candidate_tree=_M_TREE, **_M_BUILDER)["ok"] is True
+
+
+def test_positive_control_valid_critical_two_reviews_pass():
+    result = gates.gate_dbl_audit(risk_tier="critical",
+                                  reviewer_verdicts=[_mv(), _mv(provider="zeta-rev", provider_family="zeta")],
+                                  candidate_tree=_M_TREE, **_M_BUILDER)
+    assert result["ok"] is True
+
+
+def test_positive_control_valid_canary_passes():
+    assert _canary()()["ok"] is True
+
+
+def test_positive_control_valid_frozen_mission_passes():
+    assert _frozen()()["ok"] is True
+
+
+def test_positive_control_valid_protected_entrypoint_inventory_passes():
+    assert _nostale()()["ok"] is True
+
+
+def test_positive_control_valid_sha_bound_proof_passes():
+    assert _sha()()["ok"] is True
+
+
+def test_positive_control_valid_hermetic_journal_passes():
+    assert gates.gate_hermetic(touches=[])["ok"] is True
+    assert gates.gate_hermetic(touches=[{"root": "external_ledger", "path": "/tmp/x", "injected": True}])["ok"] is True
+
+
+def test_positive_control_valid_auth_io_passes():
+    assert _auth()()["ok"] is True

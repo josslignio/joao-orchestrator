@@ -15,6 +15,7 @@ depending on any real machine path for the bulk of the coverage).
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -120,19 +121,71 @@ def test_hermetic_relative_paths_are_resolved_against_cwd_not_skipped(tmp_path, 
     assert len(conftest._HERMETIC_TOUCHES) > touches_before
 
 
-def test_hermetic_low_level_os_open_dir_fd_relative_call_is_never_misresolved_against_cwd(tmp_path, monkeypatch):
-    # Regression guard: `shutil.rmtree`'s fd-safe walker (and other low-level
-    # os.open(name, ..., dir_fd=parent_fd) callers) pass a bare relative NAME
-    # that is scoped by `dir_fd`, never by the process cwd — the "open" audit
-    # event never carries `dir_fd`. Resolving such a name against cwd
-    # previously produced a false positive (an unrelated tmp-dir entry
-    # coincidentally named "memory" resolved to the real repo memory/ root).
-    # A relative argument under a NON-string mode (os.open()'s shape) must
-    # therefore never be classified at all, cwd or not.
-    monkeypatch.chdir(conftest.REPO_ROOT)
-    touches_before = len(conftest._HERMETIC_TOUCHES)
-    conftest._hermetic_audit_hook("open", ("memory", None, 16777220))  # os.open()-shaped: mode=None
-    assert len(conftest._HERMETIC_TOUCHES) == touches_before
+def test_hermetic_dir_fd_relative_open_is_resolved_for_real_not_skipped(tmp_path, monkeypatch):
+    """Correction loop 4, Phase 3. This REPLACES the former assertion that a
+    relative os.open with a non-string mode is skipped outright. That skip WAS
+    the escape: `os.open("memory/lessons.jsonl", O_RDONLY, dir_fd=repo_fd)`
+    reached the real file untouched. dir_fd is now resolved for real
+    (fcntl F_GETPATH on macOS, /proc|/dev/fd elsewhere), so the escape is
+    closed AND the original false-positive it was working around disappears —
+    an unrelated tmp entry named "memory" now resolves to its true tmp path
+    instead of being guessed against cwd.
+    """
+    # (a) an unrelated directory that merely CONTAINS an entry named "memory"
+    #     must NOT be flagged, because it is resolved truthfully.
+    decoy = tmp_path / "decoy"
+    (decoy / "memory").mkdir(parents=True)
+    monkeypatch.chdir(conftest.REPO_ROOT)          # cwd IS the repo: the old code's trap
+    fd = os.open(str(decoy), os.O_RDONLY)
+    try:
+        handle = os.open("memory", os.O_RDONLY, dir_fd=fd)   # relative + dir_fd
+        os.close(handle)
+    finally:
+        os.close(fd)
+
+    # (b) the exact previously-escaping payload must now raise.
+    repo_fd = os.open(str(conftest.REPO_ROOT), os.O_RDONLY)
+    try:
+        with pytest.raises(conftest.HermeticViolation, match="real_memory"):
+            os.open("memory/lessons.jsonl", os.O_RDONLY, dir_fd=repo_fd)
+    finally:
+        os.close(repo_fd)
+
+
+def test_hermetic_dir_fd_write_into_real_memory_blocks(tmp_path):
+    repo_fd = os.open(str(conftest.REPO_ROOT), os.O_RDONLY)
+    target = conftest.REAL_MEMORY_DIR / "dirfd_write_probe.tmp"
+    try:
+        with pytest.raises(conftest.HermeticViolation, match="real_memory"):
+            os.open("memory/dirfd_write_probe.tmp", os.O_WRONLY | os.O_CREAT, 0o644, dir_fd=repo_fd)
+        assert not target.exists(), "the wrapper must raise BEFORE the real os.open"
+    finally:
+        os.close(repo_fd)
+        target.unlink(missing_ok=True)
+
+
+def test_hermetic_unresolvable_dir_fd_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr(conftest, "_hermetic_fd_to_path", lambda fd: None)
+    fd = os.open(str(tmp_path), os.O_RDONLY)
+    try:
+        with pytest.raises(conftest.HermeticViolation, match="cannot resolve dir_fd"):
+            os.open("anything.txt", os.O_RDONLY, dir_fd=fd)
+    finally:
+        os.close(fd)
+
+
+def test_hermetic_dir_fd_into_injected_tmp_root_passes(tmp_path, hermetic_injection):
+    covered = tmp_path / "injected_root"
+    covered.mkdir()
+    (covered / "ok.txt").write_text("fine")
+    hermetic_injection.cover("dirfd_injected_root", covered)
+    hermetic_injection.inject("dirfd_injected_root", covered)
+    fd = os.open(str(covered), os.O_RDONLY)
+    try:
+        handle = os.open("ok.txt", os.O_RDONLY, dir_fd=fd)
+        os.close(handle)
+    finally:
+        os.close(fd)
 
 
 # ---------------------------------------------------------------------------

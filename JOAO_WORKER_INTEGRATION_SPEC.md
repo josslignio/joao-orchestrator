@@ -40,7 +40,8 @@ Boss GO (référence SPEC+ROADMAP approuvée, hashée — D5)
   → candidate_tree gelé (RI-3)                                                   [existant]
   → lancer reviewer(s) selon le tier (G-DBL-AUDIT) :
        normal   → 1 reviewer, provider ≠ builder
-       critical → 2 providers distincts, tous ≠ builder  (builder GLM → Codex + 3ᵉ provider)
+       critical → 2 provider_family DISTINCTES, toutes ≠ famille builder
+                  (builder GLM/zai -> Codex/openai + une 2e famille != openai, ex. Claude/anthropic)
   → reviews (familles distinctes selon tier, liées au tree)                        (G-DBL-AUDIT)
   → si canary_required : canary synthétique exact-SHA sans effet externe (D3)       (G-CANARY-FIRST)
   → écrire promotion-readiness.json (ARTEFACT mécanique lié au tree — PAS un nouvel état RunStatus)
@@ -58,11 +59,24 @@ Le contrôleur choisit la combinaison de reviewers et appelle `RunRuntime` dans 
 
 Déjà réel (`GLMBuilder`). Argv : `~/.local/bin/joao-glm --workspace <ws> --task-file <run_dir>/builder-task.md --output <run_dir>/glm-builder.jsonl --mode workspace-write --budget small --allowed-path <p>…`, via `ExecutionBackend.execute(network=<capabilities.network_capability>, environment_allowlist=_GLM_ENV_ALLOWLIST, extra_write_paths=[run_dir])`. Réseau uniquement depuis le scope gelé (correctif A0.2 #2, fail-closed si absent). Hash builder recalculé par le contrôleur (RI-5). Seul ajout C-8 : `set_capabilities(frozen_scope)` appelé par le contrôleur au même point qu'aujourd'hui — pas de changement de `GLMBuilder`.
 
-## 5. Codex/GLM reviewer launch contract  *(v2: 3ᵉ provider critique)*
+## 5. Codex/GLM reviewer launch contract  *(v4: 2ᵉ FAMILLE distincte, jamais un simple « 3ᵉ provider »)*
+
+**Modèle d'identité faisant autorité (aucune autre lecture n'est valide) :**
+
+```
+GLM / Z.AI          -> provider_family = zai
+Codex               -> provider_family = openai
+GPT (contre-audit)  -> provider_family = openai      # MÊME famille que Codex
+Claude              -> provider_family = anthropic
+```
+
+Le tier `critical` exige **2 `provider_family` distinctes entre elles ET distinctes de la famille du builder** — jamais un simple comptage de providers. Pour une mission critical **buildée par GLM (`zai`)** : Codex/`openai` + Claude/`anthropic` est **VALIDE** ; Codex/`openai` + GPT/`openai` est **INVALIDE** (une seule famille) ; si aucune 2ᵉ famille valide n'est disponible → **BLOCK** fail-closed (`G_DBL_AUDIT_NO_DISTINCT_FAMILY_AVAILABLE`), jamais une acceptation avec deux verdicts OpenAI.
+
+Il n'existe **aucune** famille « session » : le builder des lots C-8 est `provider_family = anthropic` (session Claude pilotée par un humain), ce qui est précisément pourquoi un reviewer Claude ne peut pas auditer indépendamment un lot C-8 construit par cette session.
 
 - **Codex :** réel (`CodexCLIReviewer`), inchangé — reviewer #1 par défaut d'un candidat GLM-buildé.
 - **GLM :** nouveau (`GLMReviewer`, §2.1), `joao-glm --mode read-only` — reviewer indépendant **seulement si builder ≠ GLM**.
-- **3ᵉ provider (tier critical, builder=GLM) :** reviewer #2 doit être d'un provider ≠ GLM ≠ Codex. **Piège corrigé (finding GPT v2 #1) :** ne PAS importer le verdict GPT via `CodexEvidenceReviewer` — cet adaptateur fixe l'identité à `provider="codex"`, donc le verdict GPT deviendrait un **2ᵉ verdict Codex**, pas un 3ᵉ provider distinct → G-DBL-AUDIT échouerait sur un run critical GLM-buildé. Il faut un adaptateur d'import à **identité distincte fixée par le contrôleur** :
+- **2ᵉ FAMILLE (tier critical, builder=GLM) :** reviewer #2 doit appartenir à une `provider_family` ≠ `zai` **et** ≠ celle du reviewer #1 (donc ≠ `openai` si #1 est Codex). **Piège corrigé (finding GPT v2 #1) :** ne PAS importer le verdict GPT via `CodexEvidenceReviewer` — cet adaptateur fixe l'identité à `provider="codex"`, donc le verdict GPT deviendrait un **2ᵉ verdict Codex**, pas une 2ᵉ famille distincte → G-DBL-AUDIT échouerait sur un run critical GLM-buildé. Il faut un adaptateur d'import à **identité distincte fixée par le contrôleur** :
   - **`GPTFormalEvidenceReviewer(ReviewerAdapter)` :** `provider = "openai-gpt"`, `provider_family = "openai"`, `model = os.environ.get("JOAO_GPT_MODEL", "gpt-5.6-thinking")` ; lit un import off-disk → `validate_reviewer_verdict(..., provider="openai-gpt", ...)`. **L'identité vient de l'adaptateur/contrôleur, JAMAIS du JSON importé.**
   - **MAIS (correction pré-C8-B #1 — finding GPT v3) :** `GPTFormalEvidenceReviewer.provider_family == "openai" == CodexCLIReviewer.provider_family`. Codex + GPT = **une seule famille**. Pour un run **critical** GLM-buildé exigeant 2 familles distinctes, GPT-formel **ne suffit PAS** — il faut une famille ≠ openai (Anthropic/Claude). GPT-formel reste utile comme reviewer `normal` ou comme 2ᵉ avis non-family-critique ; mais tant que `ClaudeCLIReviewer` (famille `anthropic`) n'existe pas, un build GLM **critical** est **bloqué** (`G_DBL_AUDIT_NO_DISTINCT_FAMILY_AVAILABLE`), jamais accepté avec Codex+GPT.
   - **Cible (débloque le critical GLM) :** `ClaudeCLIReviewer` (`provider_family="anthropic"`), 3ᵉ adaptateur à dispatch automatique.
@@ -100,7 +114,7 @@ Non conçu/démarré ici. Après C8-A→C8-C, SOURCE-FRESH est lançable via le 
 
 ## 13. Cost policy
 
-Zéro coût métré incrémental : `GLMReviewer` réutilise l'abonnement Z.AI de `GLMBuilder` (forfait) ; `CodexCLIReviewer` l'abonnement Codex ; le 3ᵉ provider critique = GPT-formel (intérim, pas de nouveau compte métré) ou `ClaudeCLIReviewer` (cible). Aucun nouveau provider métré.
+Zéro coût métré incrémental : `GLMReviewer` réutilise l'abonnement Z.AI de `GLMBuilder` (forfait) ; `CodexCLIReviewer` l'abonnement Codex ; la 2ᵉ FAMILLE critique = `ClaudeCLIReviewer` (`anthropic`, cible). Le GPT-formel ne peut PAS la fournir — sa famille est `openai`, identique à Codex — il sert donc de reviewer `normal` ou d'avis supplémentaire, jamais de 2ᵉ famille critical. Aucun nouveau provider métré.
 
 ## 14. No OS-security boundary recreation
 
