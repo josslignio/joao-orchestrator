@@ -1,13 +1,13 @@
 # JOÃO C-8 GATES + WORKER INTEGRATION — ROADMAP (v2 — 3 lots, 7 gates conservés)
 
 **Historique (Phase 0 — origine du document) :** planifie, n'implémente rien. Branche `feat/joao-c8-gates-spec`, base `10156a2` — point de départ historique v1.
-**Autorité C-8 courante (planning) :** `acf9ef4e42e2f9b1333a1f5c0314895339f4fef0` (tip v4). C8-A implémenté/contre-audité sur `06911e457cee50e30934470beb69c78f9f696434` (`feat/joao-c8-a-v4`), correction en cours, non affecté par cet amendement.
+**Autorité C-8 courante (planning) :** `acf9ef4e42e2f9b1333a1f5c0314895339f4fef0` (tip v4). C8-A : candidat final `1f831619fccccf60ec8c996d58ae2cb34a838b01` (`feat/joao-c8-a-v4`), **prêt pour les audits indépendants finaux**, non affecté par cet amendement. Aucun PASS GPT n'est acquis à ce stade.
 **Cet amendement (v2.1, docs-only) :** branche `feat/joao-product-superiority-spec`, base `acf9ef4e42e2f9b1333a1f5c0314895339f4fef0`.
 A0.2 gelé `cc796b5`, non modifié.
 **v2 :** compresse les 7 milestones en **3 lots d'exécution** (recommandation GPT + Boss), sans supprimer un seul des 7 gates. Chaque lot garde : scope, fichiers, tests, tests adversariaux, exigence reviewer, critères d'acceptation, rollback, dépendances, STOP.
 **v2.1 (docs-only, ce commit, branche/base ci-dessus) :** ajoute l'instrumentation Product Superiority & Efficiency à C8-B, le benchmark synthétique manuel vs JOÃO à C8-C, et la validation post-C8 sur missions réelles (`JOAO_C8_GATES_SPEC.md` §24, `JOAO_PRODUCT_VALIDATION_BACKLOG.md`). N'ajoute aucun 8ᵉ gate, ne modifie aucun critère technique C8-A.
 
-**Modèle reviewer des lots C-8 eux-mêmes (important) :** les lots C-8 sont **construits par une session builder pilotée par un humain, PAS par `GLMBuilder`**. Identité formelle de ce builder (remplace le terme flou « builder = session ») :
+**Modèle reviewer des lots C-8 eux-mêmes (important) :** les lots C-8 sont **construits par une session builder pilotée par un humain, PAS par `GLMBuilder`**. Identité formelle de ce builder (remplace l'ancienne formulation floue qui traitait la « session » comme un provider) :
 ```
 builder_provider   = anthropic
 builder_family     = anthropic
@@ -31,7 +31,7 @@ Donc `GLMReviewer`/GLM (`provider_family=zai`) est un reviewer **indépendant va
 
 **Tests adversariaux :** un rouge→vert par reason code (`G_DBL_AUDIT_SAME_PROVIDER`, `G_HERMETIC_EXTERNAL_LEDGER_DEPENDENCY`, `G_FROZEN_FINISH_LINE_SCOPE_CREEP`, `G_SHA_BOUND_MISMATCH`, …) ; un test plantant une lecture de vrai chemin → doit être flaggé avant retrait ; un candidat écrivant hors `allowed_write_paths` → `SCOPE_CREEP`.
 
-**Exigence reviewer :** **critical** (change l'infra de test + ajoute frozen_mission). Builder = `provider_family=anthropic`/`human_piloted=true` (≠ `zai`) → **GLM (`GLMReviewer` ou joao-glm read-only) + GPT**, 2 providers distincts. Codex final le 23.
+**Exigence reviewer :** **critical** (change l'infra de test + ajoute frozen_mission). Builder = `provider_family=anthropic`/`human_piloted=true` → **GLM (`zai`) + GPT (`openai`)** = 2 `provider_family` distinctes entre elles ET toutes deux ≠ `anthropic` : valide ici précisément parce que le builder n'est PAS `zai`. Codex final le 23.
 
 **Définition de la fixture D-044 (précisée — finding GPT v2 #2) :** la fixture gelée sous `tmp_path` fournit (a) un `DEFECTS_LEDGER` synthétique au **contenu figé** (un jeu connu de defects, incluant un D-044 de démonstration) et (b) une copie figée des specs `cv_bot`. Le test réécrit `build_traceability` pour lire ces racines injectées, **s'exécute toujours** (aucun skip/xfail) et **affirme le mapping attendu déterministe** sur la fixture (0 UNMAPPED pour le jeu figé mappé). Le **défaut produit D-044** (le vrai trou de traçabilité sur le ledger réel) reste **ouvert au ledger/backlog produit** — seule la **dépendance de la suite** au contenu vivant de `~/Claude-HQ`/repo voisin disparaît.
 
@@ -51,7 +51,7 @@ Donc `GLMReviewer`/GLM (`provider_family=zai`) est un reviewer **indépendant va
 
 ## LOT C8-B — reviewers + orchestration automatique
 
-**Scope :** (1) `GLMReviewer(ReviewerAdapter)` (WORKER §2.1) + **`GPTFormalEvidenceReviewer`** (`provider="openai-gpt"`, `provider_family="openai"`, WORKER §5), tous deux à l'allowlist du garde AST single-dispatch. **Rôle exact de `GPTFormalEvidenceReviewer` (corrige une contradiction interne v2 — ne PAS l'implémenter comme « le 3ᵉ provider distinct des runs critical ») :**
+**Scope :** (1) `GLMReviewer(ReviewerAdapter)` (WORKER §2.1) + **`GPTFormalEvidenceReviewer`** (`provider="openai-gpt"`, `provider_family="openai"`, WORKER §5), tous deux à l'allowlist du garde AST single-dispatch. **Rôle exact de `GPTFormalEvidenceReviewer` (corrige une contradiction interne v2 — ne PAS l'implémenter comme la 2ᵉ famille distincte des runs critical : sa famille est `openai`, identique à Codex) :**
 ```
 GPTFormalEvidenceReviewer appartient à provider_family=openai (même famille que Codex).
 Utilisable sur des runs normal, ou comme preuve additionnelle non comptée pour la
@@ -75,7 +75,7 @@ distinct (ex. ClaudeCLIReviewer, anthropic) — sinon BLOCK fail-closed
 
 **Tests adversariaux :** candidat trafiqué en cours de review (fail-closed) ; dispatch GLM manquant → `block` ; run critical avec 2 slots remplis par GLM → `G_DBL_AUDIT_SAME_PROVIDER` ; **run GLM-buildé dont on tente GLM comme reviewer → `G_DBL_AUDIT_BUILDER_SELF_REVIEW`** (le paradoxe, testé) ; contrôleur tentant de fabriquer `approved_by=human` → refusé.
 
-**Exigence reviewer :** **critical** — ajoute des capacités de dispatch/orchestration. Builder = `provider_family=anthropic`/`human_piloted=true` (≠ `zai`) → **GLM + GPT** (2 distincts). Codex final le 23.
+**Exigence reviewer :** **critical** — ajoute des capacités de dispatch/orchestration. Builder = `provider_family=anthropic`/`human_piloted=true` → **GLM (`zai`) + GPT (`openai`)** = 2 `provider_family` distinctes, toutes deux ≠ `anthropic`. Codex final le 23.
 
 **Critères d'acceptation :** `GLMReviewer` passe les formes tamper/fail-closed de `CodexCLIReviewer` ; `audit_entrypoints.py` = zéro dispatch non listé ; un dispatch GLM-reviewer réel (non mocké) réussit sur un candidat jouet, tracé comme `GLM_RUN_EVIDENCE.json` ; l'orchestrateur n'écrit jamais d'approbation humaine ; tests A0.2 existants inchangés et verts.
 
@@ -134,7 +134,7 @@ distinct (ex. ClaudeCLIReviewer, anthropic) — sinon BLOCK fail-closed
 
 **Tests adversariaux :** canary du candidat A présenté à la promotion du candidat B → refusé (l'erreur cross-candidate rattrapée 3× à la main cette session) ; E2E répété avec un gate mal configuré par run (2ᵉ reviewer manquant en critical, canary manquant, candidat trafiqué) → halte au bon gate/reason code ; tentative de promotion avec `promotion_ready` mais sans approbation humaine → refusée.
 
-**Exigence reviewer :** **critical** (chemin de promotion). Builder = `provider_family=anthropic`/`human_piloted=true` (≠ `zai`) → **GLM + GPT**. Codex final le 23 sur le SHA C-8 gelé.
+**Exigence reviewer :** **critical** (chemin de promotion). Builder = `provider_family=anthropic`/`human_piloted=true` → **GLM (`zai`) + GPT (`openai`)** = 2 `provider_family` distinctes, toutes deux ≠ `anthropic`. Codex final le 23 sur le SHA C-8 gelé.
 
 **Critères d'acceptation :** happy-path E2E complet (build → 2 reviewers GO → canary pass → promotion) avec « SAME HASH TRACED END TO END: True » comme `a0_toy_mission_e2e.py`, étendu aux 2 verdicts + canary ; chaque run adversarial halte au bon gate ; workspace live + `memory/lessons.jsonl` byte-identiques avant/après ; le rapport readiness répond, preuve à l'appui : SOURCE-FRESH lançable via le contrôleur ? (premier run = `critical`+`canary_required`).
 

@@ -19,7 +19,7 @@ Le **premier** run réel `SOURCE-FRESH` est classé **exceptionnellement `critic
 ## Ce qui restait ouvert et ne l'est plus
 
 Les 7 items sont tranchés. Aucune décision Boss résiduelle ne bloque C8-A. Deux points **backlog** (non bloquants) issus du contre-audit, à traiter dans le lot où ils deviennent pertinents, pas avant :
-- le **3ᵉ provider reviewer automatique** (`ClaudeCLIReviewer` ou autre) pour remplacer l'étape GPT-formelle du tier critique — devient pertinent en C8-B/C8-C ;
+- la **2ᵉ `provider_family` reviewer automatique** (`ClaudeCLIReviewer`, famille `anthropic`) pour le tier critique d'un run buildé par GLM (`zai`) : Codex et GPT étant tous deux `openai`, ils ne comptent que pour UNE famille, donc l'étape GPT-formelle ne peut pas tenir ce rôle — devient pertinent en C8-B/C8-C ;
 - la fixture gelée exacte qui déterminise le test D-044 (contenu de la fixture ledger/specs) — détail d'implémentation de C8-A/M-hermétique.
 
 ## Politique adoptée — Product Superiority and Efficiency Validation (docs-only, ne rouvre PAS D1–D7)

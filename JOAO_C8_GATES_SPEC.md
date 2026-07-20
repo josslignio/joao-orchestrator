@@ -1,7 +1,7 @@
 # JOÃO C-8 GATES + WORKER INTEGRATION — SPEC (v2, post GPT counter-audit)
 
 **Historique (Phase 0 — origine du document) :** SPEC + ROADMAP ONLY, branche `feat/joao-c8-gates-spec`, base `10156a2` — c'est le point de départ historique v1, plus l'état git courant.
-**Autorité C-8 courante (planning) :** `acf9ef4e42e2f9b1333a1f5c0314895339f4fef0` (tip v4, GO C8-A inscrit). C8-A implémenté et contre-audité sur `06911e457cee50e30934470beb69c78f9f696434` (branche `feat/joao-c8-a-v4`), correction en cours — non affecté par cet amendement.
+**Autorité C-8 courante (planning) :** `acf9ef4e42e2f9b1333a1f5c0314895339f4fef0` (tip v4, GO C8-A inscrit). C8-A : candidat final `1f831619fccccf60ec8c996d58ae2cb34a838b01` (branche `feat/joao-c8-a-v4`), **prêt pour les audits indépendants finaux** — non affecté par cet amendement. Aucun PASS GPT n'est acquis à ce stade.
 **Cet amendement (v2.1, docs-only) :** branche `feat/joao-product-superiority-spec`, base `acf9ef4e42e2f9b1333a1f5c0314895339f4fef0`. Ne touche ni C8-A, ni A0.2, ni aucun `.py`/test.
 A0.2 gelé `cc796b55808b95210adf9d219ecd91a240b2676c` (tree `7ae68454…`, `PROVISIONALLY_CLOSED`, Codex `PENDING_2026-07-23`) — read-only, non modifié.
 Compagnons : `JOAO_C8_GATE_CONTRACTS.md`, `JOAO_WORKER_INTEGRATION_SPEC.md`, `JOAO_C8_GATES_ROADMAP.md`, `JOAO_C8_OPEN_DECISIONS.md`, `JOAO_PRODUCT_VALIDATION_BACKLOG.md`.
@@ -67,7 +67,7 @@ Détail par gate : `JOAO_C8_GATE_CONTRACTS.md`. Forme commune `{ok, decision, re
 
 ## 10–11. Launch contracts
 
-Builder GLM/ZCode : WORKER §4 (réel). Reviewer Codex : WORKER §5 (réel, `CodexCLIReviewer`). Reviewer GLM : WORKER §2.1 (nouveau, `GLMReviewer`, **seulement si builder≠GLM**). 3ᵉ provider critique : WORKER §5.
+Builder GLM/ZCode : WORKER §4 (réel). Reviewer Codex : WORKER §5 (réel, `CodexCLIReviewer`). Reviewer GLM : WORKER §2.1 (nouveau, `GLMReviewer`, **seulement si builder≠GLM**). 2ᵉ `provider_family` distincte en critical : WORKER §5.
 
 ## 12. Modèle de preuve SHA/tree
 
@@ -120,7 +120,7 @@ C-8 s'arrête à un readiness gate (lot C8-C) prouvant que le cycle piloté par 
 
 ## 22. Cost policy
 
-**Zéro coût API payant incrémental.** Gates = code local (stdlib + git). Builder = abonnement GLM/ZCode (`joao-glm`, forfait Z.AI). Reviewer = abonnement Codex, + GPT-formel (intérim) pour le 3ᵉ provider critique. `max_cloud_workers: 1`, `no_parallel_cloud_subagents`. Aucun nouveau provider métré.
+**Zéro coût API payant incrémental.** Gates = code local (stdlib + git). Builder = abonnement GLM/ZCode (`joao-glm`, forfait Z.AI). Reviewer = abonnement Codex (`openai`). **GPT-formel est lui aussi de famille `openai`** : il ne peut donc PAS servir de 2ᵉ famille distincte à côté de Codex pour un run `critical` buildé par GLM (`zai`) — cette 2ᵉ famille doit être `anthropic` (`ClaudeCLIReviewer`, cible), sinon le run est bloqué fail-closed. GPT-formel reste utilisable en tier `normal` ou comme avis supplémentaire. `max_cloud_workers: 1`, `no_parallel_cloud_subagents`. Aucun nouveau provider métré.
 
 **« Zéro coût API payant incrémental » ≠ « usage efficace de tokens/quota ».** Le premier est vrai par construction (abonnements forfaitaires, jamais de facturation à l'appel) et ne dit rien du second : un run orchestré par JOÃO peut consommer davantage de tokens/quota qu'un build manuel équivalent (plus de reviewers, plus de preuve, plus de relectures) sans que cela coûte un centime de plus — et pourtant représenter un usage moins efficace du quota forfaitaire, donc un coût réel en capacité de travail disponible. `ZERO_PAID_API_COST=true` (§19) reste un critère technique valide ; il ne clôt PAS la question d'efficacité tokens/quota, qui est mesurée et seuillée séparément en §24 (`TOKEN_OVERHEAD_NORMAL`, `TOKEN_OVERHEAD_CRITICAL`, tokens/coût par candidat accepté).
 
