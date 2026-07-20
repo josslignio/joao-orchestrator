@@ -63,7 +63,13 @@ def test_g_dbl_audit_red_builder_self_review():
 
 
 def test_g_dbl_audit_red_same_provider():
-    result = gates.gate_dbl_audit(risk_tier="normal", builder_provider="zai-coding-plan",
+    # Exercised at `critical`, the only tier where two verdicts is the EXACT
+    # required cardinality and step 6 (provider uniqueness) is therefore
+    # reachable at all. Under the mandated decision order, `normal` + two
+    # verdicts is settled earlier by step 3 as TOO_MANY_REVIEWERS (proved by
+    # test_g_dbl_audit_red_normal_two_accepted_blocks_too_many), so asserting
+    # SAME_PROVIDER there would have been asserting an unreachable branch.
+    result = gates.gate_dbl_audit(risk_tier="critical", builder_provider="zai-coding-plan",
                                   builder_family="zai",
                                   reviewer_verdicts=[_verdict("codex-subscription", "openai"),
                                                      _verdict("codex-subscription", "openai")],
@@ -806,3 +812,157 @@ def test_c8a_l3_finding6_auth_io_named_gate_still_passes():
     result = gates.gate_auth_io(gate_name="G-AUTH-IO", required_entrypoint_symbols=["A.b"],
                                 referenced_symbols=["A.b"], resolvable_symbols=["A.b"])
     assert result["ok"] is True and result["reason_code"] == "G_AUTH_IO_OK"
+
+
+# ===========================================================================
+# Correction loop 4 (massive closeout, Phase 1) — the 13 explicitly required
+# G-DBL-AUDIT cases, asserted against the mandated deterministic precedence:
+#   1 structure/identity of EVERY verdict -> 2 explicit negative ->
+#   3 exact total cardinality -> 4 accepted cardinality ->
+#   5 builder independence -> 6 provider family.
+# ONE shared disagreement reason code across both tiers.
+# ===========================================================================
+
+_L4_BUILDER = dict(builder_provider="anthropic-claude", builder_family="anthropic")
+
+
+def _l4(provider, family, decision="pass", ok=True, tree=TREE, **overrides):
+    verdict = {"provider": provider, "provider_family": family, "model": "m",
+               "ok": ok, "decision": decision, "candidate_tree": tree}
+    verdict.update(overrides)
+    return verdict
+
+
+def _l4_gate(tier, verdicts, tree=TREE):
+    return gates.gate_dbl_audit(risk_tier=tier, reviewer_verdicts=verdicts,
+                                candidate_tree=tree, **_L4_BUILDER)
+
+
+# --- normal tier -----------------------------------------------------------
+
+def test_l4_normal_one_pass_is_accepted():
+    result = _l4_gate("normal", [_l4("codex-subscription", "openai")])
+    assert result["ok"] is True and result["reason_code"] == "G_DBL_AUDIT_OK"
+
+
+def test_l4_normal_pass_plus_block_is_disagreement_not_a_silent_filter():
+    result = _l4_gate("normal", [_l4("codex-subscription", "openai"),
+                                 _l4("glm", "zai", decision="block", ok=False)])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_REVIEWER_DISAGREEMENT"
+    assert result["dissenting_providers"] == ["glm"]
+
+
+def test_l4_normal_pass_plus_p1_is_also_disagreement():
+    result = _l4_gate("normal", [_l4("codex-subscription", "openai"),
+                                 _l4("glm", "zai", decision="p1", ok=False)])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_REVIEWER_DISAGREEMENT"
+
+
+def test_l4_normal_two_pass_is_too_many_reviewers():
+    result = _l4_gate("normal", [_l4("codex-subscription", "openai"),
+                                 _l4("glm", "zai")])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_TOO_MANY_REVIEWERS"
+    assert result["total_count"] == 2 and result["required"] == 1
+
+
+def test_l4_normal_malformed_reviewer_identity_blocks():
+    result = _l4_gate("normal", [{"ok": True, "decision": "pass", "candidate_tree": TREE}])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_MALFORMED_VERDICT"
+
+
+@pytest.mark.parametrize("field", ["provider", "provider_family", "model"])
+def test_l4_normal_each_missing_identity_field_blocks(field):
+    verdict = _l4("codex-subscription", "openai")
+    verdict.pop(field)
+    result = _l4_gate("normal", [verdict])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_MALFORMED_VERDICT"
+    assert result["missing_fields"] == [field]
+
+
+def test_l4_normal_zero_verdicts_blocks():
+    result = _l4_gate("normal", [])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_INSUFFICIENT_REVIEWERS"
+
+
+# --- critical tier ---------------------------------------------------------
+
+def test_l4_critical_two_valid_pass_is_accepted():
+    result = _l4_gate("critical", [_l4("codex-subscription", "openai"), _l4("glm", "zai")])
+    assert result["ok"] is True and result["reason_code"] == "G_DBL_AUDIT_OK"
+
+
+def test_l4_critical_pass_plus_block_is_disagreement():
+    result = _l4_gate("critical", [_l4("codex-subscription", "openai"),
+                                   _l4("glm", "zai", decision="block", ok=False)])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_REVIEWER_DISAGREEMENT"
+
+
+def test_l4_critical_two_pass_plus_one_block_is_disagreement_negative_takes_precedence():
+    # The negative verdict outranks the over-cardinality: step 2 precedes step 3.
+    result = _l4_gate("critical", [_l4("codex-subscription", "openai"), _l4("glm", "zai"),
+                                   _l4("mistral-cli", "mistral", decision="block", ok=False)])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_REVIEWER_DISAGREEMENT"
+
+
+def test_l4_critical_three_pass_is_too_many_reviewers():
+    result = _l4_gate("critical", [_l4("codex-subscription", "openai"), _l4("glm", "zai"),
+                                   _l4("mistral-cli", "mistral")])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_TOO_MANY_REVIEWERS"
+    assert result["total_count"] == 3 and result["required"] == 2
+
+
+# --- candidate_tree --------------------------------------------------------
+
+def test_l4_candidate_tree_missing_blocks():
+    result = _l4_gate("normal", [_l4("codex-subscription", "openai", tree=None)], tree=None)
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_INSUFFICIENT_REVIEWERS"
+    assert "candidate_tree" in result["reason"]
+
+
+def test_l4_candidate_tree_mismatch_blocks():
+    result = _l4_gate("normal", [_l4("codex-subscription", "openai", tree=OTHER_TREE)])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_TREE_MISMATCH"
+
+
+# --- the shared reason code + no-silent-filter guarantees ------------------
+
+def test_l4_disagreement_uses_one_shared_reason_code_across_both_tiers():
+    normal = _l4_gate("normal", [_l4("codex-subscription", "openai"),
+                                 _l4("glm", "zai", decision="block", ok=False)])
+    critical = _l4_gate("critical", [_l4("codex-subscription", "openai"),
+                                     _l4("glm", "zai", decision="block", ok=False)])
+    assert normal["reason_code"] == critical["reason_code"] == "G_DBL_AUDIT_REVIEWER_DISAGREEMENT"
+
+
+def test_l4_a_negative_verdict_is_never_removed_before_the_decision():
+    # A lone BLOCK must NOT be filtered down to "zero verdicts" and reported
+    # as an under-count — it is a disagreement, and it must be named.
+    result = _l4_gate("normal", [_l4("codex-subscription", "openai", decision="block", ok=False)])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_REVIEWER_DISAGREEMENT"
+    assert result["dissenting_providers"] == ["codex-subscription"]
+
+
+def test_l4_ok_true_with_block_decision_is_still_a_dissent():
+    # An adapter claiming ok=True while its decision says block must never be
+    # counted as an ACCEPT.
+    result = _l4_gate("normal", [_l4("codex-subscription", "openai", decision="block", ok=True)])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_REVIEWER_DISAGREEMENT"
+
+
+def test_l4_invalid_decision_value_is_malformed():
+    result = _l4_gate("normal", [_l4("codex-subscription", "openai", decision="approved")])
+    assert result["ok"] is False
+    assert result["reason_code"] == "G_DBL_AUDIT_MALFORMED_VERDICT"

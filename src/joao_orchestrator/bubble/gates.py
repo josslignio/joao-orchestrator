@@ -69,13 +69,26 @@ def gate_dbl_audit(*, risk_tier: str | None, builder_provider: str | None,
     verdict, exactly as `validate_reviewer_verdict`'s `proof.reviewer` +
     the controller-computed `candidate_tree` binding would produce.
 
-    `normal` requires EXACTLY 1 ACCEPT from a provider whose family !=
-    builder's — 0 or 2+ accepted verdicts both BLOCK (correction loop:
-    exact cardinality, not a floor). `critical` requires EXACTLY 2 ACCEPTs
-    from providers whose families are mutually distinct AND != builder's
-    family — 0, 1 or 3+ accepted verdicts all BLOCK. Matching two tools of
-    the SAME family (e.g. Codex + a formal-GPT import: both
+    `normal` requires EXACTLY 1 verdict, `critical` EXACTLY 2 of mutually
+    distinct `provider_family`, all families != the builder's. Matching two
+    tools of the SAME family (e.g. Codex + a formal-GPT import: both
     `provider_family="openai"`) does NOT satisfy critical (finding GPT v3).
+
+    DECISION ORDER (one explicit deterministic precedence, both tiers):
+
+      1. structure + identity of EVERY supplied verdict (not just the
+         accepted ones) — malformed/unidentified/mis-bound => BLOCK;
+      2. any explicit negative verdict (block/p1/ok=false) =>
+         `G_DBL_AUDIT_REVIEWER_DISAGREEMENT` — the SAME reason code in both
+         tiers, evaluated before any counting so a dissent can never be
+         out-voted by piling on ACCEPTs (D4: no automatic tie-break);
+      3. exact TOTAL cardinality;
+      4. accepted-cardinality requirement;
+      5. builder/reviewer independence;
+      6. provider-family requirements.
+
+    A negative verdict is therefore NEVER silently filtered out of the
+    decision — step 2 sees every verdict exactly as supplied.
     """
     # D1: risk_tier absent/invalid => BLOCK, never a silent "normal" default.
     if risk_tier not in _DBL_AUDIT_REQUIRED_ACCEPTS:
@@ -94,56 +107,79 @@ def gate_dbl_audit(*, risk_tier: str | None, builder_provider: str | None,
         return _block("G_DBL_AUDIT_INSUFFICIENT_REVIEWERS",
                       "candidate_tree is missing/empty — cannot bind or verify any reviewer verdict",
                       candidate_tree)
-    verdicts = reviewer_verdicts or []
+    verdicts = list(reviewer_verdicts or [])
+    required = _DBL_AUDIT_REQUIRED_ACCEPTS[risk_tier]
 
-    # Correction loop 3, finding #2 (D4 — no automatic tie-break): a
-    # reviewer that answered BLOCK or P1 is a genuine DISAGREEMENT and must
-    # halt a critical run outright, even when the required number of
-    # distinct-family ACCEPTs is otherwise satisfied. The previous
-    # `accepted = [... if decision == "pass"]` filter silently DISCARDED
-    # every dissenting verdict, so Codex PASS + Claude PASS + Mistral BLOCK
-    # reported G_DBL_AUDIT_OK. Checked BEFORE any counting so a dissent can
-    # never be out-voted by adding more ACCEPTs. Scoped to `critical`,
-    # matching D4's own wording (`JOAO_C8_OPEN_DECISIONS.md`).
-    if risk_tier == "critical":
-        dissenting = [v for v in verdicts
-                      if v.get("decision") in ("block", "p1") or v.get("ok") is False]
-        if dissenting:
-            return _block("G_DBL_AUDIT_REVIEWER_DISAGREEMENT",
-                          f"critical tier: {len(dissenting)} reviewer verdict(s) dissent "
-                          f"(decision block/p1 or ok=false) — D4 forbids any automatic tie-break; "
-                          "a disagreement BLOCKs and escalates to the Boss, it is never out-voted",
-                          candidate_tree,
-                          dissenting_providers=[v.get("provider") for v in dissenting])
-
-    accepted = [v for v in verdicts if v.get("ok") is True and v.get("decision") == "pass"]
-
-    # Correction loop 3, finding #1: a verdict counted toward the tier's
-    # reviewer requirement must carry a real, non-empty identity. Without
-    # this, `{"ok": True, "decision": "pass", "candidate_tree": TREE}` — no
-    # provider, no family, no model — counted as a valid independent
-    # reviewer (providers=[None]), and the builder-self-review and
-    # distinct-family checks below silently compared None against None.
-    for verdict in accepted:
-        # A non-str value (or a blank/whitespace one) is just as unusable as
-        # an absent key — both are malformed, neither is coerced.
+    # --- STEP 1: structure + identity of EVERY supplied verdict ------------
+    # Applied to all verdicts, not only the accepted ones: a dissenting or
+    # surplus verdict that cannot even be parsed/identified makes the whole
+    # decision unauditable. A non-str (or blank/whitespace) value is just as
+    # unusable as an absent key — neither is coerced.
+    for verdict in verdicts:
+        if not isinstance(verdict, dict):
+            return _block("G_DBL_AUDIT_MALFORMED_VERDICT",
+                          f"a supplied reviewer verdict is not an object: {verdict!r}", candidate_tree)
         missing = [field for field in ("provider", "provider_family", "model")
                    if not isinstance(verdict.get(field), str) or not verdict.get(field).strip()]
         if missing:
             return _block("G_DBL_AUDIT_MALFORMED_VERDICT",
-                          f"an accepted verdict is missing required identity field(s) {missing} — "
+                          f"a supplied verdict is missing required identity field(s) {missing} — "
                           "an unidentified verdict can never prove reviewer independence",
                           candidate_tree, missing_fields=missing)
-
-    # Tree binding: every accepted verdict must be bound to the exact frozen candidate.
-    for verdict in accepted:
+        if verdict.get("decision") not in ("pass", "p1", "block"):
+            return _block("G_DBL_AUDIT_MALFORMED_VERDICT",
+                          f"verdict from {verdict.get('provider')!r} has no valid decision "
+                          f"(got {verdict.get('decision')!r}; expected pass/p1/block)",
+                          candidate_tree, offending_provider=verdict.get("provider"))
         if verdict.get("candidate_tree") != candidate_tree:
             return _block("G_DBL_AUDIT_TREE_MISMATCH",
                           f"reviewer {verdict.get('provider')!r} verdict is bound to "
                           f"{verdict.get('candidate_tree')!r}, not the frozen candidate_tree {candidate_tree!r}",
                           candidate_tree, offending_provider=verdict.get("provider"))
 
-    # The builder never counts as its own reviewer — provider OR family match.
+    # --- STEP 2: any explicit negative verdict, BOTH tiers -----------------
+    # D4 (no automatic tie-break), generalized from critical to normal: a
+    # reviewer that answered BLOCK/P1 (or ok=false) is a genuine
+    # DISAGREEMENT. Evaluated BEFORE any counting, so a dissent can never be
+    # out-voted by adding ACCEPTs, and is never silently filtered out of the
+    # decision. ONE shared reason code across both tiers.
+    dissenting = [v for v in verdicts
+                  if v.get("decision") in ("block", "p1") or v.get("ok") is not True]
+    if dissenting:
+        return _block("G_DBL_AUDIT_REVIEWER_DISAGREEMENT",
+                      f"{risk_tier} tier: {len(dissenting)} reviewer verdict(s) dissent "
+                      "(decision block/p1, or ok is not True) — D4 forbids any automatic tie-break; "
+                      "a disagreement BLOCKs and escalates to the Boss, it is never out-voted",
+                      candidate_tree,
+                      dissenting_providers=[v.get("provider") for v in dissenting])
+
+    # --- STEP 3: exact TOTAL cardinality -----------------------------------
+    # After step 2 there are no negatives left, so total == accepted; both are
+    # reported so an over-count is unambiguous.
+    if len(verdicts) > required:
+        return _block("G_DBL_AUDIT_TOO_MANY_REVIEWERS",
+                      f"{risk_tier} tier requires exactly {required} reviewer verdict(s); "
+                      f"{len(verdicts)} supplied (all positive)",
+                      candidate_tree, total_count=len(verdicts), required=required)
+
+    # --- STEP 4: accepted-cardinality requirement --------------------------
+    accepted = [v for v in verdicts if v.get("ok") is True and v.get("decision") == "pass"]
+    if len(accepted) < required:
+        # Under-count. `critical` keeps its dedicated fail-closed code: the
+        # missing verdict is precisely the distinct non-builder family that
+        # does not exist yet, never an invented third reviewer.
+        if risk_tier == "critical":
+            return _block("G_DBL_AUDIT_NO_DISTINCT_FAMILY_AVAILABLE",
+                          f"critical tier requires exactly {required} ACCEPT verdicts of mutually distinct "
+                          f"provider_family (all != builder family {builder_family!r}); only "
+                          f"{len(accepted)} qualifying verdict(s) present",
+                          candidate_tree, accepted_count=len(accepted), required=required)
+        return _block("G_DBL_AUDIT_INSUFFICIENT_REVIEWERS",
+                      f"{risk_tier} tier requires exactly {required} ACCEPT verdict(s) from a provider != "
+                      f"builder; only {len(accepted)} qualifying verdict(s) present",
+                      candidate_tree, accepted_count=len(accepted), required=required)
+
+    # --- STEP 5: builder/reviewer independence -----------------------------
     for verdict in accepted:
         if verdict.get("provider") == builder_provider or verdict.get("provider_family") == builder_family:
             return _block("G_DBL_AUDIT_BUILDER_SELF_REVIEW",
@@ -151,54 +187,23 @@ def gate_dbl_audit(*, risk_tier: str | None, builder_provider: str | None,
                           f"matches the builder ({builder_provider!r}, family {builder_family!r})",
                           candidate_tree, offending_provider=verdict.get("provider"))
 
+    # --- STEP 6: provider-family requirements ------------------------------
     providers = [v.get("provider") for v in accepted]
     if len(providers) != len(set(providers)):
         return _block("G_DBL_AUDIT_SAME_PROVIDER",
                       "two or more accepted verdicts share the same reviewer.provider",
                       candidate_tree, providers=providers)
-
-    required = _DBL_AUDIT_REQUIRED_ACCEPTS[risk_tier]
-
+    families = [v.get("provider_family") for v in accepted]
     if risk_tier == "critical":
-        families = [v.get("provider_family") for v in accepted]
         if len(families) != len(set(families)):
             return _block("G_DBL_AUDIT_SAME_FAMILY",
                           "critical tier: two or more accepted verdicts share the same provider_family "
                           "(e.g. Codex + a formal-GPT import are both 'openai' — not two distinct families)",
                           candidate_tree, families=families)
-        if len(accepted) < required:
-            # A critical run with fewer than 2 accepted, distinct-family, non-builder
-            # verdicts is fail-closed BLOCK — never silently accepted with 2 same-family
-            # verdicts, and never a claim that a 3rd automatic reviewer was invented.
-            return _block("G_DBL_AUDIT_NO_DISTINCT_FAMILY_AVAILABLE",
-                          f"critical tier requires exactly {required} ACCEPT verdicts of mutually distinct "
-                          f"provider_family (all != builder family {builder_family!r}); only "
-                          f"{len(accepted)} qualifying verdict(s) present",
-                          candidate_tree, accepted_count=len(accepted), required=required)
-        if len(accepted) > required:
-            # correction loop finding #3: EXACT cardinality, not a floor — a
-            # 3rd+ accepted verdict is never silently ignored/tolerated, even
-            # if it is itself distinct-family and non-builder.
-            return _block("G_DBL_AUDIT_TOO_MANY_REVIEWERS",
-                          f"critical tier requires exactly {required} ACCEPT verdicts; "
-                          f"{len(accepted)} qualifying verdicts present",
-                          candidate_tree, accepted_count=len(accepted), required=required)
         return _pass("G_DBL_AUDIT_OK", "critical tier: exactly 2 ACCEPT verdicts, distinct families, tree-bound",
                     candidate_tree, providers=providers, families=families)
-
-    if len(accepted) < required:
-        return _block("G_DBL_AUDIT_INSUFFICIENT_REVIEWERS",
-                      f"{risk_tier} tier requires exactly {required} ACCEPT verdict(s) from a provider != "
-                      f"builder; only {len(accepted)} qualifying verdict(s) present",
-                      candidate_tree, accepted_count=len(accepted), required=required)
-    if len(accepted) > required:
-        # correction loop finding #3: exactly 1 for normal, never 2+.
-        return _block("G_DBL_AUDIT_TOO_MANY_REVIEWERS",
-                      f"{risk_tier} tier requires exactly {required} ACCEPT verdict(s); "
-                      f"{len(accepted)} qualifying verdicts present",
-                      candidate_tree, accepted_count=len(accepted), required=required)
     return _pass("G_DBL_AUDIT_OK", f"{risk_tier} tier: exactly {required} ACCEPT verdict(s), tree-bound",
-                candidate_tree, providers=providers)
+                candidate_tree, providers=providers, families=families)
 
 
 # ---------------------------------------------------------------------------

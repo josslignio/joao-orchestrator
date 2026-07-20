@@ -9,6 +9,8 @@ par ce document. **Exactement 7 gates, pas de 8ᵉ.** D-046 : JOÃO = control pl
 
 Convention : chaque gate rend `{"ok": bool, "decision": "pass"|"block", "reason_code": str, "reason": str, "candidate_tree": sha|null, ...champs}` — même vocabulaire que les adaptateurs existants (`execution_backend.py` `PREFLIGHT_UNAVAILABLE`, `reviewer_contract.py` `"decision": "block"`). Fail-closed : doute/entrée manquante/exception → BLOCK. Reason codes = chaînes stables contractuelles.
 
+**Reason codes de succès (`ok=true`).** Chaque gate émet exactement un code de succès, stable et contractuel au même titre que ses codes de blocage : `G_DBL_AUDIT_OK`, `G_HERMETIC_OK`, `G_AUTH_IO_OK`, `G_NO_STALE_OK`, `G_SHA_BOUND_OK`, `G_CANARY_FIRST_OK`, `G_FROZEN_FINISH_LINE_OK`. Un seul code de succès supplémentaire existe, pour un gate dont la politique ne s'applique pas au run : `G_CANARY_FIRST_NOT_REQUIRED` (`canary_required=false`) — jamais un « pass » de fait obtenu par absence de vérification.
+
 ---
 
 ## G-DBL-AUDIT — deux auditeurs indépendants, à niveau de risque  *(v2: paradoxe GLM résolu)*
@@ -32,17 +34,40 @@ Chemins zéro-coût pour le 3ᵉ provider (décision d'implémentation, pas de n
 - `GLMReviewer` reste utile comme reviewer indépendant **uniquement** quand le builder n'est PAS GLM (ex. `SandboxBuilder`, ou un futur builder d'un autre provider).
 
 **Inputs :** `run.risk_tier` (`normal`|`critical` — D1 : absence → BLOCK) ; les verdicts du stage final, chacun avec son `reviewer.provider` **calculé par le contrôleur** (`reviewer_contract.py`, jamais l'identité auto-déclarée) ; `run.builder_provider`.
+**Ordre de décision (précédence déterministe unique, appliquée aux DEUX tiers) :**
+
+```
+1. structure + identité de CHAQUE verdict fourni (pas seulement les ACCEPT)
+2. tout verdict explicitement négatif (block/p1/ok≠true)  -> REVIEWER_DISAGREEMENT
+3. cardinalité TOTALE exacte                              -> TOO_MANY_REVIEWERS
+4. cardinalité des ACCEPT                                 -> INSUFFICIENT / NO_DISTINCT_FAMILY
+5. indépendance builder/reviewer                          -> BUILDER_SELF_REVIEW
+6. exigences de provider_family                           -> SAME_PROVIDER / SAME_FAMILY
+```
+
+Conséquence normative : un verdict négatif n'est **jamais** filtré hors de la décision — l'étape 2 voit tous les verdicts tels que fournis, et précède tout comptage. Table de vérité contractuelle :
+
+| tier | verdicts | résultat |
+|---|---|---|
+| normal | `[PASS]` | **PASS** |
+| normal | `[PASS, BLOCK]` | `G_DBL_AUDIT_REVIEWER_DISAGREEMENT` |
+| normal | `[PASS, PASS]` | `G_DBL_AUDIT_TOO_MANY_REVIEWERS` |
+| critical | `[PASS, PASS]` familles valides | **PASS** |
+| critical | `[PASS, BLOCK]` | `G_DBL_AUDIT_REVIEWER_DISAGREEMENT` |
+| critical | `[PASS, PASS, BLOCK]` | `G_DBL_AUDIT_REVIEWER_DISAGREEMENT` (le négatif prime sur la sur-cardinalité) |
+| critical | `[PASS, PASS, PASS]` | `G_DBL_AUDIT_TOO_MANY_REVIEWERS` |
+
 **Output / reason codes :**
-- `ok=true` ssi : `normal` → exactement 1 verdict ACCEPT d'un provider ≠ builder ; `critical` → 2 verdicts ACCEPT de 2 providers **distincts entre eux ET distincts du builder**.
+- `G_DBL_AUDIT_OK` — succès : `normal` → exactement 1 verdict ACCEPT d'un provider ≠ builder ; `critical` → exactement 2 verdicts ACCEPT de 2 `provider_family` **distinctes entre elles ET distinctes du builder**. Tous liés au `candidate_tree` gelé, aucun dissident présent.
 - `G_DBL_AUDIT_INSUFFICIENT_REVIEWERS` — moins de verdicts ACCEPT que requis pour le tier (couvre aussi : `risk_tier` absent/invalide, `builder_provider`/`builder_family` absent, `candidate_tree` absent/vide — entrées obligatoires, fail-closed).
-- `G_DBL_AUDIT_TOO_MANY_REVIEWERS` — **cardinalité EXACTE** : plus de verdicts ACCEPT que le tier n'en exige (`normal` > 1, `critical` > 2). Un verdict ACCEPT surnuméraire n'est jamais silencieusement ignoré ni toléré, même s'il est lui-même de famille distincte et non-builder.
-- `G_DBL_AUDIT_MALFORMED_VERDICT` — un verdict compté comme ACCEPT n'a pas d'identité exploitable : `provider`, `provider_family` ou `model` absent, vide, blanc, ou non-`str`. Un verdict non identifié ne peut jamais prouver l'indépendance du reviewer (sans ce garde, `{"ok": true, "decision": "pass", "candidate_tree": …}` comptait comme reviewer valide avec `providers=[None]`, et les checks builder-self-review / distinct-family comparaient `None` à `None`).
-- `G_DBL_AUDIT_REVIEWER_DISAGREEMENT` — **(D4)** tier critical : au moins un verdict dissident (`decision` ∈ {`block`,`p1`} ou `ok=false`) est présent. Évalué **AVANT** tout comptage, donc un dissident ne peut jamais être « out-voté » en ajoutant des ACCEPT. D4 interdit tout tie-break automatique : désaccord → BLOCK + escalade Boss.
-- `G_DBL_AUDIT_SAME_PROVIDER` — deux verdicts partagent un `reviewer.provider`.
+- `G_DBL_AUDIT_TOO_MANY_REVIEWERS` — **cardinalité TOTALE EXACTE** : plus de verdicts que le tier n'en exige (`normal` > 1, `critical` > 2), tous positifs. Un verdict surnuméraire n'est jamais silencieusement ignoré ni toléré, même s'il est lui-même de famille distincte et non-builder. (Un sur-nombre **contenant** un négatif est classé `REVIEWER_DISAGREEMENT`, étape 2 < étape 3.)
+- `G_DBL_AUDIT_MALFORMED_VERDICT` — **tout** verdict fourni (dissident compris, pas seulement les ACCEPT) sans identité exploitable — `provider`, `provider_family` ou `model` absent, vide, blanc ou non-`str` — ou qui n'est pas un objet, ou dont `decision` n'est pas ∈ {`pass`,`p1`,`block`}. Un verdict non identifié ne peut jamais prouver l'indépendance du reviewer (sans ce garde, `{"ok": true, "decision": "pass", "candidate_tree": …}` comptait comme reviewer valide avec `providers=[None]`, et les checks builder-self-review / distinct-family comparaient `None` à `None`).
+- `G_DBL_AUDIT_REVIEWER_DISAGREEMENT` — **(D4)** **les DEUX tiers, un seul et même reason code** : au moins un verdict dissident (`decision` ∈ {`block`,`p1`} ou `ok` ≠ `true`) est présent. Évalué **AVANT** tout comptage, donc un dissident ne peut jamais être « out-voté » en ajoutant des ACCEPT. D4 interdit tout tie-break automatique : désaccord → BLOCK + escalade Boss. Il n'existe **pas** de second reason code de désaccord.
+- `G_DBL_AUDIT_SAME_PROVIDER` — deux verdicts ACCEPT partagent un `reviewer.provider`. Atteignable uniquement au tier `critical` (au tier `normal`, deux verdicts sont déjà tranchés à l'étape 3).
 - `G_DBL_AUDIT_SAME_FAMILY` — tier critical : deux verdicts partagent un `provider_family` (ex. Codex+GPT = openai).
 - `G_DBL_AUDIT_BUILDER_SELF_REVIEW` — un reviewer a `provider == run.builder_provider` (ou `provider_family == builder_family`).
 - `G_DBL_AUDIT_NO_DISTINCT_FAMILY_AVAILABLE` — tier critical mais aucun 2ᵉ reviewer d'une famille distincte n'existe → BLOCK fail-closed.
-- `G_DBL_AUDIT_TREE_MISMATCH` — un verdict est lié à un tree ≠ `candidate_tree` gelé.
+- `G_DBL_AUDIT_TREE_MISMATCH` — un verdict est lié à un tree ≠ `candidate_tree` gelé (vérifié sur **chaque** verdict fourni, étape 1).
 
 **Real entrypoint :** la **vérification** vit dans `bubble/gates.py` et est appelée par le contrôleur au passage `REVIEWING → promotion_ready` **et** re-vérifiée dans `RunRuntime.promote()` (comme `promotion._verify_acceptance_for_promotion` garde déjà `promote()`). Elle ne fabrique jamais l'approbation humaine (voir « Séparation » en fin de doc).
 
