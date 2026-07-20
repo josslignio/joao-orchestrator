@@ -21,3 +21,16 @@ Le **premier** run réel `SOURCE-FRESH` est classé **exceptionnellement `critic
 Les 7 items sont tranchés. Aucune décision Boss résiduelle ne bloque C8-A. Deux points **backlog** (non bloquants) issus du contre-audit, à traiter dans le lot où ils deviennent pertinents, pas avant :
 - le **3ᵉ provider reviewer automatique** (`ClaudeCLIReviewer` ou autre) pour remplacer l'étape GPT-formelle du tier critique — devient pertinent en C8-B/C8-C ;
 - la fixture gelée exacte qui déterminise le test D-044 (contenu de la fixture ledger/specs) — détail d'implémentation de C8-A/M-hermétique.
+
+## Politique adoptée — Product Superiority and Efficiency Validation (docs-only, ne rouvre PAS D1–D7)
+
+Instruction Boss du 2026-07-20 : JOÃO ne peut pas être considéré prouvé simplement parce qu'il ajoute davantage de contrôles ; il doit être **mesuré** contre le workflow manuel actuel (Claude Code build → revue manuelle Claude → copié-collé GPT → vérifications Git/pytest/SHA à la main). Le Boss **adopte** la politique suivante comme décision tranchée, non comme une question ouverte :
+
+- JOÃO doit être benchmarké contre les deux baselines manuelles (`JOAO_C8_GATES_SPEC.md` §24.2 — orchestration pure même stack, et vrai workflow actuel), jamais une seule.
+- Les seuils numériques de `JOAO_C8_GATES_SPEC.md` §24.6 (premier benchmark synthétique C8-C ; après les 3 premières missions Job Radar ; après 10 missions réelles) sont les seuils initiaux adoptés. §24 est la **source unique** de ces chiffres — ce document et `JOAO_C8_GATES_ROADMAP.md` y font référence, ne les redupliquent pas de mémoire.
+- Ces seuils ne peuvent être révisés que par une nouvelle décision Boss documentée (même format que D1–D7), jamais silencieusement en cours de mesure.
+- Une valeur de token/usage non exposée par un provider reste `unknown` en permanence — jamais convertie en `0` ni en une estimation, quel que soit l'effet sur le score du benchmark.
+- Un échec d'efficacité (§24.7, condition STOP) déclenche une investigation/simplification ou un retour à un workflow hybride — jamais l'ajout d'une nouvelle couche d'architecture dans le seul but de faire passer le benchmark.
+- Cette piste **n'est pas un 8ᵉ gate** technique C-8, ne modifie et ne bloque pas C8-A, C8-B ou C8-C techniquement — elle en est une **condition de validation produit**, mesurée à partir de C8-B (instrumentation) puis C8-C (benchmark) et les missions réelles (§24.9).
+
+Répercussion : `JOAO_C8_GATES_SPEC.md` §24, `JOAO_C8_GATES_ROADMAP.md` (C8-B, C8-C, section post-C8), `JOAO_PRODUCT_VALIDATION_BACKLOG.md` (PV-01…PV-09).
