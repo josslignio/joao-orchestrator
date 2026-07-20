@@ -113,6 +113,28 @@ def digest(path: Path) -> str:
     return value.hexdigest()
 
 
+def _executable_read_paths(executable: str | Path) -> list[str]:
+    """The Seatbelt profile (`sandbox.py::seatbelt_profile`) only grants
+    `file-read*` on `cwd`/`home_dir`/`extra_write_paths`/`extra_read_paths`
+    plus a fixed set of system directories (`/usr`, `/System`, `/Library`,
+    `/opt/homebrew`, `/usr/local`, `/private/var`, ...) — NOT a user's real
+    `$HOME` generically. A builder/reviewer CLI installed under
+    `~/.local/bin` (verified: this is exactly where the real `joao-glm` and
+    `claude` binaries on this host resolve to) is therefore unreadable/
+    unexecutable under the bounded sandbox unless its own resolved path is
+    explicitly added here — every adapter dispatch below does so, so a real
+    dispatch can actually run rather than fail with a sandbox-denied
+    "Operation not permitted" on the very first exec.
+
+    Resolves a bare command name (e.g. `"claude"`) via `PATH` the same way
+    the sandboxed subprocess itself will; returns `[]` (never a guess) when
+    the executable cannot be resolved at all — the dispatch then fails
+    exactly as it would have without this helper, never silently different."""
+    resolved = shutil.which(str(executable)) or (str(Path(executable).expanduser())
+                                                 if Path(executable).expanduser().exists() else None)
+    return [resolved] if resolved else []
+
+
 class RunStatus(str, Enum):
     PENDING = "pending"; PLANNING = "planning"; READY = "ready"
     BUILDING = "building"; TESTING = "testing"; REVIEWING = "reviewing"
@@ -279,11 +301,136 @@ class SandboxBuilder(BuilderAdapter):
     def build(self, mission, workspace, run_dir, allowed, correction): return self.callback(mission, workspace, correction)
 
 
-# RI-6: the GLM CLI authenticates via env vars (not a ~/-rooted credential file
-# — verified against scripts/joao_glm_cli.py), so a fresh temp HOME is safe here;
-# these names are the only ones explicitly let through the sandbox's allowlist.
+# RI-6: these env var names are explicitly let through the sandbox's
+# allowlist for a GLM dispatch (an API key supplied this way, if any).
 _GLM_ENV_ALLOWLIST = ["ZAI_API_KEY", "ZHIPU_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY",
                        "JOAO_GLM_MODEL", "JOAO_OPENCODE"]
+
+# Boss directive (2026-07-20, narrow subscription-auth staging): the real
+# installed GLM CLI's own capability probe (`scripts/joao_glm_cli.py`
+# `AUTH_PATH`) is FILE-resident, not env-var-only as previously documented
+# here — verified empirically on this host: `~/.local/share/opencode/
+# auth.json` (0600) exists and a fresh-temp-HOME dispatch with no staging
+# reports `auth_file_present: False` and fails its own probe. This is the
+# ONE file staged into the sandboxed dispatch's temp HOME (see
+# `sandbox.run_sandboxed`'s `auth_stage` — source read directly by the
+# UNSANDBOXED parent process before the child launches, never inside the
+# sandbox profile; the source itself is never modified, only copied) — no
+# other opencode config/history/cache is ever staged.
+_GLM_AUTH_STAGE = [{"source": str(Path("~/.local/share/opencode/auth.json").expanduser()),
+                    "relative_dest": ".local/share/opencode/auth.json"}]
+
+# C8-B temporary topology (Boss decision, 2026-07-20): `ClaudeCodeBuilder` and
+# `ClaudeCLIReviewer` are the SAME underlying product (Claude Code CLI) in two
+# roles — one shared, controller-owned provider identity, never two
+# independently-typed string literals that could drift apart.
+CLAUDE_CLI_PROVIDER = "claude-cli"
+
+# The real installed Claude CLI's interactive/subscription session
+# authenticates via macOS Keychain + `~/.claude.json` (verified empirically:
+# copying `~/.claude.json` alone into a fresh HOME still reports "Not logged
+# in" — the actual credential is Keychain-resident, tied to the real user
+# session, not a stageable file). Boss directive (2026-07-20, worker-host
+# architecture addendum) explicitly forbids BOTH of this CLI's own
+# authentication options for a bounded dispatch: `preserve_host_environment`
+# (would read the real Keychain session) AND `ANTHROPIC_API_KEY`/`--bare`
+# (a paid API account this deployment must never require). No environment
+# variable is allowlisted for Claude — the sandboxed dispatch inherits
+# nothing beyond `cwd`/`tmp` (a genuinely stripped environment, per that
+# directive's authentication section). Net effect, verified rather than
+# assumed: under these three constraints simultaneously, a REAL, live,
+# network-authenticated Claude Code CLI dispatch is not achievable on a host
+# whose only credential is an interactive subscription session — this is a
+# structural fact about the installed CLI, not a gap in this adapter's
+# implementation, which otherwise dispatches exactly like `GLMBuilder`/
+# `GLMReviewer`. `available()` only ever probes for the executable itself
+# (matching `GLMReviewer`'s convention) — it does not, and structurally
+# cannot, probe whether a live network call would actually authenticate.
+_CLAUDE_ENV_ALLOWLIST: list[str] = []
+
+# Staged for completeness/documentation (Boss directive item: "document each
+# path" if more than one auth artifact exists) — NOT sufficient on its own:
+# `~/.claude.json` holds only non-secret account metadata (`oauthAccount`
+# etc.), never the OAuth token itself, which is Keychain-resident (verified
+# empirically — see the note above). Staging it changes nothing about the
+# "Not logged in" outcome; it is included here only so the ONE real file this
+# CLI's config format is known to use is at least handled the same narrow way
+# GLM's is, not because it makes live auth work.
+_CLAUDE_AUTH_STAGE = [{"source": str(Path("~/.claude.json").expanduser()), "relative_dest": ".claude.json"}]
+
+
+def _claude_bounded_available(executable: str) -> bool:
+    return bool(shutil.which(executable))
+
+
+class ClaudeCodeBuilder(BuilderAdapter):
+    """`BuilderAdapter` for the real Claude Code CLI, dispatched exactly like
+    `GLMBuilder` — same `ExecutionBackend`, same fresh-temp-HOME/Seatbelt
+    sandbox, same frozen-scope network gating, no second dispatch path, no
+    PTY (plain argv-based subprocess, one request/one response).
+
+    Bounded, not host-environment-passthrough, no API key (Boss directive,
+    2026-07-20): see the module-level note above `_CLAUDE_ENV_ALLOWLIST` for
+    why this means a live network dispatch cannot currently authenticate on
+    this host — `available()` still only probes for the executable, never a
+    fabricated "yes, and it will succeed" claim. Cannot select reviewers,
+    cannot write reviewer evidence or a Boss approval record, and cannot
+    alter `frozen_mission.json` — it implements exactly the
+    `BuilderAdapter.build()` contract `RunRuntime._execute` already enforces
+    for every builder (allowed-path violations, one bounded correction, no
+    mutation outside `profile.allowed_write_paths`), identically to
+    `GLMBuilder`.
+    """
+    provider = CLAUDE_CLI_PROVIDER
+    model = os.environ.get("JOAO_CLAUDE_BUILD_MODEL", "sonnet")
+    provider_family = "anthropic"
+    requires_network_transport = True
+
+    def __init__(self, executable: str = "claude", backend: ExecutionBackend | None = None, timeout: int = 1200):
+        self.executable = executable
+        self.timeout = timeout
+        self.backend = backend or LocalUntrustedBackend()
+
+    def available(self) -> bool:
+        return _claude_bounded_available(self.executable)
+
+    def build(self, mission, workspace, run_dir, allowed, correction):
+        task = run_dir / ("correction.md" if correction else "builder-task.md")
+        atomic_write_text(task, mission)
+        output = run_dir / ("claude-correction.jsonl" if correction else "claude-builder.jsonl")
+        # `--bare`: Claude's own contract is that this mode NEVER reads
+        # Keychain/OAuth, only `ANTHROPIC_API_KEY`/`apiKeyHelper` — chosen
+        # deliberately so the auth outcome under this bounded sandbox is
+        # deterministic (a clean, honest auth failure absent a key) rather
+        # than depending on whatever Seatbelt happens to let a Keychain
+        # lookup do. This deployment never sets `ANTHROPIC_API_KEY` (Boss
+        # directive) — see the module-level note above `_CLAUDE_ENV_ALLOWLIST`.
+        # `--permission-mode acceptEdits`: the builder may apply file edits
+        # without an interactive prompt (there is none), the write-capable
+        # counterpart to the reviewer's `plan` mode below. `--add-dir
+        # workspace` scopes Claude's OWN tool-permission layer to the mission
+        # workspace, defense in depth alongside the JOAO sandbox's
+        # independent `allowed_write_paths` enforcement.
+        argv = [self.executable, "--bare", "-p", mission, "--model", self.model,
+                "--permission-mode", "acceptEdits", "--output-format", "json",
+                "--add-dir", str(workspace)]
+        capabilities = getattr(self, "_capabilities", None) or {}
+        # A0.2: the ONLY source of this dispatch's network permission — no
+        # adapter-level override, identical discipline to GLMBuilder.
+        network = bool(capabilities.get("network_capability", False))
+        result = self.backend.execute(argv, cwd=workspace, timeout=self.timeout, network=network,
+                                      environment_allowlist=_CLAUDE_ENV_ALLOWLIST,
+                                      extra_read_paths=_executable_read_paths(self.executable),
+                                      extra_write_paths=[str(run_dir)], auth_stage=_CLAUDE_AUTH_STAGE)
+        atomic_write_text(output, result["stdout"])
+        # RI-5: never trust a builder-reported hash — the controller
+        # (RunRuntime._execute) independently recomputes output_sha256 itself.
+        return {"ok": result["ok"], "provider": self.provider, "model": self.model,
+                "returncode": result["returncode"], "stdout": result["stdout"][-4000:],
+                "stderr": result["stderr"][-4000:], "output": str(output),
+                "sandbox_enforcement": result.get("enforcement"),
+                "task_network_capability_granted": network,
+                "provider_transport_network_declared": self.requires_network_transport}
 
 
 class GLMBuilder(BuilderAdapter):
@@ -321,7 +468,8 @@ class GLMBuilder(BuilderAdapter):
         network = bool(capabilities.get("network_capability", False))
         result = self.backend.execute(argv, cwd=workspace, timeout=900, network=network,
                                       environment_allowlist=_GLM_ENV_ALLOWLIST,
-                                      extra_write_paths=[str(run_dir)])
+                                      extra_read_paths=_executable_read_paths(self.executable),
+                                      extra_write_paths=[str(run_dir)], auth_stage=_GLM_AUTH_STAGE)
         # RI-5: never trust a builder-reported hash — the controller
         # (RunRuntime._execute) independently recomputes output_sha256 itself.
         return {"ok": result["ok"], "provider": self.provider, "model": self.model,
@@ -378,6 +526,55 @@ class GPTFormalEvidenceReviewer(ReviewerAdapter):
             # Fail-closed (RI-4/RI-5): an absent import is not an implicit pass.
             return {"ok": False, "decision": "block", "required": True,
                     "reason": "no GPT-formal review evidence has been imported yet",
+                    "expected_candidate_tree": candidate_tree}
+        return secure_import_mod.consume_import(
+            self.inbox_dir, import_path.read_text(), run_id=run_id, mission_id=mission_id,
+            candidate_tree=candidate_tree, expected_reviewer_provider=self.provider,
+            expected_model=self.model, now=now())
+
+    def review(self, run, run_dir):
+        # `run` has no distinct "mission_id" field in this schema — the
+        # closest stable identifier RunRuntime tracks is `project_id`.
+        return self.review_secure(run_id=run.get("run_id", ""), mission_id=run.get("project_id", ""),
+                                  candidate_tree=run.get("candidate_tree", ""))
+
+
+class ClaudeChatEvidenceReviewer(ReviewerAdapter):
+    """Secure-import-only reviewer for a Claude Chat review
+    (`JOAO_C8_GATES_SPEC.md` §25.4, WA-03 pulled forward — Boss directive,
+    2026-07-20: a live nested `claude` CLI subprocess dispatch from within an
+    active Claude Code session is structurally blocked by this harness's own
+    safety classifier, independent of any auth/sandbox design; the "chat"
+    reviewer round — the Boss manually pastes JOAO's evidence bundle into a
+    SEPARATE Claude Chat conversation and the resulting verdict is imported
+    back — is therefore Claude's NORMAL/CRITICAL review path today, not a
+    fallback). Structurally identical to `GPTFormalEvidenceReviewer`: identity
+    is fixed by the adapter/controller — NEVER by the imported JSON.
+
+    `provider_family == "anthropic"`, DISTINCT from `CodexCLIReviewer`/
+    `GPTFormalEvidenceReviewer` (`openai`) and from `GLMReviewer`/`GLMBuilder`
+    (`zai`) — the genuinely independent second family a critical GLM build
+    needs (`JOAO_C8_GATE_CONTRACTS.md` G-DBL-AUDIT, finding GPT v3: Codex+GPT
+    are both `openai`, never two distinct families).
+
+    `inbox_dir` is the controller-owned inbox the orchestrator minted a
+    challenge into — never a builder-writable path, exactly like
+    `GPTFormalEvidenceReviewer`.
+    """
+    provider = "claude-chat"
+    model = os.environ.get("JOAO_CLAUDE_CHAT_MODEL", "claude-chat")
+    provider_family = "anthropic"
+
+    def __init__(self, inbox_dir: Path, import_filename: str = "claude-chat-review-import.json"):
+        self.inbox_dir = Path(inbox_dir)
+        self.import_filename = import_filename
+
+    def review_secure(self, *, run_id: str, mission_id: str, candidate_tree: str) -> dict[str, Any]:
+        import_path = self.inbox_dir / self.import_filename
+        if not import_path.is_file():
+            # Fail-closed (RI-4/RI-5): an absent import is not an implicit pass.
+            return {"ok": False, "decision": "block", "required": True,
+                    "reason": "no Claude-Chat review evidence has been imported yet",
                     "expected_candidate_tree": candidate_tree}
         return secure_import_mod.consume_import(
             self.inbox_dir, import_path.read_text(), run_id=run_id, mission_id=mission_id,
@@ -686,7 +883,8 @@ class GLMReviewer(ReviewerAdapter):
         # for the task/output files themselves) — defense in depth.
         dispatch = self.backend.execute(argv, cwd=review_root, timeout=self.timeout, network=True,
                                         environment_allowlist=_GLM_ENV_ALLOWLIST,
-                                        extra_write_paths=[str(run_dir)])
+                                        extra_read_paths=_executable_read_paths(self.executable),
+                                        extra_write_paths=[str(run_dir)], auth_stage=_GLM_AUTH_STAGE)
         if not dispatch.get("pid"):
             return {"ok": False, "decision": "block", "stage": stage,
                     "reason": f"GLM reviewer unavailable: {dispatch.get('stderr', '')}",
@@ -712,6 +910,191 @@ class GLMReviewer(ReviewerAdapter):
                         "expected_candidate_tree": candidate_tree, "recomputed_tree_after_review": post_tree,
                         "returncode": dispatch.get("returncode", -1), "output": str(output)}
 
+        result = validate_reviewer_verdict(answer_text, expected_candidate_tree=candidate_tree,
+                                          provider=self.provider, model=self.model,
+                                          returncode=dispatch.get("returncode", -1))
+        return {**result, "stage": stage, "returncode": dispatch.get("returncode", -1), "output": str(output),
+                "stderr": dispatch.get("stderr", "")[-4000:], "reviewed_path": str(review_root),
+                "candidate_commit": candidate.get("candidate_commit") if candidate else None,
+                "recomputed_tree_before_review": pre_tree, "recomputed_tree_after_review": post_tree}
+
+    def review(self, run, run_dir):
+        return self.review_stage(run, run_dir, "final")
+
+
+_CLAUDE_REVIEW_CONTRACT = (
+    "Respond with EXACTLY one JSON object as your FINAL answer (no markdown fences, "
+    "no prose before or after, nothing after it) shaped like: "
+    '{"candidate_tree": "<the exact candidate_tree given below>", '
+    '"verdict": "ACCEPT"|"P1"|"BLOCK", "findings": ["..."], '
+    '"reviewer": {"provider": "claude-cli", "model": "<your model>"}}. '
+    "A P1 finding must name the concrete repair."
+)
+
+
+def _extract_claude_final_answer(raw_stdout: str) -> str:
+    """`claude -p --output-format json` wraps the assistant's final message in
+    a top-level `{"type": "result", "result": "<text>", ...}` envelope — the
+    reviewer's actual verdict is that inner `result` string, not the envelope
+    itself. Tries a direct `json.loads` of the whole string first; if that
+    parses to a dict with a string `result` field, returns it unwrapped.
+    Returns the raw string unchanged (never a fabricated fallback) whenever
+    the envelope shape is absent — `validate_reviewer_verdict` then correctly
+    rejects it as unparseable rather than this function inventing an answer."""
+    stripped = raw_stdout.strip()
+    try:
+        obj = json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        return raw_stdout
+    if isinstance(obj, dict) and isinstance(obj.get("result"), str):
+        return obj["result"]
+    return raw_stdout
+
+
+class ClaudeCLIReviewer(ReviewerAdapter):
+    """Mirror of `CodexCLIReviewer`/`GLMReviewer`, dispatch target substituted
+    (`JOAO_WORKER_INTEGRATION_SPEC.md` §2.1, `JOAO_C8_GATES_ROADMAP.md`
+    "Cible (débloque le critical GLM)"): `provider_family="anthropic"` is the
+    genuinely distinct second family `G-DBL-AUDIT` needs for a critical GLM
+    build, since `CodexCLIReviewer`/`GPTFormalEvidenceReviewer` are both
+    `openai` (finding GPT v3 — same tool family twice never satisfies
+    critical).
+
+    Boss temporary topology (until Codex returns 2026-07-23):
+    `ClaudeCLIReviewer` is the FALLBACK-path's PRIMARY-review counterpart and
+    the NORMAL-path partner for a GLM-built candidate
+    (`bubble/worker_topology.py`). Never a valid reviewer for a Claude-built
+    candidate — sharing `provider` (`CLAUDE_CLI_PROVIDER`, the exact controller-
+    owned string this class shares with `ClaudeCodeBuilder`, never merely the
+    same `provider_family`) fires `G_DBL_AUDIT_BUILDER_SELF_REVIEW`, exactly
+    like `GLMReviewer` vs `GLMBuilder` today.
+
+    Boss addendum (2026-07-20, ADD-5): the "no host-environment passthrough"
+    rule is scoped to BUILDERS — a builder that can write is exactly where an
+    unbounded host-environment dispatch is most dangerous (an escape outside
+    `allowed_write_paths` would go completely undetected by Seatbelt, see
+    `ClaudeCodeBuilder`'s docstring). A REVIEWER never writes to the
+    candidate; its safety instead rests on THREE compensating factors,
+    identical to `CodexCLIReviewer`'s already-accepted precedent: (1)
+    read-only role — `review_stage` never touches `run["candidate"]`'s files;
+    (2) Claude's OWN `--permission-mode plan` is a second, independent
+    read-only layer (it never applies an edit/write tool call even if asked);
+    (3) the candidate's tree is independently recomputed immediately BEFORE
+    and AFTER dispatch — any mutation, from this dispatch or anything else,
+    is caught regardless of what OS-level write access the process happened
+    to have. `ClaudeCLIReviewer` therefore uses `preserve_host_environment=
+    True` (the real Keychain-backed subscription session) — `ClaudeCodeBuilder`
+    NEVER does; `tests/test_a0_2_corrections.py` statically asserts this.
+    """
+    provider = CLAUDE_CLI_PROVIDER
+    model = os.environ.get("JOAO_CLAUDE_REVIEW_MODEL", "sonnet")
+    provider_family = "anthropic"
+
+    def __init__(self, executable: str = "claude", backend: ExecutionBackend | None = None, timeout: int = 900):
+        self.executable = executable
+        self.timeout = timeout
+        # A0.2 (§12.2 single dispatch point): routed through ExecutionBackend
+        # like every other builder/test/reviewer subprocess.
+        self.backend = backend or LocalUntrustedBackend()
+
+    def available(self) -> bool:
+        # Mirrors CodexCLIReviewer's own convention: executable on PATH AND
+        # the real subscription session's config file present — never a
+        # fabricated "yes" when neither exists.
+        return bool(shutil.which(self.executable)) and Path("~/.claude.json").expanduser().exists()
+
+    def review_stage(self, run, run_dir, stage: str, active_rules: str = ""):
+        # Identical candidate-binding discipline to CodexCLIReviewer/GLMReviewer:
+        # bind to the frozen read-only candidate copy for build/final,
+        # recompute the tree immediately before AND after dispatch, refuse the
+        # verdict outright on any mismatch (a tamper just before or during review).
+        candidate = run.get("candidate") if stage != "plan" else None
+        candidate_tree = candidate.get("candidate_tree") if candidate else None
+
+        if stage != "plan":
+            if not candidate or not candidate.get("readonly_copy"):
+                return {"ok": False, "decision": "block", "stage": stage,
+                        "reason": "no frozen candidate readonly_copy available for this review stage"}
+            review_root = Path(candidate["readonly_copy"])
+            try:
+                pre_tree = recompute_candidate_tree(review_root)
+            except Exception as exc:  # fail-closed: cannot verify => cannot review
+                return {"ok": False, "decision": "block", "stage": stage,
+                        "reason": f"could not verify candidate before review: {type(exc).__name__}: {exc}"}
+            if pre_tree != candidate_tree:
+                return {"ok": False, "decision": "block", "stage": stage,
+                        "reason": "candidate was tampered before the reviewer ever ran",
+                        "reviewed_path": str(review_root), "candidate_commit": candidate.get("candidate_commit"),
+                        "expected_candidate_tree": candidate_tree, "recomputed_tree_before_review": pre_tree}
+        else:
+            review_root = Path(run["workspace"])
+            pre_tree = None
+
+        rules_prefix = (active_rules + "\n\n") if active_rules else ""
+        tree_line = f"The candidate under review has candidate_tree = {candidate_tree!r}.\n" if candidate_tree else ""
+        prompt = (
+            f"{rules_prefix}"
+            "You are the independent JOAO reviewer. Work read-only. Review the "
+            f"{stage} gate for this bounded mission:\n\n{run['mission']}\n\n"
+            f"{tree_line}"
+            "Inspect only the current worktree, task evidence and git diff. Do not "
+            "edit, commit, push, install packages or call external services. "
+            f"{_CLAUDE_REVIEW_CONTRACT}"
+        )
+        output = run_dir / f"claude-{stage}-review.jsonl"
+        # `--bare`: ANTHROPIC_API_KEY-only auth (see class docstring) — no
+        # Keychain/OAuth read, so this dispatch can run under a genuinely
+        # fresh temp HOME, never `preserve_host_environment`.
+        # `--permission-mode plan`: Claude may inspect but never actually
+        # applies an edit/write tool call — a read-only review stance enforced
+        # at Claude's own tool-permission layer, defense in depth alongside
+        # the candidate tree recompute below (never the sole guarantee,
+        # exactly like GLMReviewer's `--mode read-only` comment documents for
+        # its own dispatch). `--output-format json` yields one parseable
+        # envelope instead of interactive/streamed text.
+        # NOTE: no `--bare` here (unlike ClaudeCodeBuilder) — `--bare` would
+        # explicitly disable the real Keychain/OAuth session this dispatch
+        # relies on (see class docstring, ADD-5).
+        argv = [self.executable, "-p", prompt, "--model", self.model,
+                "--permission-mode", "plan", "--output-format", "json",
+                "--add-dir", str(review_root)]
+        # A0.2 (§12.2): `network=True` here is `provider_transport_network`
+        # (Claude must reach its own backend to answer at all), never the
+        # mission's own `task_network` — identical framing to
+        # `CodexCLIReviewer`/`GLMReviewer` above. `preserve_host_environment=
+        # True` (ADD-5, scoped to REVIEWERS only — see class docstring for
+        # the three compensating factors): the real Keychain-backed
+        # subscription session, never staged/bounded — `ClaudeCodeBuilder`
+        # never receives this flag (`tests/test_a0_2_corrections.py` asserts
+        # it statically).
+        dispatch = self.backend.execute(argv, cwd=review_root, timeout=self.timeout,
+                                        network=True, preserve_host_environment=True,
+                                        extra_read_paths=_executable_read_paths(self.executable),
+                                        extra_write_paths=[str(run_dir)])
+        if not dispatch.get("pid"):
+            return {"ok": False, "decision": "block", "stage": stage,
+                    "reason": f"Claude reviewer unavailable: {dispatch.get('stderr', '')}",
+                    "reviewed_path": str(review_root)}
+
+        atomic_write_text(output, dispatch.get("stdout", ""))
+
+        post_tree = None
+        if stage != "plan":
+            try:
+                post_tree = recompute_candidate_tree(review_root)
+            except Exception as exc:  # fail-closed: cannot verify => the verdict cannot be trusted
+                return {"ok": False, "decision": "block", "stage": stage,
+                        "reason": f"could not verify candidate after review: {type(exc).__name__}: {exc}",
+                        "reviewed_path": str(review_root), "candidate_commit": candidate.get("candidate_commit"),
+                        "returncode": dispatch.get("returncode", -1), "output": str(output)}
+            if post_tree != candidate_tree:
+                return {"ok": False, "decision": "block", "stage": stage,
+                        "reason": "candidate was tampered during or after the review",
+                        "reviewed_path": str(review_root), "candidate_commit": candidate.get("candidate_commit"),
+                        "expected_candidate_tree": candidate_tree, "recomputed_tree_after_review": post_tree,
+                        "returncode": dispatch.get("returncode", -1), "output": str(output)}
+
+        answer_text = _extract_claude_final_answer(dispatch.get("stdout", ""))
         result = validate_reviewer_verdict(answer_text, expected_candidate_tree=candidate_tree,
                                           provider=self.provider, model=self.model,
                                           returncode=dispatch.get("returncode", -1))
@@ -1281,6 +1664,14 @@ class RunRuntime:
 
         build_review = self._review_gate(run, "build")
         if build_review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]:
+            # Bounded repair (Boss negative-matrix: "more than one correction"
+            # must be refused): the budget is consumed HERE, at the moment a
+            # P1 verdict is actually granted a rebuild — previously this
+            # branch transitioned to CORRECTING without ever incrementing
+            # corrections_used, so a reviewer returning P1 forever could
+            # rebuild indefinitely (the budget check `0 < 1` never became
+            # false). Mirrors `retry()`'s own accounting exactly.
+            run["corrections_used"] += 1
             self._transition(run, RunStatus.CORRECTING, "Codex build review P1; one repair permitted"); return run
         if not build_review.get("ok"):
             self._transition(run, RunStatus.BLOCKED, "Codex build review blocked"); self._finalize(run); return run
@@ -1314,6 +1705,10 @@ class RunRuntime:
         proof = review.get("proof", {})
         run["review_verified"] = bool(review.get("ok") and proof.get("verdict") == "ACCEPT" and proof.get("candidate_tree") == candidate["candidate_tree"])
         self._write(run)
-        if review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]: self._transition(run, RunStatus.CORRECTING, "P1; one repair permitted"); return run
+        if review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]:
+            # Same bounded-repair accounting fix as the build-review P1
+            # branch above — consume the budget at grant time.
+            run["corrections_used"] += 1
+            self._transition(run, RunStatus.CORRECTING, "P1; one repair permitted"); return run
         if not review.get("ok") or review.get("decision") == "block": self._transition(run, RunStatus.BLOCKED, "review blocked"); self._finalize(run); return run
         run["tasks"][3]["status"] = "completed"; self._transition(run, RunStatus.NEEDS_APPROVAL, "review completed; human decision"); self._finalize(run); return run

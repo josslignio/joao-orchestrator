@@ -45,11 +45,22 @@ def run_c8b_mission(*, runtime: RunRuntime, project_id: str, workspace: Path, mi
                     risk_tier: str, canary_required: bool, spec_sha: str, roadmap_sha: str,
                     authority_instruction_hash: str, forbidden_paths: list[str],
                     criterion_bindings: dict[str, Any], second_reviewer: ReviewerAdapter | None = None,
-                    profile=None, tags: list[str] | None = None) -> dict[str, Any]:
+                    profile=None, tags: list[str] | None = None,
+                    network_capability: bool = False) -> dict[str, Any]:
     """Run one bounded C8-B mission through to mechanical eligibility, then
     stop. Never calls `runtime.approve()`/`runtime.promote()` — a Boss
     approval and any promotion/canary step are explicitly C8-C+ scope this
     function refuses to reach.
+
+    `network_capability` (default False, fail-closed): passed straight
+    through to `RunRuntime.start()` — the ONE source of a builder/test
+    dispatch's network permission (A0.2 §12.1). Found missing entirely from
+    this signature during the real GLM/Claude worker-host mission proof: a
+    builder that genuinely needs network (e.g. `GLMBuilder`/`ClaudeCodeBuilder`
+    reaching their provider) would otherwise ALWAYS get `network=False` and
+    hang until its own dispatch timeout — a real, honest fail-closed outcome
+    per `GLMBuilder`'s own docstring, just with no way for a caller of this
+    function to ever grant the capability a real mission needs.
 
     Returns the `c8b-eligibility.json` payload (also persisted to
     `<state_root>/runs/<run_id>/c8b-eligibility.json`).
@@ -82,7 +93,7 @@ def run_c8b_mission(*, runtime: RunRuntime, project_id: str, workspace: Path, mi
             spec_sha=spec_sha, roadmap_sha=roadmap_sha,
             authority_instruction_hash=authority_instruction_hash,
             forbidden_paths=forbidden_paths, criterion_bindings=criterion_bindings,
-            profile=profile,
+            profile=profile, network_capability=network_capability,
         )
     except RuntimeStateError as exc:
         return _eligibility_block(None, "C8B_START_REFUSED", str(exc))

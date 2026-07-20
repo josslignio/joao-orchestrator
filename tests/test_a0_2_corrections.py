@@ -89,7 +89,7 @@ class _RecordingBackend(ExecutionBackend):
 
     def execute(self, argv, *, cwd, timeout, network=False, environment_allowlist=None,
                 protected=False, preserve_host_environment=False,
-                extra_read_paths=None, extra_write_paths=None):
+                extra_read_paths=None, extra_write_paths=None, auth_stage=None):
         self.calls.append({"argv": argv, "network": network})
         return {"ok": True, "argv": argv, "returncode": 0, "stdout": "", "stderr": "",
                 "enforcement": "recording-fake", "pid": 1}
@@ -551,6 +551,14 @@ _GUARDED_METHODS = {
     # A0.2 assertion changed — GLMReviewer dispatches through
     # ExecutionBackend.execute() exactly like the two adapters above.
     "GLMReviewer": {"review_stage"},
+    # C8-B (temporary reviewer topology, Boss decision pre-Codex-2026-07-23):
+    # additive entry — ClaudeCLIReviewer dispatches through
+    # ExecutionBackend.execute() exactly like the three adapters above.
+    "ClaudeCLIReviewer": {"review_stage"},
+    # C8-B (Boss architecture decision, 2026-07-20): additive entry —
+    # ClaudeCodeBuilder dispatches through ExecutionBackend.execute() exactly
+    # like GLMBuilder, no PTY, no second dispatch path.
+    "ClaudeCodeBuilder": {"build"},
 }
 
 
@@ -581,6 +589,36 @@ def test_a02_single_dispatch_point_ast_guard_no_direct_subprocess_in_adapters():
         f"adapter method(s) call a forbidden direct dispatch primitive instead of routing through "
         f"ExecutionBackend.execute(): {violations}"
     )
+
+
+def _keyword_true_present(node: ast.FunctionDef, keyword: str) -> bool:
+    for call in ast.walk(node):
+        if isinstance(call, ast.Call):
+            for kw in call.keywords:
+                if kw.arg == keyword and isinstance(kw.value, ast.Constant) and kw.value.value is True:
+                    return True
+    return False
+
+
+def test_add5_claude_builder_never_receives_host_passthrough_reviewer_may():
+    """ADD-5 (Boss addendum, 2026-07-20): the "no host-environment
+    passthrough" rule is scoped to BUILDERS. `ClaudeCodeBuilder.build` must
+    NEVER pass `preserve_host_environment=True` to its dispatch (an unbounded
+    write-capable process is exactly where an unbounded host-environment
+    escape would go undetected); `ClaudeCLIReviewer.review_stage` MAY (a
+    read-only role, compensated by Claude's own `--permission-mode plan` and
+    the before/after candidate-tree recompute — see the class docstring)."""
+    tree = ast.parse(_RUNTIME_PATH.read_text())
+    found = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name in ("ClaudeCodeBuilder", "ClaudeCLIReviewer"):
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name in ("build", "review_stage"):
+                    found[f"{node.name}.{item.name}"] = _keyword_true_present(item, "preserve_host_environment")
+    assert found.get("ClaudeCodeBuilder.build") is False, \
+        "ClaudeCodeBuilder.build must never pass preserve_host_environment=True"
+    assert found.get("ClaudeCLIReviewer.review_stage") is True, \
+        "ClaudeCLIReviewer.review_stage is authorized (ADD-5) to pass preserve_host_environment=True"
 
 
 def test_a02_local_untrusted_backend_delegates_to_run_sandboxed_and_is_the_only_direct_caller():

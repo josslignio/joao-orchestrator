@@ -53,6 +53,10 @@ CANONICAL_DISPATCH_ENTRYPOINTS = (
     "GLMBuilder.build",
     "CodexCLIReviewer.review_stage",
     "GLMReviewer.review_stage",
+    # C8-B (Boss architecture decision, 2026-07-20): additive — both dispatch
+    # through ExecutionBackend.execute() exactly like the adapters above.
+    "ClaudeCodeBuilder.build",
+    "ClaudeCLIReviewer.review_stage",
 )
 
 

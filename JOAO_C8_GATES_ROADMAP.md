@@ -211,3 +211,21 @@ Seuils après ces 3 missions : §24.6 (« Après les 3 premières missions Job R
 **Dépendances :** C8-A + C8-B + C8-C (instrumentation + benchmark synthétique) + gel du candidat C-8 + double PASS Codex (23) + merge. Ne démarre pas avant.
 
 **Backlog détaillé (PV-01…PV-09), priorités et dépendances :** `JOAO_PRODUCT_VALIDATION_BACKLOG.md`.
+
+---
+
+## Statut C8-B — topologie autonome zéro-coût (Boss, 2026-07-20)
+
+**`ClaudeCLIReviewer` (`bubble/runtime.py`) est implémenté** : débloque le critical GLM (`anthropic` ≠ `zai` ≠ `openai`), et sert de reviewer NORMAL pour un build GLM (topologie temporaire pré-Codex, `bubble/worker_topology.py`). Dispatch réel via `joao-worker-host` (processus standalone séparé, jamais imbriqué dans une session Claude Code — voir `src/joao_orchestrator/worker_host/`).
+
+**Exception de confiance reviewer-only (ADD-5) :** `ClaudeCLIReviewer` reçoit `preserve_host_environment=True` (session Keychain réelle) — jamais `ClaudeCodeBuilder`. Justifié par 3 facteurs compensatoires : rôle reviewer seul (jamais d'écriture), mode `--permission-mode plan` de Claude lui-même, recomputation du tree candidat avant/après dispatch. Assertion statique : `tests/test_a0_2_corrections.py::test_add5_claude_builder_never_receives_host_passthrough_reviewer_may`.
+
+**`ClaudeCodeBuilder` est DIFFÉRÉ, pas un échec de C8-B.** L'authentification de l'abonnement Claude Code CLI est de classe session/Keychain (vérifié empiriquement : copier `~/.claude.json` seul dans un HOME temporaire frais échoue toujours avec « Not logged in » — le jeton OAuth réel vit dans le Trousseau macOS, pas dans un fichier stageable). Sous les contraintes permanentes actuelles :
+- aucun `ANTHROPIC_API_KEY` / compte API payant ;
+- aucun `preserve_host_environment` pour un BUILDER (surface d'évasion en écriture non détectée par Seatbelt) ;
+
+un `ClaudeCodeBuilder` pleinement autonome n'est **pas actuellement faisable**. Il reste enregistré, codé, testé (via un stand-in `claude` déterministe — même motif que le faux `codex` de `tests/test_a0_1_corrections.py`) mais **désactivé/indisponible** avec une raison de capacité précise (`ClaudeCodeBuilder.available()` sonde uniquement l'exécutable, jamais une réussite d'authentification fabriquée). Réactivation future : soit un mécanisme officiel sûr d'automatisation de l'abonnement CLI, soit un chemin API payant explicitement approuvé par le Boss. Aucun contournement par host-environment passthrough n'est autorisé.
+
+**MVP autonome zéro-coût actuel :** `GLMBuilder` → `ClaudeCLIReviewer` (mission NORMAL A). `ClaudeCodeBuilder` → `GLMReviewer` (mission NORMAL B) reste une preuve de MÉCANISME uniquement (stand-in), pas un chemin opérationnel avant réactivation du builder Claude.
+
+**Codex** reste implémenté et prêt (`CodexCLIReviewer`, `provider_family=openai`) ; indisponible jusqu'à ce que sa sonde de disponibilité réelle réussisse (`bubble/worker_topology.py::select_critical_reviewer_families`, `codex_available`). Aucun changement d'architecture ne sera nécessaire à son activation — seule la sonde doit réussir.

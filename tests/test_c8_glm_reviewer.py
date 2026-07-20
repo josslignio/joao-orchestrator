@@ -81,7 +81,7 @@ class _FakeBackend:
 
     def execute(self, argv, *, cwd, timeout, network=False, environment_allowlist=None,
                protected=False, preserve_host_environment=False, extra_read_paths=None,
-               extra_write_paths=None):
+               extra_write_paths=None, auth_stage=None):
         output_path = Path(argv[argv.index("--output") + 1])
         answer = self.answer_json if isinstance(self.answer_json, str) else json.dumps(self.answer_json)
         output_path.write_text(_ndjson_events("thinking...", answer))
@@ -225,7 +225,7 @@ def test_dynamic_invocation_proof_glm_reviewer_review_stage_is_invoked(tmp_path,
     class _FakeGLMBackend:
         def execute(self, argv, *, cwd, timeout, network=False, environment_allowlist=None,
                    protected=False, preserve_host_environment=False, extra_read_paths=None,
-                   extra_write_paths=None):
+                   extra_write_paths=None, auth_stage=None):
             output_path = Path(argv[argv.index("--output") + 1])
             output_path.write_text(_ndjson_events(json.dumps({
                 "candidate_tree": None, "verdict": "ACCEPT", "findings": [],

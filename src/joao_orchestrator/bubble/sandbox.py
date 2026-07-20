@@ -275,6 +275,28 @@ class SandboxResult(dict):
     """Marker subclass so callers can tell a sandboxed run's result apart."""
 
 
+def _stage_auth_materials(home_dir: Path, auth_stage: list[dict[str, str]] | None) -> list[str]:
+    """Copy each `{"source", "relative_dest"}` record's file into
+    `home_dir/<relative_dest>` — see `run_sandboxed`'s `auth_stage` docstring.
+    Returns the relative_dest paths actually staged (never the source
+    content) — purely for evidence logging, never a credential value."""
+    staged: list[str] = []
+    for record in auth_stage or []:
+        source = Path(record["source"]).expanduser()
+        relative_dest = record["relative_dest"]
+        if not source.is_file():
+            continue  # never fatal here — the caller's own auth check fails closed instead
+        dest = home_dir / relative_dest
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, dest)
+        try:
+            dest.chmod(source.stat().st_mode & 0o777)
+        except OSError:
+            pass
+        staged.append(relative_dest)
+    return staged
+
+
 def run_sandboxed(argv: list[str], *, cwd: Path, timeout: int,
                    profile_allowlist: list[str] | None = None,
                    network: bool = False,
@@ -282,6 +304,7 @@ def run_sandboxed(argv: list[str], *, cwd: Path, timeout: int,
                    extra_write_paths: list[str] | None = None,
                    protected: bool = False,
                    preserve_host_environment: bool = False,
+                   auth_stage: list[dict[str, str]] | None = None,
                    cpu_seconds: int | None = DEFAULT_CPU_SECONDS,
                    memory_bytes: int | None = DEFAULT_MEMORY_BYTES,
                    max_open_files: int | None = DEFAULT_MAX_OPEN_FILES,
@@ -307,6 +330,26 @@ def run_sandboxed(argv: list[str], *, cwd: Path, timeout: int,
     tracking. `protected=True` is refused together with this flag: a
     passthrough-environment dispatch is by definition not a kernel-sandboxed
     one, so claiming `protected` for it would be dishonest.
+
+    `auth_stage` (Boss directive, 2026-07-20 — narrow subscription-auth
+    material staging, never a full-environment passthrough): a list of
+    `{"source": <real path>, "relative_dest": <path relative to the fresh
+    temp HOME>}` records. Each named `source` file is copied into
+    `home_dir/<relative_dest>` (parent directories created as needed) BEFORE
+    the sandboxed subprocess launches — restrictive permissions preserved via
+    `shutil.copy2` plus an explicit `chmod` matching the source. This is the
+    ONLY way narrow subscription credentials (e.g. `~/.local/share/opencode/
+    auth.json`, verified as the real, file-resident GLM/Z.AI credential on
+    this host) reach a dispatch that otherwise inherits nothing — never a
+    full `$HOME`, never `preserve_host_environment`. The staged copy lives
+    only inside this function's `tempfile.TemporaryDirectory`, so it is
+    destroyed unconditionally when this function returns, exactly with the
+    rest of the fresh HOME — no separate cleanup step to forget. A missing
+    `source` is silently skipped (not fatal): the caller's own dispatch may
+    then fail its OWN auth check, which is the correct fail-closed behavior,
+    never a crash inside this generic staging helper. Contents are never
+    logged — only the (source, relative_dest) PATHS this function was asked
+    to stage, if a caller chooses to record that.
     """
     if protected and preserve_host_environment:
         return {"ok": False, "argv": argv, "returncode": -1, "enforcement": "refused-incompatible-flags",
@@ -325,8 +368,25 @@ def run_sandboxed(argv: list[str], *, cwd: Path, timeout: int,
     with tempfile.TemporaryDirectory(prefix="joao-sandbox-home-") as home:
         home_dir = Path(home)
         token = secrets.token_hex(16)
-        write_paths = [str(Path(cwd).resolve()), str(home_dir)] + [str(p) for p in (extra_write_paths or [])]
+        # Every path embedded in the Seatbelt profile is fully resolved
+        # (symlinks included) — macOS's own `/tmp` -> `/private/tmp` and
+        # `/var` -> `/private/var` mean `tempfile`'s own default temp root
+        # (`/var/folders/...`) is ITSELF a symlinked path; the kernel matches
+        # `subpath` rules against the post-resolution path, so an unresolved
+        # entry here (as `home_dir` was before this fix) silently fails to
+        # grant `file-write-create` for a real subprocess trying to `mkdir` a
+        # config directory under its fresh HOME — verified empirically: a
+        # bare `sandbox-exec` profile with the unresolved path denied the
+        # exact `mkdir` a real `opencode`/`joao-glm` dispatch performs on
+        # first run, and granting the resolved path fixes it.
+        write_paths = [str(Path(cwd).resolve()), str(home_dir.resolve())] + \
+            [str(Path(p).resolve()) for p in (extra_write_paths or [])]
         full_argv = list(argv)
+        staged_auth_paths: list[str] = []
+        if not preserve_host_environment:
+            # Only meaningful for the bounded (fresh temp HOME) path — a
+            # preserve_host_environment dispatch already sees the real HOME.
+            staged_auth_paths = _stage_auth_materials(home_dir, auth_stage)
         if preserve_host_environment:
             # A0.2: no env stripping, no fresh HOME, no Seatbelt — the caller
             # explicitly needs the real host environment (e.g. reviewer CLI
@@ -342,7 +402,7 @@ def run_sandboxed(argv: list[str], *, cwd: Path, timeout: int,
                 profile = seatbelt_profile(
                     network=network,
                     read_write_paths=write_paths,
-                    extra_read_paths=[str(p) for p in (extra_read_paths or [])],
+                    extra_read_paths=[str(Path(p).resolve()) for p in (extra_read_paths or [])],
                 )
                 profile_path = home_dir / "profile.sb"
                 profile_path.write_text(profile)
@@ -403,6 +463,9 @@ def run_sandboxed(argv: list[str], *, cwd: Path, timeout: int,
             "timed_out": timed_out, "memory_limit_exceeded": memory_exceeded,
             "resource_limits": {"cpu_seconds": cpu_seconds, "memory_bytes": memory_bytes,
                                "max_open_files": max_open_files, "nproc_ceiling": nproc_ceiling},
+            # Paths only, never content — auditable proof of what auth
+            # material (if any) was staged into this dispatch's fresh HOME.
+            "staged_auth_paths": staged_auth_paths,
         }
 
 

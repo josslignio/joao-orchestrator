@@ -46,7 +46,8 @@ class ExecutionBackend(ABC):
                 protected: bool = False,
                 preserve_host_environment: bool = False,
                 extra_read_paths: list[str] | None = None,
-                extra_write_paths: list[str] | None = None) -> dict[str, Any]: ...
+                extra_write_paths: list[str] | None = None,
+                auth_stage: list[dict[str, str]] | None = None) -> dict[str, Any]: ...
 
 
 class LocalUntrustedBackend(ExecutionBackend):
@@ -61,12 +62,13 @@ class LocalUntrustedBackend(ExecutionBackend):
 
     def execute(self, argv, *, cwd, timeout, network=False, environment_allowlist=None,
                 protected=False, preserve_host_environment=False,
-                extra_read_paths=None, extra_write_paths=None) -> dict[str, Any]:
+                extra_read_paths=None, extra_write_paths=None, auth_stage=None) -> dict[str, Any]:
         result = run_sandboxed(
             argv, cwd=cwd, timeout=timeout, network=network,
             profile_allowlist=environment_allowlist or [], protected=protected,
             preserve_host_environment=preserve_host_environment,
             extra_read_paths=extra_read_paths, extra_write_paths=extra_write_paths,
+            auth_stage=auth_stage,
         )
         result.setdefault("backend", self.name)
         return result
