@@ -15,14 +15,13 @@ Aucun item ci-dessous ne modifie, ne bloque ni ne retarde C8-A. Aucun n'est un 8
 | **PV-07** | Cohorte des 3 premières missions Job Radar (Competitor/OSS, SOURCE-FRESH, CONTENT) | P1 | Gel candidat C-8 + double PASS Codex (23) + merge | Post-C8 | planned | Données manuel/JOÃO comparables capturées par mission (sous-missions appariées si le doublon complet gaspillerait du temps) ; seuils §24.6 (« après les 3 premières missions ») évalués |
 | **PV-08** | Décision produit à 10 missions réelles | P1 | 10 missions réelles instrumentées (PV-07 + suite) | Post-C8 | planned | Décision formelle rendue : `JOAO_PROVEN` \| `JOAO_HYBRID_RECOMMENDED` \| `JOAO_SIMPLIFY` \| `INSUFFICIENT_EVIDENCE`, seuils §24.6 appliqués sans exception |
 | **PV-09** | Simplification / fallback hybride | P2 (conditionnel) | Déclenché par la condition STOP §24.7 (après 3 missions réelles) | Post-C8 (si déclenché) | planned | Si déclenché : investigation de l'origine du surcoût, retrait/fusion des étapes à faible valeur, ou passage à un workflow hybride documenté — jamais une nouvelle couche d'architecture pour faire passer le benchmark |
+| **WA-01** | Interfaces `BuilderAdapter`/`ReviewerAdapter`/`CapabilityRegistry`/`WorkerSelectionPolicy`/`SecureEvidenceImporter` | P1 | C8-A gelé | C8-B | planned | Contrats communs écrits et testés ; aucun câblage direct à un provider dans l'orchestrateur central |
+| **WA-02** | Adaptateurs `ClaudeCodeAdapter`, `GLMAdapter`, `CodexAdapter` (builder + reviewer, `execution_mode=cli`) | P1 | WA-01 | C8-B | planned | Les 3 exécutent build et review via l'interface commune ; `provider_family` correct et testé pour chacun |
+| **WA-03** | `ClaudeChatEvidenceAdapter` + `ChatGPTEvidenceAdapter` (reviewer seul, import contrôlé) | P1 | WA-01, §25.4 | C8-B | planned | Vérification nonce + SHA/tree exact + identité + usage unique appliquée et testée ; verdict non vérifié reste consultatif, ne débloque jamais promotion |
+| **WA-04** | Benchmark par combinaison builder/reviewer (qualité/temps/tokens), historique | P2 | E2E C8-C vert, ≥3 missions réelles | Post-C8 | planned | Mêmes seuils/protocole que §24 ; alimente `WorkerSelectionPolicy` |
+| **WA-05** | `DeepSeekAdapter` — conditionnel | P2 | WA-04 | Post-C8 (si déclenché) | planned | N'entre que si §25.5 est validé sur benchmark réel ; décision `DEEPSEEK_BUILDER_APPROVED`|`DEEPSEEK_REVIEWER_ONLY`|`DEEPSEEK_NOT_WORTH_IT` mesurée séparément par rôle |
 
-## Règles transverses (s'appliquent à tous les items ci-dessus)
-
-- Aucune valeur de token/usage non mesurée n'est jamais estimée ou mise à `0` : champ `unknown`, systématiquement.
-- Aucun item PV n'autorise à réduire la portée de revue/preuve d'un run JOÃO pour améliorer artificiellement son score de benchmark (`JOAO_C8_GATES_SPEC.md` §24.8, anti-gaming).
-- Chaque comparaison manuel/JOÃO utilise le protocole juste §24.3 (même SHA, même SPEC, mêmes critères, ordre anti-contamination, évaluation aveugle quand praticable).
-- Un échec de sécurité dur (corruption candidat/preuve, promotion au mauvais SHA, P0/P1 échappé imputable à l'orchestration) bloque toujours `JOAO_PROVEN`, indépendamment de la vitesse.
-
-## Traçabilité
-
-Source d'autorité des seuils et définitions : `JOAO_C8_GATES_SPEC.md` §24. Intégration roadmap : `JOAO_C8_GATES_ROADMAP.md` (lots C8-B, C8-C, section « Validation produit post-C8 »). Politique adoptée (non un item ouvert) : `JOAO_C8_OPEN_DECISIONS.md`, section *Product Superiority and Efficiency Validation*.
+> Architecture multi-moteurs : source d'autorité `JOAO_C8_GATES_SPEC.md` §25.
+> Intégration roadmap : lot C8-B (interface), post-C8 (benchmark/sélection
+> automatique/DeepSeek). Politique adoptée le 2026-07-20, ne rouvre pas D1–D7
+> ni §24.

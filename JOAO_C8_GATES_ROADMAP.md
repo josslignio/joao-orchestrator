@@ -124,6 +124,42 @@ distinct (ex. ClaudeCLIReviewer, anthropic) — sinon BLOCK fail-closed
 
 ---
 
+
+### C8-B — interface multi-moteurs (pas 5 intégrations en dur)
+
+C8-B construit une interface commune, pas cinq câblages spécifiques :
+
+- `BuilderAdapter` — contrat commun pour tout worker capable de construire ;
+- `ReviewerAdapter` — contrat commun pour tout worker capable de reviewer ;
+- `CapabilityRegistry` — registre des workers enregistrés (`provider_family`,
+  `product`, `model`, `role`, `execution_mode`, `capabilities`, `enabled`,
+  `quality_status`) ;
+- `WorkerSelectionPolicy` — sélection du worker selon mission/risk_tier/
+  historique/coût/disponibilité/indépendance requise ;
+- `SecureEvidenceImporter` — import de verdict "chat" avec vérification
+  nonce + SHA/tree + identité + usage unique (§25.4).
+
+**C8-B MVP — adaptateurs à enregistrer dans cet ordre :**
+
+```
+├── ClaudeCodeAdapter   — builder + reviewer, execution_mode=cli
+├── GLMAdapter          — builder + reviewer, execution_mode=cli
+├── CodexAdapter        — builder + reviewer, execution_mode=cli
+├── ClaudeChatEvidenceAdapter  — reviewer seul, execution_mode=manual_evidence_import
+└── ChatGPTEvidenceAdapter     — reviewer seul, execution_mode=manual_evidence_import
+```
+
+**Après C8 (backlog, jamais avant qu'une vraie mission ait tourné) :**
+benchmark de chaque combinaison builder/reviewer, historique qualité/temps/
+tokens par worker, sélection automatique du meilleur worker par
+`WorkerSelectionPolicy`, `DeepSeekAdapter` ajouté seulement si §25.5 est
+validé sur benchmark.
+
+**Non-goal explicite de C8-B :** n'implémente ni DeepSeek ni aucun provider
+non listé ci-dessus sans décision benchmark documentée (§25.5). N'élargit pas
+le scope C8-A. N'ajoute pas de 8ᵉ gate.
+
+
 ## LOT C8-C — SHA/canary/promotion + E2E  *(+ readiness SOURCE-FRESH)*
 
 **Scope :** (1) G-SHA-BOUND-PROOF général (recompute-and-compare à l'écriture ET la consommation de preuve) + G-CANARY-FIRST dans `promotion._verify_acceptance_for_promotion`. (2) **E2E synthétique complet** traversant toute la chaîne assemblée (Boss GO → orchestrateur → build → gates → freeze → 2 reviewers critical → canary synthétique exact-SHA sans effet externe (D3) → promotion exigeant `promotion_ready` ET approbation humaine). (3) **rapport de readiness SOURCE-FRESH** (document seulement, pas de code SOURCE-FRESH).

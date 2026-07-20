@@ -391,3 +391,92 @@ Après 10 missions
 ```
 
 Backlog détaillé (PV-01…PV-09), dépendances et statut : `JOAO_PRODUCT_VALIDATION_BACKLOG.md`. Politique adoptée (non rouverte, ne bloque pas C8-A) : `JOAO_C8_OPEN_DECISIONS.md`.
+
+
+## 25. Architecture cible — orchestration provider-agnostic (multi-moteurs)
+
+**Statut : cible adoptée (instruction Boss du 2026-07-20), à construire en C8-B.
+Ne modifie pas C8-A. N'est pas un 8ᵉ gate — c'est une politique de sélection de
+worker, pas un contrôle de delivery.**
+
+### 25.1 Principe
+
+JOÃO n'est pas un orchestrateur GLM. JOÃO est un orchestrateur
+**provider-agnostic** capable d'enregistrer plusieurs workers, chacun avec des
+capacités de builder et/ou reviewer. La sélection du worker pour une mission
+donnée dépend : du type de mission, du niveau de risque, des performances
+historiques, du coût/tokens, de la disponibilité, et de l'indépendance requise
+pour la review (voir G-DBL-AUDIT, `JOAO_C8_GATE_CONTRACTS.md`).
+
+### 25.2 Cinq champs obligatoires par worker
+
+JOÃO ne confond jamais le produit, le modèle et le fournisseur. Chaque worker
+enregistré porte au minimum :
+
+```json
+{
+  "provider_family": "anthropic",
+  "product": "claude-code",
+  "model": "<nom exact du modèle>",
+  "role": "builder",
+  "execution_mode": "cli",
+  "capabilities": ["builder", "reviewer"],
+  "worker_id": "claude-code-main",
+  "enabled": true,
+  "quality_status": "provisional"
+}
+```
+
+`provider_family` reste le seul champ qui compte pour l'indépendance de review
+(G-DBL-AUDIT) — `product`/`model` ne changent jamais la famille. Familles
+actuelles : `anthropic` (Claude Code, Claude Chat), `zai` (GLM/ZCode),
+`openai` (Codex, ChatGPT/GPT-formal — **une seule famille pour les deux**),
+`deepseek` (conditionnel, voir §25.5).
+
+### 25.3 Règle d'indépendance builder/reviewer
+
+Un worker peut être builder sur une mission et reviewer sur une autre, mais ne
+compte **jamais** comme reviewer indépendant sur le run qu'il a lui-même
+construit — quel que soit son rôle sur d'autres missions.
+
+Pour un run **critical** : `reviewer_1_family ≠ reviewer_2_family ≠
+builder_family` (déjà la règle G-DBL-AUDIT ; réaffirmée ici pour le contexte
+multi-worker). Exemple valide : GLM/zai construit, Codex/openai review, Claude
+Chat/anthropic review. Exemple invalide : GLM construit, Codex/openai review,
+ChatGPT/openai review — même famille, ne compte que comme UN reviewer
+indépendant, pas deux.
+
+### 25.4 Reviewers "chat" (import contrôlé, pas d'API directe)
+
+Claude Chat et ChatGPT Chat peuvent servir de reviewers via un import
+contrôlé, jamais une intégration automatique directe au départ :
+
+1. JOÃO produit le bundle d'évidence (comme les bundles GLM/GPT déjà en usage) ;
+2. le Boss le transmet manuellement au chat ;
+3. le chat rend un verdict structuré (même vocabulaire `ok`/`decision`/
+   `reason_code`/`candidate_tree` que les gates) ;
+4. JOÃO importe ce verdict et vérifie : nonce, SHA/tree exact, identité du
+   reviewer, usage unique (pas de replay).
+
+Sans ces quatre vérifications, le verdict reste **consultatif** et ne peut
+jamais débloquer une promotion. Une intégration automatisée pourra remplacer
+le copier-coller plus tard, si un mécanisme fiable et autorisé existe —
+non bloquant pour le MVP C8-B.
+
+### 25.5 DeepSeek (et tout futur provider) — conditionnel, jamais spéculatif
+
+Un nouveau provider n'entre dans l'architecture que s'il démontre, sur
+benchmark réel (même protocole que §24) : qualité suffisante, temps
+comparable ou inférieur, coût/tokens intéressant, sorties structurées
+fiables, respect du scope/outils, taux de correction acceptable. Décision
+possible, mesurée séparément pour chaque rôle :
+
+```
+DEEPSEEK_BUILDER_APPROVED
+DEEPSEEK_REVIEWER_ONLY
+DEEPSEEK_NOT_WORTH_IT
+```
+
+Un provider peut être bon builder et mauvais reviewer critique, ou l'inverse
+— les deux rôles sont mesurés indépendamment. Aucun provider n'est ajouté
+« pour multiplier les modèles » sans ce verdict.
