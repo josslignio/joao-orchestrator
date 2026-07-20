@@ -1,90 +1,23 @@
-# JOÃO C-8 GATES + WORKER INTEGRATION — OPEN DECISIONS (Boss-level only)
+# JOÃO C-8 — DÉCISIONS BOSS (v2 — D1–D7 tranchées)
 
-Phase 0. Every item below is a genuine product/policy choice this spec cannot resolve
-by engineering judgment alone — each has real, defensible arguments on more than one
-side, and the "wrong" choice isn't a bug, it's a different product. Anything
-mechanically resolvable (naming, exact function signatures, which file a class lives
-in) is decided directly in `JOAO_C8_GATES_SPEC.md` / `JOAO_C8_GATE_CONTRACTS.md` /
-`JOAO_WORKER_INTEGRATION_SPEC.md` and is NOT repeated here.
+Phase 0. En v1 c'étaient 7 questions ouvertes. Le contre-audit GPT a recommandé des réponses ; le Boss les **adopte** (instruction du 2026-07-20, action #6 « inscrire les décisions D1–D7 »). Elles sont donc **tranchées** ci-dessous et re-répercutées dans les autres documents. Elles restent révisables par le Boss, mais ne bloquent plus le GO BUILD de C8-A.
 
----
+| # | Décision (tranchée) | Répercussion |
+|---|---|---|
+| **D1** | `risk_tier` **obligatoire** : une mission sans `risk_tier` explicite → **BLOCK** (fail-closed, jamais un défaut `normal` silencieux). | G-DBL-AUDIT, SPEC §6, WORKER §3, contrôleur `start()`. |
+| **D2** | Escalade automatique **déterministe par chemins protégés** (ex. toucher `bubble/promotion.py`, `reviewer_contract.py`, `execution_backend.py`, chemins credential-adjacents → `critical`), **jamais** une heuristique de « criticité ». Reste dans D-046 : c'est une règle path→tier fixe, pas un jugement de sécurité. | G-FROZEN-FINISH-LINE (`frozen_mission.json.forbidden_paths`/protected), G-DBL-AUDIT. |
+| **D3** | Canary **automatisé accepté** s'il est **synthétique, exact-SHA, sans effet externe réel**. Pas d'obligation d'observation humaine temps réel pour un canary synthétique borné. | G-CANARY-FIRST, WORKER §2.2/§9. |
+| **D4** | Désaccord reviewer (un ACCEPT, un BLOCK/P1) sur un run critique → **BLOCK + notification Boss**, **aucun tie-break automatique**, aucun 3ᵉ reviewer auto-convoqué pour trancher. | G-DBL-AUDIT, contrôleur. |
+| **D5** | « Boss GO = texte d'instruction nommé » = **MVP accepté**, mais désormais **hashé et lié au run** (le SHA du texte d'autorité est enregistré dans le run, comme `frozen_mission.json.spec_sha`). Pas de schéma de signature cryptographique (hors scope, zéro coût). | WORKER §3, `frozen_mission.json`. |
+| **D6** | **Autonomie autorisée entre les gates** pour les runs **synthétiques/normal** ; **promotion et effets externes restent Boss-controlled**. (Cohérent avec `JOAO_COURSE_CORRECTION_20260719_1.md` déc. 6 : autonomie nocturne différée jusqu'après mesure.) | SPEC §15, WORKER §9, séparation validation/approbation. |
+| **D7** | Candidats/tags superseded **archivés/révoqués, jamais supprimés automatiquement** par JOÃO. (La suppression du tag `d305f57` cette session fut une action Boss-revue manuelle — elle le reste.) | G-SHA-BOUND-PROOF (traçabilité), politique de rétention. |
 
-## D1 — Default risk tier when a mission omits it
+## Décision produit associée — tiering de SOURCE-FRESH (première vraie mission)
 
-`JOAO_C8_GATES_ROADMAP.md` M4 flags this without resolving it. Options:
-- **Fail-safe-permissive:** unset defaults to `normal` (one reviewer). Matches how most
-  of this session's own work actually ran (a human decided criticality by judgment,
-  case by case, not by a mandatory field).
-- **Fail-closed:** JOÃO refuses to start any run with no explicit `risk_tier` at all,
-  forcing the Boss (or the approved SPEC/ROADMAP reference) to always declare it.
+Le **premier** run réel `SOURCE-FRESH` est classé **exceptionnellement `critical` + `canary_required`** (double reviewer de providers distincts + canary synthétique avant tout effet). Après **3 exécutions propres**, il pourra redescendre en `normal`. Répercuté dans la ROADMAP (lot C8-C, readiness).
 
-This is a real usability-vs-safety tradeoff, not a technical question — both are
-implementable identically cheaply.
+## Ce qui restait ouvert et ne l'est plus
 
-## D2 — Should risk-tier assignment ever be inferred automatically?
-
-E.g., a mission whose scope touches `bubble/promotion.py` or credential-adjacent paths
-auto-escalates to `critical` even if the mission definition said `normal`. Pro: catches
-a human's under-declaration by mistake (the same class of gap G-DBL-AUDIT itself exists
-to catch for reviewer identity). Con: an inference heuristic can itself be wrong or
-gamed, and this milestone's own stated principle (`JOAO_COURSE_CORRECTION_20260719_1.md`
-D-046: "JOÃO est un CONTROL PLANE ... PAS un moteur de sécurité OS") leans toward NOT
-building heuristic security judgment into JOÃO itself. Needs a Boss call on which
-principle wins here.
-
-## D3 — Canary definition and observation requirement for REAL (non-toy) missions
-
-`JOAO_C8_GATES_ROADMAP.md` M5's own STOP condition flags this. This session's actual
-canary practice (CV-SEC-CORE-V2, A0.2's own E2E) was always synthetic-data, one-shot,
-and effectively human-observed in real time. For a REAL product mission's canary: must
-a human/agent session be actively watching (as every canary this session ran was), or
-can G-CANARY-FIRST accept an unattended, automated canary run as sufficient proof? This
-determines whether "canary" in the gate sense is a technical check or also an
-organizational/observation requirement — a product decision, not an engineering one.
-
-## D4 — Reviewer disagreement resolution on a critical run
-
-If `GLMReviewer` and `CodexCLIReviewer` disagree (one ACCEPT, one BLOCK/P1) on a
-`critical` run, G-DBL-AUDIT as currently specified simply refuses (both must accept).
-Is that the permanent policy, or should disagreement trigger an escalation path (e.g.
-automatic Boss notification with both verdicts, a designated third reviewer, or a
-defined tie-break rule)? This session's own history has no precedent for genuine
-reviewer disagreement (every GLM/Claude verdict this session obtained either agreed or
-was treated as authoritative on its own) — this is a real gap in lived experience to
-design against, not something inferable from precedent.
-
-## D5 — Permanence of the "Boss GO = named instruction text" authority model
-
-`JOAO_WORKER_INTEGRATION_SPEC.md` §3 explicitly chooses zero-new-mechanism (reusing the
-existing named-instruction convention) for THIS milestone, citing the cost policy. Is
-that acceptable as the PERMANENT authority model once the orchestration controller runs
-with less continuous human presence than this session had, or is it explicitly an MVP
-shortcut that a later milestone must replace with something more binding (a signed
-approval record, a separate approval store)? Needs a Boss decision on how long the
-current model is trusted to scale.
-
-## D6 — Should the orchestration controller ever run unattended (no active human/agent
-   session) between Boss GO and the next Boss approval point?
-
-`JOAO_COURSE_CORRECTION_20260719_1.md`'s own decision 6 explicitly defers "autonomie
-nocturne" (nightly/unattended autonomy) until after M4 (10 real missions, measured).
-This milestone's M3-M6 build the machinery that WOULD make unattended operation
-possible between the three Boss-approval points named in
-`JOAO_WORKER_INTEGRATION_SPEC.md` §9 — but whether it is actually ALLOWED to run that
-way during THIS milestone's own life (vs. requiring a human/agent to stay attached
-throughout, as every run in this repo's history so far has had) is a policy choice this
-spec deliberately leaves to the Boss, since the course-correction document's own
-existing stance on nightly autonomy is ambiguous about whether it covers this narrower
-case.
-
-## D7 — Retention/lifecycle of superseded candidates and provisional tags
-
-This session alone produced two provisional tags for A0.2 (one superseded, one
-current) and one fully-deleted premature tag, all within a few hours, all requiring a
-human to notice the contamination and correct it by hand. At the scale seven gates +
-real worker orchestration will produce, should JOÃO maintain an automatic
-retention/cleanup policy for superseded candidates and their tags/evidence (e.g.
-auto-archive after N days, or after a successor is promoted), or does every such
-cleanup remain a manual, Boss-reviewed action indefinitely (matching this session's own
-practice throughout)? A genuine operational-policy tradeoff, not resolvable by
-engineering default.
+Les 7 items sont tranchés. Aucune décision Boss résiduelle ne bloque C8-A. Deux points **backlog** (non bloquants) issus du contre-audit, à traiter dans le lot où ils deviennent pertinents, pas avant :
+- le **3ᵉ provider reviewer automatique** (`ClaudeCLIReviewer` ou autre) pour remplacer l'étape GPT-formelle du tier critique — devient pertinent en C8-B/C8-C ;
+- la fixture gelée exacte qui déterminise le test D-044 (contenu de la fixture ledger/specs) — détail d'implémentation de C8-A/M-hermétique.

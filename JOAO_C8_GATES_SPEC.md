@@ -1,237 +1,121 @@
-# JOÃO C-8 GATES + WORKER INTEGRATION — PRODUCT/TECHNICAL SPEC
+# JOÃO C-8 GATES + WORKER INTEGRATION — SPEC (v2, post GPT counter-audit)
 
-**Phase 0 — SPEC + ROADMAP ONLY. No implementation in this branch.**
-Branch: `feat/joao-c8-gates-spec`. Base:
-`feat/joao-a0-integrite-clean` @ `10156a2311dd4018944d1b10000f262fbaac06f3`.
-A0.2 is frozen at `cc796b55808b95210adf9d219ecd91a240b2676c`
-(`PROVISIONALLY_CLOSED`, `CODEX_FINAL_REVIEW=PENDING_2026-07-23`) and is not modified,
-referenced-for-editing, or reopened by this document — it is read-only context.
-
-Companion documents: `JOAO_C8_GATE_CONTRACTS.md` (per-gate inputs/outputs/reason
-codes/entrypoints), `JOAO_WORKER_INTEGRATION_SPEC.md` (builder/reviewer/orchestration
-detail), `JOAO_C8_GATES_ROADMAP.md` (milestones), `JOAO_C8_OPEN_DECISIONS.md`
-(Boss-level decisions this spec cannot make for itself).
-
----
+**Phase 0 — SPEC + ROADMAP ONLY.** Branche `feat/joao-c8-gates-spec`, base `10156a2`.
+A0.2 gelé `cc796b55808b95210adf9d219ecd91a240b2676c` (tree `7ae68454…`, `PROVISIONALLY_CLOSED`, Codex `PENDING_2026-07-23`) — read-only, non modifié.
+Compagnons : `JOAO_C8_GATE_CONTRACTS.md`, `JOAO_WORKER_INTEGRATION_SPEC.md`, `JOAO_C8_GATES_ROADMAP.md`, `JOAO_C8_OPEN_DECISIONS.md`.
+**v2 :** corrige les 4 findings bloquants GPT + sépare validation-technique/approbation-Boss + inscrit D1–D7 + compresse la roadmap en 3 lots (7 gates conservés).
 
 ## 1. Goals
 
-1. Convert the seven C-8 lessons (already integrated into `memory/lessons.jsonl` on
-   `feat/joao-a0-integrite` at commit `639ec01`, **not this branch** — see §4) from
-   prose lessons into executable, fail-closed gates with stable reason codes, wired
-   into the real run pipeline.
-2. Give JOÃO a real `GLMReviewer` adapter (the missing half of what this session
-   already proved works manually — see `JOAO_WORKER_INTEGRATION_SPEC.md` §1) so GLM
-   can be dispatched as an independent reviewer BY THE SYSTEM, not only by a human
-   copy-pasting a task file.
-3. Give JOÃO an orchestration controller that walks Boss GO → approved SPEC/ROADMAP →
-   build → gates → freeze → review → canary/promotion → Boss approval, end to end,
-   without a human manually sequencing `RunRuntime` calls (which is how every run in
-   this repo's history, including this session's own A0.2 work, has actually happened
-   so far).
-4. Make the discipline this session repeatedly enforced BY HAND — reviewer
-   independence, hermetic tests, real-entrypoint proof, SHA-binding, canary-before-
-   promotion, frozen scope — a property of the SYSTEM instead of a property of
-   whichever human/agent happens to be careful that day.
+1. Convertir les 7 leçons C-8 en gates **exécutables, fail-closed**, à reason codes stables, câblés dans le vrai pipeline (`bubble/gates.py` + entrypoints réels).
+2. Doter JOÃO d'un `GLMReviewer(ReviewerAdapter)` — la moitié manquante prouvée manuellement cette session — **utilisable comme reviewer indépendant uniquement quand le builder n'est pas GLM** (voir §6 et le paradoxe résolu de G-DBL-AUDIT).
+3. Un contrôleur d'orchestration qui déroule `Boss GO → SPEC/ROADMAP approuvée → build → gates → freeze → review → canary/promotion → approbation Boss`, sans séquencer `RunRuntime` à la main.
+4. Faire de la discipline appliquée à la main cette session (indépendance reviewer, tests hermétiques, preuve via vrai entrypoint, liaison SHA, canary-avant-promotion, scope gelé) une propriété du **système**.
 
-## 2. Explicit non-goals
+## 2. Non-goals
 
-- **Not** an eighth gate, ever, in this milestone (G-FROZEN-FINISH-LINE applies to this
-  spec's own scope first).
-- **Not** OS-level security hardening or a new isolation boundary — unchanged claim,
-  see `JOAO_WORKER_INTEGRATION_SPEC.md` §14.
-- **Not** a rebuild of `RunRuntime`, `promotion.py`, or `execution_backend.py` — the
-  orchestration controller calls existing primitives; it does not replace them.
-- **Not** SOURCE-FRESH implementation — SOURCE-FRESH is the intended FIRST mission to
-  run through this milestone's output, not part of building it.
-- **Not** memory/lessons.jsonl changes, roadmap changes, or Competitor/OSS Intelligence
-  — all explicitly forbidden for this Phase-0 run.
-- **Not** a retroactive reopening of A0.2 — any A0.2-scoped finding this planning work
-  surfaces is logged in `JOAO_C8_OPEN_DECISIONS.md` as a candidate for a SEPARATE,
-  future, distinctly-authorized run, never folded back into A0.2.
-- **Not** a new authentication/signature mechanism for "Boss GO" (see
-  `JOAO_WORKER_INTEGRATION_SPEC.md` §3) — reuses the existing named-instruction
-  convention.
+Pas de 8ᵉ gate. Pas de sécurité OS / nouvelle frontière d'isolation (D-046). Pas de réécriture de `RunRuntime`/`promotion.py`/`execution_backend.py` — le contrôleur appelle les primitives existantes. Pas de SOURCE-FRESH implémenté (c'est la 1ʳᵉ mission à faire passer par ce milestone, pas une partie de sa construction). Pas de changement de `memory/lessons.jsonl` (les leçons L-048..L-059/C-8 + D-055 différées restent hors candidat — D-055). Pas de réouverture d'A0.2. Pas de nouveau mécanisme d'auth « Boss GO » cryptographique (D5 : texte nommé, hashé et lié au run).
 
 ## 3. Current-state architecture
 
-See `JOAO_WORKER_INTEGRATION_SPEC.md` §1 for the full, source-verified table. Summary:
-`RunRuntime` (`bubble/runtime.py`) is a real, tested state machine
-(`ready → building → needs_approval → accepted → promoted`, plus `blocked`/`paused`)
-already exercised end-to-end by `scripts/a0_toy_mission_e2e.py`. Builders
-(`SandboxBuilder`, `GLMBuilder`) and reviewers (`CodexEvidenceReviewer`,
-`CodexCLIReviewer`) are real `Adapter` implementations dispatched through one
-`ExecutionBackend.execute()` choke point (A0.2 correctif 2/12.2). What does not exist:
-a `GLMReviewer` adapter, and any code that sequences a full mission unattended — both
-gaps this milestone closes.
+Détail source-vérifié : `JOAO_WORKER_INTEGRATION_SPEC.md §1`. Résumé : `RunRuntime` (`bubble/runtime.py`) = machine à états réelle et testée (`RunStatus`/`NEXT`), exercée E2E par `scripts/a0_toy_mission_e2e.py`. Builders `SandboxBuilder`, `GLMBuilder` (réel) ; reviewers `CodexEvidenceReviewer` (import de preuve, défaut), `CodexCLIReviewer` (Codex live) — tous dispatchés via un seul `ExecutionBackend.execute()` (A0.2 §12.2). **Manque :** un `GLMReviewer`, et tout code qui séquence une mission de bout en bout. **Fait vérifié (finding GPT #4) :** le budget de correction réel du runtime est `"max_corrections": 1` (`runtime.py:593`, `plan.json`) — PAS 2. Le `max_repair_loops: 2` de `.joao/context_policy.yaml` est un knob de quota distinct ; il ne définit pas le budget de correction d'un run.
 
 ## 4. Target architecture
 
-Additive only, per G-FROZEN-FINISH-LINE and G-NO-STALE-ENTRYPOINT:
-1. `GLMReviewer(ReviewerAdapter)` — new class, `bubble/runtime.py` (detail:
-   `JOAO_WORKER_INTEGRATION_SPEC.md` §2.1).
-2. Seven gate checks wired into `RunRuntime.approve()` / `.promote()` / the pytest
-   session / a new static-audit script — never a new parallel state machine (detail:
-   `JOAO_C8_GATE_CONTRACTS.md`, one section per gate, "Real entrypoint" line each).
-3. A thin orchestration controller module (name/location TBD at implementation time;
-   `bubble/orchestrator.py` is the current working name) that sequences existing
-   `RunRuntime` calls per §9's state-machine diagram — implemented in M3/M4, not this
-   Phase-0 branch.
+Additif seulement (G-FROZEN-FINISH-LINE + G-NO-STALE-ENTRYPOINT) :
+1. `bubble/gates.py` — les 7 gates comme fonctions pures fail-closed (détail `JOAO_C8_GATE_CONTRACTS.md`).
+2. `frozen_mission.json` écrit par `RunRuntime.start()` (spec_sha, roadmap_sha, forbidden_paths, risk_tier, canary_required, **`criterion_bindings`** = mapping AC→{allowed_paths, required_tests, allowed_actions}, GATE_CONTRACTS) — l'artefact qui rend **G-FROZEN-FINISH-LINE mécanique** et lie réellement chaque changement à un critère gelé (findings GPT #2 + v2 #3).
+3. `GLMReviewer(ReviewerAdapter)` — nouvelle classe `bubble/runtime.py` (détail WORKER §2.1).
+4. Un contrôleur d'orchestration fin (`bubble/orchestrator.py`, nom TBD) qui séquence les appels `RunRuntime` existants et **produit l'éligibilité mécanique** sans jamais fabriquer l'approbation humaine (§13).
 
-**Note on the memory-integration precedent:** this milestone's own C-8 lessons already
-live in `memory/lessons.jsonl` via commit `639ec01954fdd5eb53b86cd465a922e217016e0d` on
-`feat/joao-a0-integrite` — the branch this Phase-0 work deliberately does NOT build on
-(it builds on `feat/joao-a0-integrite-clean`, which excludes that commit, per the
-immediately-preceding Boss GO). This spec does not re-litigate that decision; it simply
-notes that "the seven C-8 lessons" as source material already exist in the OTHER
-branch's memory, and converting them to gates does not require re-reading that specific
-commit — the lesson CONTENT (the seven gate names and one-line claims) was given
-verbatim in this instruction and is restated in full in
-`JOAO_C8_GATE_CONTRACTS.md`.
+**Précédent mémoire (D-055) :** les 7 leçons C-8 vivent déjà dans `memory/lessons.jsonl` via `639ec01` sur `feat/joao-a0-integrite` — la branche que ce travail **ne** prend PAS pour base (il part de `feat/joao-a0-integrite-clean`, qui exclut ce commit). Le contenu des leçons (les 7 noms + claims) est fourni verbatim dans l'instruction et restitué dans `JOAO_C8_GATE_CONTRACTS.md` ; convertir en gates ne requiert pas de relire ce commit.
 
 ## 5. Trust boundaries
 
-Unchanged from A0/A0.2 (`JOAO_WORKER_INTEGRATION_SPEC.md` §14): the trust boundary is
-the OS user account running JOÃO, not a process/container boundary. Within that
-boundary, this milestone adds one NEW trust distinction: a "risk tier" boundary between
-`normal` and `critical` runs (§6), which changes how much independent verification a
-run needs before promotion — not a new technical isolation boundary, a POLICY boundary.
+Inchangées A0/A0.2 : la frontière de confiance est le compte OS qui exécute JOÃO, pas une frontière process/container (D-046). C-8 ajoute une frontière **de politique** (pas d'isolation technique) : le `risk_tier` (§6) qui décide combien de vérification indépendante un run exige. Builder = non fiable (sortie/hash/identité re-vérifiés, jamais d'auto-approbation). Reviewer = indépendant, provider distinct du builder. Boss = seule autorité d'approbation humaine (jamais fabriquée par le contrôleur, §13).
 
-## 6. Risk tiers
+## 6. Risk tiers  *(D1 : obligatoire)*
 
-- **`normal`** (default): bounded, non-security-relevant, single-project missions.
-  Requires one independent reviewer (G-DBL-AUDIT).
-- **`critical`**: security-relevant, release-relevant, or explicitly Boss-flagged
-  missions (mirrors this session's own real practice — CV-SEC-CORE-V2's promotion, and
-  A0.2's own closeout, both explicitly treated as higher-scrutiny than an ordinary
-  commit). Requires two reviewers from distinct providers (G-DBL-AUDIT), and, where
-  mission policy says so, a passing canary before promotion (G-CANARY-FIRST).
+- **`normal`** : borné, non sensible. Requiert **1 reviewer indépendant** (provider ≠ builder). Builder GLM → reviewer **Codex**.
+- **`critical`** : sensible sécurité/release, ou escaladé par chemin protégé (D2). Requiert **2 reviewers de `provider_family` DISTINCTES, toutes deux ≠ famille du builder** (finding GPT v3 : Codex et GPT sont tous deux famille `openai` → NE comptent PAS comme 2), + canary si requis. Builder GLM (`zai`) → **Codex (`openai`) + une 2ᵉ famille ≠ openai (Claude/`anthropic`)**. Tant qu'un reviewer de famille distincte de openai (`ClaudeCLIReviewer`) n'existe pas → build GLM critical **bloqué** (`G_DBL_AUDIT_NO_DISTINCT_FAMILY_AVAILABLE`). `GPTFormalEvidenceReviewer` (`provider="openai-gpt"`, identité contrôleur, jamais via `CodexEvidenceReviewer`) reste valide en `normal` mais ne satisfait pas la distinction de familles en `critical`.
 
-Tier assignment is a mission-definition field, set by the Boss-approved SPEC/ROADMAP
-reference at GO time (`JOAO_WORKER_INTEGRATION_SPEC.md` §3) — not inferred
-automatically by JOÃO. Whether tier assignment should EVER be automatic is a real,
-open, Boss-level question — see `JOAO_C8_OPEN_DECISIONS.md`.
+`risk_tier` est un champ de mission gelé au `start()`. **Absent → BLOCK** (D1, jamais un défaut silencieux). Escalade auto = déterministe par chemins protégés uniquement (D2), jamais heuristique.
 
-## 7. Gate inputs, outputs, and stable reason codes
+## 7. Gate inputs/outputs/reason codes
 
-Fully specified per-gate in `JOAO_C8_GATE_CONTRACTS.md` — not duplicated here.
+Détail par gate : `JOAO_C8_GATE_CONTRACTS.md`. Forme commune `{ok, decision, reason_code, reason, candidate_tree, …}`, fail-closed.
 
-## 8. Real runtime entrypoint per gate
+## 8. Entrypoint réel par gate
 
-Summarized (full detail in `JOAO_C8_GATE_CONTRACTS.md`, "Real entrypoint" per gate):
-
-| Gate | Entrypoint |
+| Gate | Entrypoint réel |
 |---|---|
-| G-DBL-AUDIT | `RunRuntime.approve()` |
-| G-HERMETIC | autouse pytest session fixture (extends `tests/conftest.py`'s existing pattern) |
-| G-AUTH-IO | static test-suite auditor script, run pre-close/CI |
-| G-NO-STALE-ENTRYPOINT | static AST-audit script, run pre-close/CI |
-| G-SHA-BOUND-PROOF | evidence write path + evidence consumption path (both ends) |
-| G-CANARY-FIRST | `RunRuntime.promote()` / `promotion.py`'s acceptance-verification function |
-| G-FROZEN-FINISH-LINE | SPEC/ROADMAP layer discipline, mechanically reinforced by G-NO-STALE-ENTRYPOINT + G-DBL-AUDIT's allowlists |
+| G-DBL-AUDIT | `bubble/gates.py` appelé à `REVIEWING→promotion_ready` + re-check dans `RunRuntime.promote()` |
+| G-HERMETIC | fixture autouse `tests/conftest.py` + auditeur d'ouvertures de fichier (détection+échec) |
+| G-AUTH-IO | `scripts/audit_test_entrypoints.py` (auditeur statique de suite), pre-close/CI |
+| G-NO-STALE-ENTRYPOINT | `scripts/audit_entrypoints.py` (audit AST), pre-close/CI |
+| G-SHA-BOUND-PROOF | chemin d'écriture ET de consommation de preuve dans `RunRuntime` (les 2 bouts) |
+| G-CANARY-FIRST | `RunRuntime.promote()` / `promotion._verify_acceptance_for_promotion` |
+| G-FROZEN-FINISH-LINE | `RunRuntime.start()` écrit `frozen_mission.json` ; `bubble/gates.py` compare l'état git réel avant freeze/review |
 
-## 9. Builder/reviewer provider identity model
+## 9. Provider identity model
 
-Unchanged mechanism, reused: class-level `provider`/`model` constants on each
-`Adapter`, always overwritten into accepted evidence server-side (never trusting a
-subprocess's self-reported identity) — see `JOAO_WORKER_INTEGRATION_SPEC.md` §5 and
-`reviewer_contract.py`'s existing, A0.2-correctif-5-hardened `validate_reviewer_verdict`.
+`(provider, model)` = constantes de classe de l'adaptateur, **toujours écrasées** dans la preuve acceptée côté contrôleur (`reviewer_contract.validate_reviewer_verdict`, durci A0.2 correctif 5). G-DBL-AUDIT compare ces identités contrôleur pour builder≠reviewer et distinction de providers.
 
-## 10. GLM/ZCode launch contract
+## 10–11. Launch contracts
 
-`JOAO_WORKER_INTEGRATION_SPEC.md` §4 (builder, already real) and §2.1 (reviewer, new).
+Builder GLM/ZCode : WORKER §4 (réel). Reviewer Codex : WORKER §5 (réel, `CodexCLIReviewer`). Reviewer GLM : WORKER §2.1 (nouveau, `GLMReviewer`, **seulement si builder≠GLM**). 3ᵉ provider critique : WORKER §5.
 
-## 11. Codex/GLM reviewer launch contract
+## 12. Modèle de preuve SHA/tree
 
-`JOAO_WORKER_INTEGRATION_SPEC.md` §5.
+WORKER §6, généralisé par G-SHA-BOUND-PROOF à tout artefact (canary, logs de gate), pas seulement les verdicts reviewer. `recompute_candidate_tree` pré/post chaque étape sensible.
 
-## 12. Exact SHA/tree evidence model
+## 13. Machine à états + séparation validation/approbation  *(finding GPT #5)*
 
-`JOAO_WORKER_INTEGRATION_SPEC.md` §6; generalized by G-SHA-BOUND-PROOF
-(`JOAO_C8_GATE_CONTRACTS.md`) to cover every evidence artifact this milestone adds, not
-only reviewer verdicts.
-
-## 13. State machine transitions
+États `RunRuntime` inchangés : `ready → building → needs_approval → accepted → promoted` (+ `blocked`/`paused`). C-8 ajoute des **checks** aux transitions, **aucun nouvel état**. Ordre unifié (finding GPT v3 #3) :
 
 ```
-ready → building → needs_approval → [G-DBL-AUDIT, G-SHA-BOUND-PROOF] → accepted
-      → [G-CANARY-FIRST if required] → promoted
-(blocked / paused are existing off-ramps at any point a gate or adapter returns
- ok=false — unchanged from today's RunRuntime)
+reviews → canary → promotion-readiness.json → approbation Boss → promote()
 ```
-Full orchestration sequence: `JOAO_WORKER_INTEGRATION_SPEC.md` §2.2.
+- `promotion-readiness.json` = **ARTEFACT mécanique** lié au tree (gates verts + verdicts de familles distinctes + canary vert), écrit dans le `run_dir` — **PAS un nouvel état caché de `RunStatus`**.
+- `approval-record.json` = **autorisation humaine** (`approved_by=human`, texte d'autorité hashé — D5), jamais fabriquée par le contrôleur.
+- `promote()` exige `promotion-readiness.json` valide (lié au tree) ET `approval-record.json` humain réel.
 
-## 14. Correction-loop maximum
+## 14. Correction-loop maximum  *(finding GPT #4)*
 
-2 (`MAX_REPAIR_LOOPS: 2`), reused from every existing run card's own convention — not a
-new number.
+**`max_corrections = 1`** — valeur réelle du runtime (`runtime.py:593`, `plan.json`), pas 2. Une tentative initiale + une correction ciblée, puis arrêt → retour Boss. `retry()` incrémente `corrections_used` ; à épuisement → `NEEDS_APPROVAL`. (Le `max_repair_loops: 2` de `context_policy.yaml` est un knob de quota distinct, non le budget de correction.)
 
-## 15. Boss approval points
+## 15. Boss approval points  *(D6)*
 
-Exactly three: initial GO, mid-run risk-tier escalation, promotion. Detail:
-`JOAO_WORKER_INTEGRATION_SPEC.md` §9.
+Exactement : (a) GO initial nommant la SPEC/ROADMAP approuvée (hashée, D5) ; (b) escalade de tier en cours de run (déterministe par chemin, D2) ; (c) promotion. Autonomie autorisée **entre les gates pour runs synthétiques/normal** ; promotion et effets externes restent Boss-controlled (D6). Aucun arrêt Boss aux étapes mécaniques intermédiaires.
 
-## 16. Failure and recovery behavior
+## 16. Failure & recovery
 
-Any gate `ok=false` → `blocked`, never a silent downgrade; recovery is always a NEW run
-(new `candidate_tree`), never a patched resume of a blocked one. Detail:
-`JOAO_WORKER_INTEGRATION_SPEC.md` §10.
+Tout gate `ok=false` → `blocked`, jamais de downgrade silencieux. Récupération = **nouveau run** (nouveau `candidate_tree`), jamais un resume/patch d'un candidat gelé bloqué. Désaccord reviewer critique → BLOCK + notification Boss, pas de tie-break auto (D4).
 
-## 17. Immutable candidate/tag/rollback model
+## 17. Immutable candidate / tag / rollback
 
-Reuses `promotion.py`'s existing atomic promote/rollback plus this session's own
-now-established annotated-tag convention. Detail: `JOAO_WORKER_INTEGRATION_SPEC.md`
-§11.
+Réutilise `promotion.py` (promote/rollback atomique, prouvé par `a0_toy_mission_e2e.py`) + la convention de tag annoté de cette session (pointant un commit exact, créé après GO reviewer). Candidats superseded archivés/révoqués, jamais auto-supprimés (D7).
 
-## 18. Test strategy, including red→green adversarial tests
+## 18. Test strategy (rouge→vert adversarial)
 
-Each milestone (see `JOAO_C8_GATES_ROADMAP.md`) ships its own gate's adversarial test
-set, following the EXACT pattern this session used for A0.2 correctif 5 and validated
-through three independent GLM review rounds: one red→green test per failure mode named
-in that gate's "Output / reason codes" list in `JOAO_C8_GATE_CONTRACTS.md`, each
-exercising the gate's real entrypoint (per G-AUTH-IO, applied to this milestone's own
-development — the same standard this milestone imposes on future work applies to
-building it), plus one positive test proving the fully-compliant case is accepted.
-Every new test proven, per G-HERMETIC, to depend on nothing outside `tmp_path`/an
-injected root — checked by literally running the new hermeticity auditor (M2) against
-the new tests introduced in M1 and every milestone after it.
+Un test rouge→vert par reason code de `JOAO_C8_GATE_CONTRACTS.md`, chacun via le vrai entrypoint du gate (G-AUTH-IO appliqué au développement de C-8 lui-même), + un test positif du cas conforme. Tous hermétiques (G-HERMETIC, borné aux **racines de données sensibles/mutables** — pas aux sources immuables du repo/Python/deps que pytest doit lire ; GATE_CONTRACTS) — la suite par défaut atteint **`EXIT=0`** après le lot hermétique (D-044 déterminisé par fixture, non masqué). Détail par lot : `JOAO_C8_GATES_ROADMAP.md`.
 
-## 19. Acceptance criteria (for this Phase-0 spec itself)
+## 19. Acceptance criteria (milestone C-8)
 
-- Exactly the five named files exist on `feat/joao-c8-gates-spec`, nothing else
-  changed.
-- Exactly seven gates specified, by name, matching the instruction's list exactly — no
-  eighth.
-- Every required SPEC section (this list, verbatim from the instruction) is present.
-- Roadmap is milestone-based with the required per-milestone fields.
-- Open decisions contains only genuine Boss-level product questions, not mechanically
-  resolvable ones.
-- A0.2 (`feat/joao-a0-integrite-clean` @ `cc796b5...`, its tag, its evidence, its
-  tests) is provably untouched — `git diff --stat feat/joao-a0-integrite-clean
-  feat/joao-c8-gates-spec` shows only the five new files as additions, zero
-  modifications to any pre-existing file.
+`SEVEN_GATES_WIRED=7` aux entrypoints §8 · `EACH_GATE_REDGREEN=true` · `G_FROZEN_FINISH_LINE_MECHANICAL=true` (frozen_mission.json + comparaison git) · `DEFAULT_SUITE_EXIT_0=true` (D-044 hermétique) · `MAX_CORRECTIONS=1` · `GLM_NEVER_REVIEWS_GLM_BUILT_CANDIDATE=true` · `CRITICAL_HAS_2_DISTINCT_NON_BUILDER_PROVIDERS=true` · `MECHANICAL_ELIGIBILITY_SEPARATE_FROM_BOSS_APPROVAL=true` · `NO_EIGHTH_GATE=true` · `NO_OS_SECURITY_RECREATED=true` · `ZERO_PAID_API_COST=true`.
 
-## 20. Migration plan from current A0.2
+## 20. Migration depuis A0.2
 
-No migration in the code sense — A0.2's `RunRuntime`/adapters/promotion machinery is
-the FOUNDATION this milestone extends, not something replaced. Migration is additive:
-M1-M2 add gate checks and hermeticity enforcement around the existing engine; M3 adds
-`GLMReviewer`; M4 wires risk-tier-aware reviewer orchestration into `approve()`; M5
-adds SHA-bound canary/promotion enforcement into `promote()`; M6 proves the whole chain
-on one synthetic end-to-end mission (the direct successor to
-`scripts/a0_toy_mission_e2e.py`, extended to exercise gates and both reviewers, not a
-replacement of it); M7 is a readiness checklist, not new code, confirming SOURCE-FRESH
-can launch through the resulting controller.
+Additive : A0.2 est la **fondation** (gel candidat, contrat reviewer strict, scope gelé, dispatch unique, promotion vérifiée), pas remplacée. C8-A ajoute gates + hermeticity + frozen_mission autour du moteur ; C8-B ajoute `GLMReviewer` + orchestration ; C8-C ajoute SHA/canary/promotion + E2E + readiness. Démarre après clôture Codex d'A0.2 (2026-07-23) et merge — **sauf C8-A**, qui peut démarrer sans attendre Codex (voir roadmap). Aucune régression des tests A0.2 tolérée.
 
-## 21. Compatibility with SOURCE-FRESH as the first real product mission
+## 21. Compatibilité SOURCE-FRESH
 
-`JOAO_WORKER_INTEGRATION_SPEC.md` §12; expanded in `JOAO_C8_GATES_ROADMAP.md` M7.
+C-8 s'arrête à un readiness gate (lot C8-C) prouvant que le cycle piloté par gates porte une mission produit synthétique E2E. Premier run réel SOURCE-FRESH = **`critical` + `canary_required`** exceptionnellement, → `normal` après 3 runs propres (décision produit, `JOAO_C8_OPEN_DECISIONS.md`). C-8 ne construit PAS SOURCE-FRESH.
 
-## 22. Cost policy: zero incremental paid API cost
+## 22. Cost policy
 
-`JOAO_WORKER_INTEGRATION_SPEC.md` §13 — reuses existing flat-rate GLM (Z.AI Coding
-Plan) and Codex (subscription) access; no new metered provider.
+**Zéro coût API payant incrémental.** Gates = code local (stdlib + git). Builder = abonnement GLM/ZCode (`joao-glm`, forfait Z.AI). Reviewer = abonnement Codex, + GPT-formel (intérim) pour le 3ᵉ provider critique. `max_cloud_workers: 1`, `no_parallel_cloud_subagents`. Aucun nouveau provider métré.
 
-## 23. No recreation of an OS-security boundary
+## 23. No OS-security boundary recreation (D-046)
 
-`JOAO_WORKER_INTEGRATION_SPEC.md` §14 — unchanged claim from A0/A0.2.
+Critère d'acceptation dur : tout milestone proposant un sandbox/ACL/isolation maison est hors scope, rejeté. L'isolation reste `ExecutionBackend`.

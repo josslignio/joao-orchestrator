@@ -1,254 +1,206 @@
-# JOÃO C-8 GATE CONTRACTS
+# JOÃO C-8 GATE CONTRACTS (v2 — post GPT counter-audit `CHANGES_REQUIRED`)
 
-Phase 0 — spec only, no implementation. Base: `feat/joao-a0-integrite-clean` @
-`cc796b55808b95210adf9d219ecd91a240b2676c` (A0.2, `PROVISIONALLY_CLOSED`, frozen —
-not touched by this document or this branch).
+Phase 0 — spec only, no implementation. Planning branch `feat/joao-c8-gates-spec`, base
+`10156a2` (tip A0.2 propre). A0.2 gelé sur `cc796b55808b95210adf9d219ecd91a240b2676c`
+(tree `7ae68454…`, `PROVISIONALLY_CLOSED`, Codex `PENDING_2026-07-23`) — **non modifié**
+par ce document. **Exactement 7 gates, pas de 8ᵉ.** D-046 : JOÃO = control plane, PAS sécurité OS.
 
-This file is the machine-checkable contract layer: for each of the exact seven C-8
-gates, its inputs, outputs, stable reason codes, and the real runtime entrypoint that
-must enforce it (not a helper function tested in isolation — this is G-AUTH-IO's own
-requirement applied reflexively to every other gate's own test suite).
+**v2 corrige les 4 findings bloquants de GPT** (paradoxe GLM builder/reviewer ; G-FROZEN-FINISH-LINE rendu mécanique ; G-HERMETIC rendu réellement fail-closed avec suite EXIT=0 ; boucle de correction = 1) + la séparation validation-technique/approbation-Boss + les décisions D1–D7 (voir `JOAO_C8_OPEN_DECISIONS.md`).
 
-Convention: every gate returns a dict shaped like JOÃO's existing reviewer/builder
-adapters already do (`{"ok": bool, "decision": "pass"|"block", "reason_code": str,
-"reason": str, ...gate-specific fields}`) — this reuses the vocabulary
-`execution_backend.py`'s `PREFLIGHT_UNAVAILABLE` and `reviewer_contract.py`'s
-`"decision": "block"` already established in A0/A0.1/A0.2, not a new response shape.
+Convention : chaque gate rend `{"ok": bool, "decision": "pass"|"block", "reason_code": str, "reason": str, "candidate_tree": sha|null, ...champs}` — même vocabulaire que les adaptateurs existants (`execution_backend.py` `PREFLIGHT_UNAVAILABLE`, `reviewer_contract.py` `"decision": "block"`). Fail-closed : doute/entrée manquante/exception → BLOCK. Reason codes = chaînes stables contractuelles.
 
 ---
 
-## G-DBL-AUDIT — risk-tiered reviewer requirement
+## G-DBL-AUDIT — deux auditeurs indépendants, à niveau de risque  *(v2: paradoxe GLM résolu)*
 
-**Claim:** a `critical`/security/release run cannot reach `approve()` with only one
-reviewer's verdict; a normal bounded run needs exactly one; the builder identity can
-never equal either reviewer identity.
+**Claim :** aucune éligibilité technique à la promotion sans le nombre requis de verdicts d'auditeurs **de providers distincts, tous distincts du provider builder**, liés au `candidate_tree` gelé. Le builder ne compte JAMAIS comme reviewer.
 
-**Inputs:** `run.risk_tier` (`normal` | `critical`), the list of verdicts collected for
-the run's terminal ("final") review stage, each verdict's `reviewer.provider` (the
-controller-computed value per `reviewer_contract.py`'s existing "never trust the
-reviewer's own claimed identity" rule — unchanged, reused), `run.builder_provider`.
+**Le paradoxe corrigé (finding GPT #1).** Le builder par défaut est GLM (`GLMBuilder.provider = "zai-coding-plan"`). Un futur `GLMReviewer.provider = "zai-coding-plan"` **partage** ce provider → un run construit par GLM ne peut pas compter GLM comme reviewer indépendant (`G_DBL_AUDIT_BUILDER_SELF_REVIEW`). Donc la cible « critical = GLM + Codex » était **impossible** quand le builder est GLM. Règle v2 :
 
-**Output / reason codes:**
-- `ok=true` only if: `risk_tier == "normal"` and exactly 1 distinct-from-builder
-  reviewer verdict is `ACCEPT`; OR `risk_tier == "critical"` and 2 verdicts from 2
-  *distinct* `reviewer.provider` values are both `ACCEPT`.
-- `G_DBL_AUDIT_INSUFFICIENT_REVIEWERS` — critical run has fewer than 2 accepted
-  verdicts.
-- `G_DBL_AUDIT_SAME_PROVIDER` — critical run's two verdicts share a `reviewer.provider`
-  (this is the exact defect the current session corrected by hand: a Claude subagent
-  standing in for GLM was rejected after the fact by written governance correction —
-  G-DBL-AUDIT makes that rejection automatic and pre-emptive instead of a manual Boss
-  catch).
-- `G_DBL_AUDIT_BUILDER_SELF_REVIEW` — any reviewer's `provider` equals
-  `run.builder_provider`.
+```
+normal   + builder=GLM  → 1 reviewer indépendant de famille ≠ builder : Codex (CodexCLIReviewer)
+critical + builder=GLM  → reviewer #1 : Codex          (provider_family = openai)
+                         → reviewer #2 : famille DISTINCTE, ≠ openai ≠ builder → Claude/Anthropic
+                         → si aucun 3ᵉ reviewer d'une famille distincte n'existe encore → BLOCK (fail-closed)
+```
 
-**Real entrypoint:** `RunRuntime.approve()` (`bubble/runtime.py`) — the one place a run
-transitions from `needs_approval` to `accepted`. Not a standalone validator called by a
-test; `approve()` itself must call it before flipping status, mirroring how
-`promotion.py`'s `_verify_acceptance_for_promotion` already gates `promote()`.
+**`provider_family` (correction pré-C8-B #1 — finding GPT v3) :** Codex et GPT ne sont PAS deux providers indépendants — ce sont deux outils **OpenAI** (même `provider_family`). Chaque builder/reviewer porte donc un `provider_family` (`glm`→`zai`, `codex`→`openai`, `gpt`→`openai`, `claude`→`anthropic`). Le tier `critical` exige **2 familles distinctes**, toutes ≠ famille du builder — pas seulement 2 `provider` distincts. Pour un build GLM critique : Codex (openai) + Claude (anthropic). Codex + GPT = **1 seule famille** → refusé. Tant qu'un reviewer d'une famille distincte de openai (p. ex. `ClaudeCLIReviewer`) n'existe pas, un build GLM **critique** est **bloqué** (fail-closed), jamais accepté avec 2 verdicts OpenAI.
 
----
+Chemins zéro-coût pour le 3ᵉ provider (décision d'implémentation, pas de nouveau provider payant) :
+- **Intérim (dès C8-B) :** un **contre-audit GPT formel** lié au SHA, importé via un adaptateur à **identité distincte fixée par le contrôleur** — `GPTFormalEvidenceReviewer` (`provider="openai-gpt"`), **jamais** `CodexEvidenceReviewer` (qui écraserait l'identité en `provider="codex"` → un 2ᵉ verdict Codex, pas un 3ᵉ provider ; voir WORKER §5). C'est le 2ᵉ provider réellement distinct pour un run critical GLM-buildé, jusqu'à ce qu'un 3ᵉ adaptateur automatique existe.
+- **Cible (backlog) :** ajouter un `ClaudeCLIReviewer` (ou autre 3ᵉ provider) comme 2ᵉ reviewer automatique.
+- `GLMReviewer` reste utile comme reviewer indépendant **uniquement** quand le builder n'est PAS GLM (ex. `SandboxBuilder`, ou un futur builder d'un autre provider).
 
-## G-HERMETIC — no live/external dependency in default tests
+**Inputs :** `run.risk_tier` (`normal`|`critical` — D1 : absence → BLOCK) ; les verdicts du stage final, chacun avec son `reviewer.provider` **calculé par le contrôleur** (`reviewer_contract.py`, jamais l'identité auto-déclarée) ; `run.builder_provider`.
+**Output / reason codes :**
+- `ok=true` ssi : `normal` → exactement 1 verdict ACCEPT d'un provider ≠ builder ; `critical` → 2 verdicts ACCEPT de 2 providers **distincts entre eux ET distincts du builder**.
+- `G_DBL_AUDIT_INSUFFICIENT_REVIEWERS` — moins de verdicts ACCEPT que requis pour le tier.
+- `G_DBL_AUDIT_SAME_PROVIDER` — deux verdicts partagent un `reviewer.provider`.
+- `G_DBL_AUDIT_SAME_FAMILY` — tier critical : deux verdicts partagent un `provider_family` (ex. Codex+GPT = openai).
+- `G_DBL_AUDIT_BUILDER_SELF_REVIEW` — un reviewer a `provider == run.builder_provider` (ou `provider_family == builder_family`).
+- `G_DBL_AUDIT_NO_DISTINCT_FAMILY_AVAILABLE` — tier critical mais aucun 2ᵉ reviewer d'une famille distincte n'existe → BLOCK fail-closed.
+- `G_DBL_AUDIT_TREE_MISMATCH` — un verdict est lié à un tree ≠ `candidate_tree` gelé.
 
-**Claim:** the default test suite (`pytest`, no special markers) resolves zero real
-paths outside `tmp_path`/an injected root: no real `memory/lessons.jsonl`, no sibling
-repo (`~/job-opportunity-radar*`), no `~/Claude-HQ/DEFECTS_LEDGER.md`, no real
-`~/.joao-profile.json`-bearing user workspace.
+**Real entrypoint :** la **vérification** vit dans `bubble/gates.py` et est appelée par le contrôleur au passage `REVIEWING → promotion_ready` **et** re-vérifiée dans `RunRuntime.promote()` (comme `promotion._verify_acceptance_for_promotion` garde déjà `promote()`). Elle ne fabrique jamais l'approbation humaine (voir « Séparation » en fin de doc).
 
-**Inputs:** the resolved value of every environment-overridable root at test-session
-start (`JOAO_MEMORY_DIR` — already exists per A0.2 correctif 7 — plus, if this
-milestone adds them, equivalents for any future ledger/spec path); a static/dynamic
-inventory of file paths actually opened during a test run.
-
-**Output / reason codes:**
-- `ok=true` only if every opened path resolves under an injected/temp root.
-- `G_HERMETIC_REAL_MEMORY_TOUCHED` — a test read or wrote outside the isolated
-  `JOAO_MEMORY_DIR` copy.
-- `G_HERMETIC_EXTERNAL_LEDGER_DEPENDENCY` — a test's outcome depends on a file outside
-  this repo and outside `tmp_path` (this is precisely the root cause behind D-044:
-  `scripts/build_traceability.py`'s `DEFAULT_LEDGER = Path.home() / "Claude-HQ" /
-  "DEFECTS_LEDGER.md"`, and the still-open second finding from this session's own
-  history — `test_real_repo_produces_zero_unmapped_with_cv_bot_specs` reading
-  `~/job-opportunity-radar/governance/*.yaml` — both would be caught here by
-  construction, not discovered by chance during a candidate's closeout).
-- `G_HERMETIC_UNINJECTED_ROOT` — a test imported a module whose root constant resolved
-  to a real (non-temp, non-explicitly-injected) path.
-
-**Real entrypoint:** a session-scoped `pytest` fixture (autouse), analogous to the
-existing `_isolated_joao_memory_dir` fixture in `tests/conftest.py` — but this gate is
-about *detecting and failing* an escape, not merely providing an isolated copy; it must
-wrap/patch path resolution (or post-hoc audit `strace`-equivalent file-open records) so
-a NEW test that forgets to use the injected root fails loudly instead of silently
-reading real data, which is exactly the gap `test_real_repo_produces_zero_unmapped_
-with_cv_bot_specs` currently falls through (it has its own `pytest.skip()` escape
-hatch instead of a systemic guard).
+**Red→green :** rouge : run `critical`, builder GLM, reviewers GLM+Codex → doit `G_DBL_AUDIT_BUILDER_SELF_REVIEW` (GLM = builder). rouge : 2 reviewers GLM → `G_DBL_AUDIT_SAME_PROVIDER`. vert : Codex + 3ᵉ provider (GPT formel ou ClaudeCLIReviewer), tous deux ACCEPT sur le tree gelé → pass. Source : L-049/L-056 (D-045/D-052), « deux auditeurs non négociables » (D-051).
 
 ---
 
-## G-AUTH-IO — real entrypoint, not helper-only tests
+## G-HERMETIC — la suite par défaut ne touche AUCUN chemin réel/externe  *(v2: réellement fail-closed, suite EXIT=0)*
 
-**Claim:** every gate/correctif's own test suite calls the actual production
-entrypoint a real run would exercise (an `Adapter.review()`/`.build()` method, a
-`RunRuntime` method, a CLI subprocess boundary) — never only an internal helper
-(`validate_reviewer_verdict()` called directly, bypassing `CodexEvidenceReviewer.
-review()`) with no test proving the helper is actually wired to the entrypoint in
-production.
+**Claim :** `pytest` par défaut ne dépend d'aucune **racine de données sensible/mutable** hors `tmp_path`/root injecté. La portée du gate est **explicitement bornée** à ces racines (finding GPT v2 #2 : le gate ne peut PAS interdire toute ouverture de fichier — pytest doit forcément lire le code du repo, Python/stdlib et les dépendances installées) :
 
-**Inputs:** for each gate's test file, a static list of the call sites its assertions
-depend on.
+```
+COUVERT (doit résoudre sous tmp_path / root injecté) :
+  memory/                         # vraie mémoire lessons.jsonl
+  ledgers externes                # ~/Claude-HQ/DEFECTS_LEDGER.md
+  repos frères                    # ~/job-opportunity-radar*
+  workspaces utilisateur          # workspace live d'un run
+  credentials / config utilisateur
+  artefacts runtime               # run_dir, state, evidence d'un vrai run
+EXPLICITEMENT AUTORISÉ (immuable, hors gate) :
+  sources du repo sous test, Python/stdlib, packages installés, .pytest_cache
+```
 
-**Output / reason codes:**
-- `ok=true` only if at least one test per gate calls the entrypoint class/function
-  identified in that gate's "Real entrypoint" line in this document, not only the
-  underlying helper.
-- `G_AUTH_IO_HELPER_ONLY_COVERAGE` — a gate has attack tests, but none of them call
-  through the real entrypoint (this is exactly A0.2 correctif 5's original defect,
-  which GLM's round-1 review caught and which this milestone's own G-AUTH-IO gate is
-  named for).
-- `G_AUTH_IO_ENTRYPOINT_UNREACHABLE` — the identified real entrypoint cannot be
-  constructed/called from a test at all (signals the contract doc is stale or the
-  entrypoint was refactored away).
+`ok=true` **uniquement** si aucune ouverture ne résout vers une **racine de données couverte non injectée**.
 
-**Real entrypoint:** this gate is enforced by a repo-level *test-suite auditor* (a
-script under `scripts/`, run in CI/pre-close, not a runtime gate inside `RunRuntime`
-itself) that statically maps each gate's test file to the entrypoint symbols it must
-reference — the audit target IS the test suite, so "the real entrypoint" here means the
-auditor itself must be invoked as part of the close-out sequence (M1/M5 in the
-roadmap), not as a helper a human remembers to run.
+**Contradiction corrigée (finding GPT #3).** La v1 prévoyait de **garder** la dépendance externe de `test_real_repo_produces_zero_unmapped_with_cv_bot_specs` (D-044) en produisant un simple rapport non bloquant, laissant la suite à `329 passed / 1 failed`. Ce n'est ni fail-closed ni hermétique. **v2 :** on ne masque PAS D-044 — on rend son test **hermétique** :
 
----
+```
+ledger externe réel (~/Claude-HQ/DEFECTS_LEDGER.md)  → remplacé par une fixture gelée sous tmp_path
+specs du repo voisin (~/job-opportunity-radar/...)   → copiées/injectées sous tmp_path
+le test s'exécute toujours (aucun skip / aucun xfail) → résultat déterministe
+```
 
-## G-NO-STALE-ENTRYPOINT — inventory and block legacy/duplicate/unprotected entrypoints
+Après M2 (lot C8-A), la suite par défaut = **`EXIT=0`**. Le **défaut** D-044 (le vrai trou de traçabilité produit) reste **ouvert** dans le ledger/backlog produit — mais la **suite** ne dépend plus du contenu courant de `~/Claude-HQ` ni d'un repo voisin. Le test devient une assertion déterministe sur une fixture connue, plus une lecture d'état vivant.
 
-**Claim:** every code path capable of triggering a build, a review, a promotion, or an
-artifact read is enumerated exactly once, is protected by the same gate set as its
-"canonical" sibling, and no second, older, or forgotten path exists that reaches the
-same effect ungated.
+**Inputs :** la valeur résolue de chaque root surchargable en début de session (`JOAO_MEMORY_DIR`, déjà A0.2 correctif 7 ; + équivalents ledger/specs que C8-A ajoute) ; le journal des chemins réellement ouverts pendant un run de test.
+**Output / reason codes :**
+- `G_HERMETIC_REAL_MEMORY_TOUCHED` — lecture/écriture hors de la copie isolée `JOAO_MEMORY_DIR`.
+- `G_HERMETIC_EXTERNAL_LEDGER_DEPENDENCY` — un test dépend d'un fichier hors repo et hors `tmp_path` (cas D-044 : `scripts/build_traceability.py` `DEFAULT_LEDGER = Path.home()/"Claude-HQ"/"DEFECTS_LEDGER.md"` — à injecter via fixture).
+- `G_HERMETIC_UNINJECTED_ROOT` — un module a résolu une constante de root vers un chemin réel non injecté.
 
-**Inputs:** a static inventory (AST-walked, same technique as A0.2's existing
-`test_a02_single_dispatch_point_ast_guard_no_direct_subprocess_in_adapters`) of every
-callable that can (a) invoke `ExecutionBackend.execute()`, (b) call
-`RunRuntime.promote()`/`.approve()`, (c) read `PKG_ROOT`/artifact paths, cross-checked
-against a maintained allowlist of the canonical entrypoints this spec names.
+**Real entrypoint :** fixture autouse de session dans `tests/conftest.py` (étend `_isolated_joao_memory_dir` à TOUT root externe) + un auditeur d'ouvertures de fichier qui FAIL un test qui s'échappe. C'est un gate de **détection et d'échec**, pas seulement de fourniture d'une copie isolée.
 
-**Output / reason codes:**
-- `ok=true` only if the inventory's set of dispatch-capable callables exactly equals
-  the allowlist.
-- `G_NO_STALE_UNLISTED_DISPATCH` — a new callable reaches `ExecutionBackend.execute()`
-  (or promotion/artifact-read) without being added to the allowlist — this is the
-  generalized, permanent form of A0.2's one-off "single dispatch point" AST guard,
-  extended from "adapters only" to "the whole repo."
-- `G_NO_STALE_DUPLICATE_PATH` — two distinct callables reach an equivalent effect
-  (e.g. two different promotion functions), one of which is not the allowlisted
-  canonical path.
-- `G_NO_STALE_LEGACY_UNPROTECTED` — an inventoried entrypoint exists that predates a
-  gate (e.g. a hypothetical old promote-without-approval-record function surviving
-  alongside the new one) and does not itself call the current gate chain.
-
-**Real entrypoint:** a static AST-audit script (`scripts/audit_entrypoints.py`, new —
-this milestone's own deliverable), run as a required pre-close/CI step; it does not
-live inside `RunRuntime` at request time (there is no "request" for a static-analysis
-gate) but its exit code gates M1's own closeout, the same way `git diff --check` gates
-this session's candidate closeouts.
+**Red→green :** rouge : un test lisant le vrai `~/Claude-HQ/DEFECTS_LEDGER.md` passe → `G_HERMETIC_EXTERNAL_LEDGER_DEPENDENCY`. vert : le même test lit une fixture gelée sous `tmp_path`, déterministe, suite `EXIT=0`. Source : L-051 (D-047), D-054, D-044.
 
 ---
 
-## G-SHA-BOUND-PROOF — every proof binds to the exact candidate commit/tree
+## G-AUTH-IO — le contrôle est exercé via le VRAI point d'entrée protégé
 
-**Claim:** no test-pass record, attack-test output, canary result, or promotion record
-is accepted as evidence for a candidate unless it carries that exact candidate's
-`candidate_tree` (and, where a promotion has occurred, `candidate_commit`) — inherited
-directly from RI-3/RI-4/A0-1's existing `candidate_tree` binding
-(`recompute_candidate_tree`, already used by `promotion.py` and both reviewer
-adapters), extended to cover EVERY evidence artifact this milestone introduces
-(canary results, gate-run logs), not only reviewer verdicts.
+**Claim :** la suite de tests de chaque gate/correctif appelle le **vrai point d'entrée de production** (`Adapter.review()`/`.build()`, une méthode `RunRuntime`, une frontière CLI subprocess) — jamais seulement un helper interne (`validate_reviewer_verdict()` appelé en direct sans prouver qu'il est câblé à `CodexEvidenceReviewer.review()` en production).
 
-**Inputs:** every evidence artifact this milestone produces (gate run logs, canary
-result records) plus the `candidate_tree`/`candidate_commit` the run's `RunRuntime`
-state currently holds.
+**Inputs :** pour chaque fichier de test de gate, la liste statique des call-sites dont dépendent ses assertions.
+**Output / reason codes :**
+- `G_AUTH_IO_HELPER_ONLY_COVERAGE` — un gate a des tests d'attaque mais aucun ne traverse le vrai entrypoint (le défaut d'origine du correctif A0.2 #5).
+- `G_AUTH_IO_ENTRYPOINT_UNREACHABLE` — l'entrypoint réel nommé ne peut être construit/appelé depuis un test (doc de contrat périmée / entrypoint refactoré).
 
-**Output / reason codes:**
-- `ok=true` only if every evidence artifact's own recorded `candidate_tree` equals the
-  independently recomputed tree at the moment that artifact is consumed (same
-  "recompute, don't trust the stored value" discipline `CodexCLIReviewer.review_stage`
-  already applies to reviewer verdicts).
-- `G_SHA_BOUND_MISSING` — an evidence artifact has no `candidate_tree` field at all.
-- `G_SHA_BOUND_MISMATCH` — an evidence artifact's recorded tree disagrees with the
-  independently recomputed one at consumption time (candidate mutated between
-  production and consumption of the proof).
-- `G_SHA_BOUND_CROSS_CANDIDATE` — an evidence artifact from one candidate is presented
-  as proof for a different candidate (this is precisely the mistake this session's own
-  human-in-the-loop process caught by hand three times over: the premature Claude-review
-  tag, the memory-contaminated candidate, both discovered only because a human diffed
-  SHAs manually — G-SHA-BOUND-PROOF makes that check automatic).
+**Real entrypoint :** un **auditeur statique de suite de tests** (`scripts/audit_test_entrypoints.py`, nouveau) qui mappe chaque fichier de test de gate aux symboles d'entrypoint qu'il doit référencer ; exécuté en pre-close/CI (la cible auditée EST la suite de tests).
 
-**Real entrypoint:** `RunRuntime`'s evidence-write path (wherever gate/canary results
-are persisted to `run_dir`, analogous to `build-review-evidence.json`/
-`final-review-evidence.json` today) and the consumption path (whatever reads those
-files to decide `approve()`/`promote()`) — both ends, not just one.
+**Renforcement dynamique (à ajouter en C8-B — finding GPT v2, « à renforcer avant C8-B ») :** l'audit statique de **présence de symbole** est **nécessaire mais insuffisant** — une référence morte (un import/appel jamais exécuté) pourrait le satisfaire sans que l'entrypoint réel tourne. C8-B ajoute une **preuve dynamique** : un spy/monkeypatch/trace d'appel posé sur l'entrypoint réel (`GLMReviewer.review_stage`, `CodexEvidenceReviewer.review`, etc.) qui **assert que l'entrypoint a bien été invoqué** pendant le test du gate — pas seulement référencé. `G_AUTH_IO_HELPER_ONLY_COVERAGE` doit donc être prouvé par un compteur d'invocation réel, pas par une analyse statique seule. Source : C-8 §D, D-051 (contrôle→actif).
 
 ---
 
-## G-CANARY-FIRST — promotion blocked until a bounded canary succeeds on the exact candidate
+## G-NO-STALE-ENTRYPOINT — inventaire exhaustif, aucun entrypoint legacy/dupliqué/non-protégé
 
-**Claim:** for any run whose policy requires a canary (mirrors this session's own
-CV-SEC-CORE and A0.2 canary practice — synthetic-data dry runs before real-data use),
-`promote()` refuses if no canary result exists for the exact `candidate_tree` being
-promoted, or if that canary's own recorded result is not a pass.
+**Claim :** tout chemin capable de déclencher build/review/promotion/lecture d'artefact est énuméré exactement une fois, protégé par le même jeu de gates que son frère canonique ; aucun 2ᵉ chemin ancien/oublié n'atteint le même effet ungated.
 
-**Inputs:** `run.canary_required` (bool, set by risk tier/mission policy), a canary
-result record (same G-SHA-BOUND-PROOF-compliant shape: `candidate_tree`, pass/fail,
-raw evidence path).
+**Inputs :** un inventaire AST (même technique que `test_a02_single_dispatch_point_ast_guard_no_direct_subprocess_in_adapters`) de tout callable atteignant (a) `ExecutionBackend.execute()`, (b) `RunRuntime.promote()`/`.approve()`, (c) une lecture de `PKG_ROOT`/artefact ; croisé contre une allowlist des entrypoints canoniques.
+**Output / reason codes :**
+- `G_NO_STALE_UNLISTED_DISPATCH` — un nouveau callable atteint le dispatch/promotion/lecture sans être dans l'allowlist (forme permanente et généralisée du garde single-dispatch d'A0.2, étendu « adapters seulement » → « tout le repo »).
+- `G_NO_STALE_DUPLICATE_PATH` — deux callables atteignent un effet équivalent, l'un non canonique.
+- `G_NO_STALE_LEGACY_UNPROTECTED` — un entrypoint inventorié prédate un gate et n'appelle pas la chaîne de gates courante.
 
-**Output / reason codes:**
-- `ok=true` if `canary_required == false`, OR a matching, passing canary result exists
-  for this exact `candidate_tree`.
-- `G_CANARY_FIRST_MISSING` — `canary_required == true` and no canary result exists at
-  all for this candidate.
-- `G_CANARY_FIRST_FAILED` — a canary result exists for this candidate but recorded
-  fail.
-- `G_CANARY_FIRST_STALE_CANDIDATE` — a canary result exists but for a DIFFERENT
-  `candidate_tree` than the one now being promoted (same failure mode
-  G-SHA-BOUND-PROOF's `G_SHA_BOUND_CROSS_CANDIDATE` names, applied specifically at the
-  promotion boundary).
-
-**Real entrypoint:** `RunRuntime.promote()` / `bubble/promotion.py`'s
-`_verify_acceptance_for_promotion` — the exact function A0.2 correctif 8 already hardens
-against a missing/tampered approval record; this gate is one more precondition in that
-same function, not a new code path.
+**Real entrypoint :** `scripts/audit_entrypoints.py` (nouveau) — audit AST statique, étape requise pre-close/CI, son exit code gate la clôture du lot (comme `git diff --check` gate les clôtures de candidat de cette session). Source : L-057 (D-053 / R-1, PID 57084).
 
 ---
 
-## G-FROZEN-FINISH-LINE — the approved scope/acceptance criteria are frozen
+## G-SHA-BOUND-PROOF — toute preuve est liée au commit/tree exact  *(méta-gate)*
 
-**Claim:** once a mission's scope and acceptance criteria are Boss-approved (the state
-this milestone's own `JOAO_C8_GATES_SPEC.md` + `JOAO_C8_GATES_ROADMAP.md` will be, once
-approved), no new finding — however real — can silently widen that scope mid-run; a new
-finding is either (a) within the frozen acceptance criteria already, and must be fixed
-within them, or (b) is logged as an out-of-claim finding for a FUTURE, distinctly
-authorized run, exactly as this session repeatedly did by hand (GLM's correctif-5
-finding was fixed *because* it was in-scope per the frozen run card's own EVIDENCE_
-REQUIRED wording; the memory-contamination finding was explicitly kept OUT of the
-correctif-5 fix and disentangled into its own separate concern).
+**Claim :** aucun record (test, attaque, canary, promotion, log de gate-run) n'est accepté comme preuve pour un candidat sans son `candidate_tree` exact (et `candidate_commit` où une promotion a eu lieu). Hérite de RI-3/RI-4/A0-1 (`recompute_candidate_tree`, déjà utilisé par `promotion.py` et les 2 reviewers), **étendu à CHAQUE artefact** que C-8 introduit (canary, logs de gate).
 
-**Inputs:** the frozen scope document's own explicit boundary (this milestone: the
-seven named gates, nothing else — "NO EIGHTH GATE" is this gate's own first
-self-application), a proposed change/finding under consideration mid-run.
+**Inputs :** chaque artefact de preuve + le `candidate_tree`/`candidate_commit` que l'état `RunRuntime` détient.
+**Output / reason codes :**
+- `G_SHA_BOUND_MISSING` — artefact sans champ `candidate_tree`.
+- `G_SHA_BOUND_MISMATCH` — le tree enregistré ≠ le tree recalculé indépendamment au moment de la consommation (candidat muté entre production et consommation de la preuve).
+- `G_SHA_BOUND_CROSS_CANDIDATE` — un artefact d'un candidat présenté comme preuve d'un autre (l'erreur exacte que cette session a rattrapée 3× à la main : le tag Claude-review prématuré, le candidat contaminé mémoire — G-SHA-BOUND rend ce check automatique).
 
-**Output / reason codes:**
-- `ok=true` if the proposed change maps to an already-frozen acceptance-criterion line.
-- `G_FROZEN_FINISH_LINE_SCOPE_CREEP` — the proposed change does not map to any frozen
-  criterion (e.g. an eighth gate, an OS-security claim, a roadmap change proposed
-  mid-run).
-- `G_FROZEN_FINISH_LINE_REQUIRES_NEW_AUTHORITY` — the change is real and worth doing,
-  but requires a new, distinct Boss-authorized run/document — never silent inclusion in
-  the current one.
+**Real entrypoint :** le chemin d'écriture de preuve de `RunRuntime` (là où gate/canary results sont persistés au `run_dir`, comme `build-review-evidence.json`/`final-review-evidence.json`) ET le chemin de consommation (ce qui lit ces fichiers pour décider éligibilité/`promote()`) — les deux bouts. Source : L-058 (C-8 §G), RI-3/RI-4.
 
-**Real entrypoint:** this is the one gate with no single runtime call site — it is
-enforced by discipline at the SPEC/ROADMAP layer plus, mechanically, by
-G-NO-STALE-ENTRYPOINT and G-DBL-AUDIT's own allowlists refusing anything not already
-named in them. Any implementation milestone (M1+) that finds itself needing to touch a
-file outside this document's own "files/modules expected to change" list for that
-milestone IS this gate firing, in the same way this exact planning document is
-mechanically confined to five specific filenames and nothing else.
+---
+
+## G-CANARY-FIRST — promotion bloquée sans canary vert sur le candidat exact
+
+**Claim :** pour tout run dont la politique exige un canary (D3 : canary automatisé accepté s'il est synthétique, exact-SHA, sans effet externe réel), `promote()` refuse s'il n'existe pas de résultat canary **vert** pour le `candidate_tree` exact promu.
+
+**Inputs :** `run.canary_required` (bool, par tier/politique de mission) ; un record canary (même forme SHA-bound : `candidate_tree`, pass/fail, chemin de preuve brute).
+**Output / reason codes :**
+- `G_CANARY_FIRST_MISSING` — `canary_required==true` et aucun record canary pour ce candidat.
+- `G_CANARY_FIRST_FAILED` — record canary présent mais fail.
+- `G_CANARY_FIRST_STALE_CANDIDATE` — canary vert mais pour un autre `candidate_tree`.
+
+**Real entrypoint :** `RunRuntime.promote()` / `promotion._verify_acceptance_for_promotion` — une précondition de plus dans la fonction que le correctif A0.2 #8 durcit déjà, pas un nouveau chemin. Source : L-058 (C-8 §H), patron canary CV-SEC.
+
+---
+
+## G-FROZEN-FINISH-LINE — scope/critères gelés, réellement mécanique  *(v2: n'est plus documentaire)*
+
+**Claim :** au `start()`, la mission gèle son scope et ses critères ; ensuite, tout changement (chemins modifiés, changement de mission, nouvelle correction demandée) doit **mapper vers un critère gelé**, sinon BLOCK. Aucun finding, même réel, ne peut élargir silencieusement le scope en cours de run.
+
+**Correction (finding GPT #2).** La v1 admettait « pas de point d'entrée, repose sur la discipline » — or C-8 doit rendre les 7 leçons **exécutables**. v2 introduit un mécanisme réel :
+
+```
+frozen_mission.json  (écrit une fois par start(), immuable — comme checkpoints/0000-pending.json)
+  spec_sha / roadmap_sha        # SHA des SPEC/ROADMAP approuvés
+  risk_tier / canary_required
+  forbidden_paths               # chemins interdits (ex. A0.2, memory/lessons.jsonl)
+  criterion_bindings:           # LE mapping mécanique changement→critère (finding GPT v2 #3)
+    AC-C8-001:
+      allowed_paths:   ["src/joao_orchestrator/bubble/gates.py", "tests/test_c8_gates.py"]
+      required_tests:  ["tests/test_c8_gates.py::test_g_dbl_audit_*"]
+      allowed_actions: ["modify", "create"]     # modify = hunks additifs bornés
+    AC-C8-002: { allowed_paths: [...], required_tests: [...], allowed_actions: [...] }
+    ...
+```
+
+Sans `criterion_bindings`, les critères et les chemins existaient mais **sans relation mécanique** — le gate ne pouvait pas *prouver* qu'un fichier modifié « mappe vers un critère gelé » (le trou signalé par GPT v2 #3). Avec, le gate compare, avant chaque freeze/review :
+```
+pour chaque path modifié (git status) + chaque correction demandée :
+   il doit exister UN criterion_bindings[AC].allowed_paths qui couvre le path
+   ET l'action (modify/create) ∈ allowed_actions de ce même AC
+   ET le path ∉ forbidden_paths
+   → sinon BLOCK
+toute correction en cours de run doit NOMMER son acceptance_criterion_id (AC-...), sinon BLOCK
+pour chaque AC couvert par le run : CHACUN de ses required_tests doit produire un résultat PASS
+   lié au candidate_tree exact (preuve SHA-bound, G-SHA-BOUND-PROOF) → sinon BLOCK
+```
+
+**Exigence C8-A (finding GPT v3) :** dès C8-A, un critère n'est « satisfait » que si **tous ses `required_tests` passent (PASS) avec une preuve liée au `candidate_tree`** ; un `required_test` manquant, rouge, ou non lié au tree → BLOCK. C'est ce qui empêche un `criterion_bindings` d'être une déclaration vide.
+
+**Inputs :** `frozen_mission.json` ; l'ensemble des chemins modifiés du candidat ; toute correction/finding proposé en cours de run.
+**Output / reason codes :**
+- `G_FROZEN_FINISH_LINE_SCOPE_CREEP` — un changement ne mappe vers aucun critère gelé, ou touche un `forbidden_path`, ou sort d'`allowed_write_paths` (ex. un 8ᵉ gate, une claim OS-security, un changement de roadmap en cours de run).
+- `G_FROZEN_FINISH_LINE_REQUIRES_NEW_AUTHORITY` — le changement est réel et souhaitable mais exige un nouveau run/document Boss distinct — jamais une inclusion silencieuse.
+
+**Real entrypoint :** `RunRuntime.start()` écrit `frozen_mission.json` ; une fonction `bubble/gates.py` est appelée avant freeze/review (dans `_execute`) et compare l'état git réel du candidat au `frozen_mission.json`. Renforcé mécaniquement par les allowlists de G-NO-STALE-ENTRYPOINT et G-DBL-AUDIT. **Ce gate a désormais un vrai call-site et un vrai artefact, il n'est plus documentaire.**
+
+**Red→green :** rouge : un candidat écrit un fichier hors `allowed_write_paths` (ou un 8ᵉ gate) → `G_FROZEN_FINISH_LINE_SCOPE_CREEP`. vert : tous les chemins modifiés mappent vers les critères gelés → pass. Source : L-050 (D-043/D-046), ligne d'arrivée gelée CV-SEC, D-055 (scope-leak).
+
+---
+
+## Séparation validation-technique ≠ approbation-Boss  *(finding GPT #5, s'applique à G-DBL-AUDIT et à la promotion)*
+
+`RunRuntime.approve()` représente aujourd'hui l'**approbation humaine** (écrit `approval-record.json`, `approved_by: "human"`). Le contrôleur ne doit **jamais** l'appeler pour fabriquer une approbation « human » à la place du Boss. v2 distingue trois choses :
+
+**Ordre unifié (correction pré-C8-B #3 — finding GPT v3) :**
+```
+reviews  →  canary  →  promotion-readiness.json  →  approbation Boss  →  promote()
+```
+- `promotion-readiness.json` = **artefact/flag mécanique** écrit par le contrôleur (gates verts + verdicts de familles distinctes liés au tree + canary vert), lié au `candidate_tree`. **PAS un nouvel état caché de `RunStatus`** — aucun nouvel état runtime n'est introduit ; c'est un fichier de preuve dans le `run_dir`.
+- `approval-record.json` = **autorisation humaine** (le Boss, instruction nommée hashée et liée au run — D5). Jamais fabriquée par le contrôleur.
+- `promote()` exige les DEUX : `promotion-readiness.json` valide (lié au tree) ET `approval-record.json` humain réel. « Techniquement éligible » ≠ « approuvé humainement ».
+
+## Ce que ces 7 gates NE sont PAS (D-046)
+
+Aucun ne recrée une sécurité OS maison (sandbox process, ACL réseau domaine, isolation kernel). Ils gouvernent la livraison : qui revoit, sur quel SHA, avec quelle preuve, dans quel ordre, avec quels critères gelés. L'isolation reste `ExecutionBackend` (`local_untrusted` ; `container`/`vm` = déclarés, non implémentés). **Pas de 8ᵉ gate.**
