@@ -136,41 +136,25 @@ _HERMETIC_LOCK = threading.Lock()
 # below by `_purge_ambiguous_memory_module_cache`, never by exempting reads.
 _MEMORY_AMBIGUOUS_MODULE_NAMES = ("inject", "retro", "ledger_sync", "select_lessons", "import_ledger")
 
-# Correction loop: enforcing real_memory on READS (not just writes, per the
-# fix above) surfaced two genuinely pre-existing dependencies on the real,
-# committed `memory/lessons.jsonl` that this correction is contractually
-# FORBIDDEN from touching:
-#   - tests/test_a0_2_corrections.py::test_a02_6_... — an A0.2 test; "No A0.2
-#     assertion changes" is a hard rule in every C8-A instruction, and this
-#     file is not in this correction's ALLOWED FILES. Its own read
-#     (`real_lessons.read_bytes()`) is the BEFORE half of an explicit
-#     before/after byte-identity proof that the real file is untouched by a
-#     redirected write — read-only, never mutates the real file.
-#   - tests/test_b28_select_lessons.py::test_* (all 7) — `select_lessons.py`
-#     is imported directly from the REAL memory/ dir at MODULE COLLECTION
-#     TIME (`sys.path.insert(0, str(REPO/"memory")); from select_lessons
-#     import ...`, before any fixture — including `_purge_ambiguous_memory_
-#     module_cache` above — ever runs), so its `LESSONS` constant is bound
-#     to the real path structurally, not via a `sys.modules` cache race this
-#     correction can close. This file is also not in this correction's
-#     ALLOWED FILES ("No other production scope").
-# This is NOT the "blanket exemption" the correction removed above (that one
-# carved out a FIXABLE test in a file this correction WAS authorized to
-# touch, to avoid doing the work). This is the opposite: an explicit,
-# minimal, per-nodeid list of tests this correction is RULE-BOUND not to
-# modify, whose real_memory access is provably read-only and predates C8-A
-# entirely. Zero write access is exempted by this list — real_memory WRITES
-# raise HermeticViolation unconditionally, from any test, no exceptions.
-_HERMETIC_OUT_OF_SCOPE_PROTECTED_READS = {
-    "tests/test_a0_2_corrections.py::test_a02_6_test_memory_isolation_redirects_lessons_write_target",
-    "tests/test_b28_select_lessons.py::test_visual_docx_surfaces_authority_chain",
-    "tests/test_b28_select_lessons.py::test_async_mission_surfaces_the_async_race_lesson",
-    "tests/test_b28_select_lessons.py::test_no_tags_falls_back_to_systemic_severity_3",
-    "tests/test_b28_select_lessons.py::test_token_budget_is_respected",
-    "tests/test_b28_select_lessons.py::test_files_touched_drives_tag_inference",
-    "tests/test_b28_select_lessons.py::test_determinism_repeated_10x",
-    "tests/test_b28_select_lessons.py::test_higher_severity_and_overlap_rank_first",
-}
+# Boss scope adjudication (continuation of the same targeted correction):
+# this set is now, and must remain, EMPTY. G-HERMETIC's C8-A acceptance
+# criterion is that the default suite never reads or writes a real JOÃO
+# mutable/sensitive data root — an exact-node read exception is narrower
+# than a blanket one but still fails that criterion, so the two tests that
+# previously needed entries here were fixed at the source instead:
+#   - tests/test_a0_2_corrections.py::test_a02_6_... now snapshots the
+#     module's own genuine pre-redirection default target (which resolves
+#     inside the injected `JOAO_MEMORY_DIR` copy), not the real committed
+#     file. Every A0.2 assertion is preserved; only the data source changed.
+#   - tests/test_b28_select_lessons.py no longer binds the production module
+#     at collection time; it writes a deterministic frozen lessons fixture
+#     under tmp_path first, then imports the REAL selector and parses that
+#     frozen file with the real `load_lessons()`. All seven behavioral
+#     assertions are preserved; only the data source changed.
+# Any future entry here re-opens the exact hole C8-A exists to close. The
+# emptiness of this set is itself asserted by
+# tests/test_g_hermetic_self_check.py.
+_HERMETIC_OUT_OF_SCOPE_PROTECTED_READS: set[str] = set()
 
 
 def _hermetic_current_nodeid() -> str:

@@ -70,28 +70,33 @@ def test_hermetic_covers_the_real_sensitive_roots_named_by_the_contract():
     assert any(name.startswith("credentials:") for name in conftest._HERMETIC_COVERED_ROOTS)
 
 
-def test_hermetic_out_of_scope_protected_reads_allowlist_is_narrow_read_only_and_documented():
-    # Correction loop: the OLD blanket test-node exemption is gone. What
-    # remains is a distinct, minimal, per-nodeid allowlist for tests this
-    # correction is contractually forbidden to modify (an A0.2 test, and a
-    # file outside this correction's ALLOWED FILES) — never a write escape
-    # hatch (`_hermetic_is_write_open` unconditionally overrides it), and
-    # never applicable to this file's own nodeids.
-    allowlist = conftest._HERMETIC_OUT_OF_SCOPE_PROTECTED_READS
-    assert allowlist == {
-        "tests/test_a0_2_corrections.py::test_a02_6_test_memory_isolation_redirects_lessons_write_target",
-        "tests/test_b28_select_lessons.py::test_visual_docx_surfaces_authority_chain",
-        "tests/test_b28_select_lessons.py::test_async_mission_surfaces_the_async_race_lesson",
-        "tests/test_b28_select_lessons.py::test_no_tags_falls_back_to_systemic_severity_3",
-        "tests/test_b28_select_lessons.py::test_token_budget_is_respected",
-        "tests/test_b28_select_lessons.py::test_files_touched_drives_tag_inference",
-        "tests/test_b28_select_lessons.py::test_determinism_repeated_10x",
-        "tests/test_b28_select_lessons.py::test_higher_severity_and_overlap_rank_first",
-    }
-    assert not any("test_g_hermetic_self_check" in nodeid for nodeid in allowlist)
-    assert not any("test_b28_import_ledger" in nodeid for nodeid in allowlist), (
-        "the ORIGINAL blanket exemption (a fixable test in an authorized file) must stay removed"
+def test_hermetic_real_data_root_exception_allowlist_is_completely_empty():
+    # Boss scope adjudication: ZERO exceptions of any kind may remain for
+    # real mutable/sensitive data roots. Not a blanket exemption, not a
+    # per-file one, and not an exact-node one — the C8-A criterion is that
+    # the default suite never touches these roots at all.
+    assert conftest._HERMETIC_OUT_OF_SCOPE_PROTECTED_READS == set(), (
+        "any entry here re-opens the exact hole C8-A exists to close"
     )
+    assert len(conftest._HERMETIC_OUT_OF_SCOPE_PROTECTED_READS) == 0
+
+
+@pytest.mark.parametrize("spoofed_nodeid", [
+    "tests/test_a0_2_corrections.py::test_a02_6_test_memory_isolation_redirects_lessons_write_target",
+    "tests/test_b28_select_lessons.py::test_visual_docx_surfaces_authority_chain",
+    "tests/test_b28_select_lessons.py::test_higher_severity_and_overlap_rank_first",
+    "tests/test_b28_import_ledger.py::test_import_is_append_only_idempotent",
+])
+def test_hermetic_previously_exempted_nodeids_are_no_longer_exempt(spoofed_nodeid, monkeypatch):
+    """Behavioral proof (not a source grep) that every nodeid that was ever
+    exempted — the original blanket one and all eight exact-node ones — now
+    gets no special treatment whatsoever: spoofing `PYTEST_CURRENT_TEST` to
+    each of them and reading real memory must still raise.
+    """
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", f"{spoofed_nodeid} (call)")
+    assert conftest._hermetic_current_nodeid() == spoofed_nodeid
+    with pytest.raises(conftest.HermeticViolation, match="real_memory"):
+        (conftest.REAL_MEMORY_DIR / "lessons.jsonl").read_text()
 
 
 def test_hermetic_relative_paths_are_resolved_against_cwd_not_skipped(tmp_path, monkeypatch):

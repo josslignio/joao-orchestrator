@@ -268,16 +268,52 @@ def test_a02_5_declared_baseline_forbidden_for_critical_run(tmp_path):
 # #6 — the test suite never touches the real, committed memory/lessons.jsonl.
 # ---------------------------------------------------------------------------
 def test_a02_6_test_memory_isolation_redirects_lessons_write_target(tmp_path, monkeypatch):
+    """C8-A hermeticity adjudication: DATA SOURCE ONLY changed — every A0.2
+    assertion below is semantically identical to the original.
+
+    The original captured `real_lessons.read_bytes()` (the REAL, committed
+    `memory/lessons.jsonl`) before and after the redirected write, to prove
+    the unredirected stock target was never written. That read is itself a
+    real-mutable-data-root access, which C8-A's G-HERMETIC gate now forbids
+    outright. The sentinel is therefore the module's OWN genuine
+    pre-redirection default target (`retro.LESSONS` as imported), which —
+    because `retro.py`/`import_ledger.py` resolve their `LESSONS` constant
+    relative to their own on-disk location, and this test imports them from
+    the session's isolated `JOAO_MEMORY_DIR` copy — is an INJECTED temporary
+    memory root, never the real one. Asserted explicitly below before it is
+    ever opened, so a resolution change fails loudly instead of silently
+    re-introducing a real-root read.
+
+    The claim the original made about the REAL file specifically is not lost:
+    it is now enforced globally and unconditionally by the G-HERMETIC audit
+    hook (`tests/conftest.py`) for EVERY test in the suite, and proven by
+    `tests/test_g_hermetic_self_check.py::test_hermetic_direct_write_of_real_memory_blocks`
+    — a strictly stronger guarantee than one test's before/after snapshot.
+    """
     import os
-    real_lessons = Path(__file__).resolve().parents[1] / "memory" / "lessons.jsonl"
+    real_memory_dir = Path(__file__).resolve().parents[1] / "memory"
     assert os.environ.get("JOAO_MEMORY_DIR"), "the session-wide isolation fixture (conftest.py) must be active"
     isolated_dir = Path(os.environ["JOAO_MEMORY_DIR"])
-    assert isolated_dir != real_lessons.parent, "JOAO_MEMORY_DIR must not resolve to the real repo memory/ dir"
+    assert isolated_dir != real_memory_dir, "JOAO_MEMORY_DIR must not resolve to the real repo memory/ dir"
 
     sys.path.insert(0, str(isolated_dir))
     import retro  # the module the isolation fixture's own copy backs
 
-    before_real = real_lessons.read_bytes()
+    # The stock (unredirected) write target, captured BEFORE any redirection —
+    # this is the file `ingest_candidates` would have appended to if
+    # `set_state_dir(lessons_path=...)` did not work. It must resolve inside
+    # the injected temporary memory root, never the real one (path check
+    # only — no file is opened until this has passed).
+    stock_target = Path(retro.LESSONS)
+    assert stock_target.is_relative_to(isolated_dir), (
+        f"the stock lessons target must resolve inside the injected temporary memory root "
+        f"{isolated_dir}, got {stock_target}"
+    )
+    assert not stock_target.is_relative_to(real_memory_dir), (
+        "the stock lessons target must never resolve into the real repo memory/ dir"
+    )
+
+    before_stock = stock_target.read_bytes()
     fake_lessons = tmp_path / "isolated-lessons.jsonl"
     fake_lessons.write_text("")
     retro.set_state_dir(tmp_path / "state", lessons_path=fake_lessons)
@@ -287,8 +323,8 @@ def test_a02_6_test_memory_isolation_redirects_lessons_write_target(tmp_path, mo
     retro.ingest_candidates([{"rule": "a02 isolation probe rule, never persisted for real", "tags": ["a02-probe"]}],
                             project="a02fixture", run_id="a02-probe-run", date="2026-07-19", at="2026-07-19T00:00:00Z")
     assert "a02 isolation probe rule" in fake_lessons.read_text()
-    # RED contrast: the real, committed file was never touched by this write.
-    assert real_lessons.read_bytes() == before_real, "the real repo lessons.jsonl must be byte-for-byte untouched"
+    # RED contrast: the stock (unredirected) target was never touched by this write.
+    assert stock_target.read_bytes() == before_stock, "the stock lessons.jsonl must be byte-for-byte untouched"
 
 
 # ---------------------------------------------------------------------------
