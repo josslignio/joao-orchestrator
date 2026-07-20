@@ -43,12 +43,25 @@ def _block(reason_code: str, reason: str, **extra: Any) -> dict[str, Any]:
 
 
 class WorkerHost:
-    """Owns the worker adapters and the served-request ledger.
+    """Owns the worker adapter FACTORIES and the served-request ledger.
 
-    The ledger is persisted to disk (never only in-memory) so a crash-restart
-    of the LaunchAgent-managed process can never re-serve, or lose duplicate
-    detection for, a `request_id` a prior process instance already consumed
-    — "LaunchAgent restart preserves no active mission incorrectly"."""
+    Concurrency fix (Boss directive, 2026-07-21): `ThreadingUnixStreamServer`
+    serves concurrent requests on daemon threads, and `set_capabilities()`/
+    `build()`/`review_stage()` are not atomic — a shared, mutable adapter
+    INSTANCE reused across requests would let one in-flight request's
+    capabilities (or a builder's own `self._capabilities` state) leak into a
+    concurrent, unrelated request. `builders`/`reviewers` therefore hold
+    zero-arg FACTORY callables (a bare adapter class works directly — e.g.
+    `GLMBuilder` itself — since it takes no required args), never instances;
+    every dispatch below constructs a genuinely fresh instance, used by
+    exactly one request, then discarded. No shared mutable adapter object is
+    ever reused across requests.
+
+    The served-request ledger is persisted to disk (never only in-memory) so
+    a crash-restart of the LaunchAgent-managed process can never re-serve, or
+    lose duplicate detection for, a `request_id` a prior process instance
+    already consumed — "LaunchAgent restart preserves no active mission
+    incorrectly"."""
 
     def __init__(self, state_dir: Path = DEFAULT_STATE_DIR, *, builders: dict | None = None,
                 reviewers: dict | None = None):
@@ -71,13 +84,16 @@ class WorkerHost:
         # REAL adapter classes' own `provider`/`model`/`provider_family`
         # class attributes, never from a request field or a worker's own
         # output. A request only ever SELECTS one of these by name.
-        # `builders`/`reviewers` overrides exist ONLY for hermetic testing
-        # (inject a fake dispatch instead of a real subprocess) — production
-        # code (`serve_forever`) always uses the real defaults below.
-        self.builders = builders if builders is not None else {
-            "zai-coding-plan": GLMBuilder(), "claude-cli": ClaudeCodeBuilder()}
-        self.reviewers = reviewers if reviewers is not None else {
-            "zai-coding-plan": GLMReviewer(), "claude-cli": ClaudeCLIReviewer()}
+        # Each value is a zero-arg FACTORY (a class, or a closure capturing
+        # fixed constructor args — e.g. a test's fake executable path) —
+        # NEVER a shared instance. `builders`/`reviewers` overrides exist for
+        # hermetic testing (inject a fake dispatch factory instead of a real
+        # subprocess) — production code (`serve_forever`) always uses the
+        # real defaults below.
+        self.builder_factories = builders if builders is not None else {
+            "zai-coding-plan": GLMBuilder, "claude-cli": ClaudeCodeBuilder}
+        self.reviewer_factories = reviewers if reviewers is not None else {
+            "zai-coding-plan": GLMReviewer, "claude-cli": ClaudeCLIReviewer}
 
     def _mark_served(self, request_id: str) -> bool:
         """True if newly marked; False if `request_id` was already served —
@@ -125,13 +141,23 @@ class WorkerHost:
                 "served_at": time.time()}
 
     def _dispatch_builder(self, worker: str, payload: dict, run_dir: Path) -> dict[str, Any]:
-        builder = self.builders.get(worker)
-        if builder is None:
+        factory = self.builder_factories.get(worker)
+        if factory is None:
             return _block("WORKER_HOST_UNKNOWN_WORKER", f"no builder registered for worker {worker!r}")
+        builder = factory()  # fresh, request-scoped instance — never shared across requests
         if hasattr(builder, "available") and not builder.available():
+            # Controlled BLOCK before any subprocess is launched — a builder
+            # explicitly named in the request (e.g. `claude-cli`, disabled by
+            # standing policy) never reaches `builder.build()`. Surfaces the
+            # adapter's own `unavailable_reason` when it declares one (e.g.
+            # `ClaudeCodeBuilder.CLAUDE_BUILDER_UNAVAILABLE_REASON`) rather
+            # than a bare "capability probe failed".
+            reason = getattr(builder, "unavailable_reason", None)
             return _block("WORKER_HOST_WORKER_UNAVAILABLE",
-                          f"builder {worker!r} reports unavailable (capability probe failed) — "
-                          "an unavailable worker is never dispatched")
+                          f"builder {worker!r} reports unavailable"
+                          + (f": {reason}" if reason else " (capability probe failed)")
+                          + " — an unavailable worker is never dispatched",
+                          unavailable_reason=reason)
         if hasattr(builder, "set_capabilities"):
             builder.set_capabilities({"network_capability": bool(payload.get("network_capability", False))})
         workspace = Path(payload["workspace"])
@@ -140,9 +166,10 @@ class WorkerHost:
         return builder.build(payload["mission"], workspace, run_dir, allowed, correction)
 
     def _dispatch_reviewer(self, worker: str, payload: dict, run_dir: Path) -> dict[str, Any]:
-        reviewer = self.reviewers.get(worker)
-        if reviewer is None:
+        factory = self.reviewer_factories.get(worker)
+        if factory is None:
             return _block("WORKER_HOST_UNKNOWN_WORKER", f"no reviewer registered for worker {worker!r}")
+        reviewer = factory()  # fresh, request-scoped instance — never shared across requests
         if hasattr(reviewer, "available") and not reviewer.available():
             return _block("WORKER_HOST_WORKER_UNAVAILABLE",
                           f"reviewer {worker!r} reports unavailable (capability probe failed) — "

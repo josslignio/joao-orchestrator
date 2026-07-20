@@ -104,6 +104,46 @@ def test_capabilities_declares_web_unavailable(tmp_path):
         api.close()
 
 
+def test_capabilities_reports_worker_host_and_active_worker_identity(tmp_path):
+    """Boss directive (2026-07-20/21): the UI must be able to show worker-host
+    health, the selected builder/reviewer, and ClaudeCodeBuilder's disabled
+    reason — never silently succeed or fail with no visible cause."""
+    api = _server(tmp_path); api.serve_in_thread()
+    try:
+        caps = _get(api, "capabilities")
+        assert "worker_host" in caps
+        assert "ok" in caps["worker_host"]  # a controlled shape either way
+        assert caps["active_builder"]["provider"] == "sandbox"  # this fixture's own SandboxBuilder
+        assert caps["claude_builder_status"]["ok"] is False
+        assert caps["claude_builder_status"]["reason_code"] == "CLAUDE_BUILDER_UNAVAILABLE"
+    finally:
+        api.close()
+
+
+def test_chat_mission_intent_route_never_fabricates_a_mission(tmp_path):
+    api = _server(tmp_path); api.serve_in_thread()
+    try:
+        status, body = _post(api, "chat/mission-intent", {"message": "what's the weather"})
+        result = json.loads(body)
+        assert result["ok"] is False
+        assert result["kind"] == "not_a_mission_intent"
+    finally:
+        api.close()
+
+
+def test_chat_mission_intent_route_requires_a_message(tmp_path):
+    import urllib.error
+    api = _server(tmp_path); api.serve_in_thread()
+    try:
+        try:
+            _post(api, "chat/mission-intent", {})
+            assert False, "expected an HTTP error for a missing message"
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 409  # ValueError -> 409, matching every other malformed-request route here
+    finally:
+        api.close()
+
+
 def test_ui_html_served_with_token(tmp_path):
     api = _server(tmp_path); api.serve_in_thread()
     try:

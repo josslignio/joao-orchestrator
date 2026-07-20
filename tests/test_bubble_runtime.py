@@ -148,6 +148,45 @@ def test_console_accepts_a_prompt_and_starts_a_run(tmp_path):
     api.close()
 
 
+def test_console_mission_launch_passes_network_capability_through(tmp_path):
+    """Found via the real worker-host operational-closure proof
+    (2026-07-21): `/missions` never exposed `network_capability` at all — a
+    network-requiring builder (e.g. GLMBuilder) silently got `network=False`
+    and hung until the sandbox's own timeout SIGTERM'd it. Regression:
+    `network_capability` in the request body must reach the builder's
+    `set_capabilities()`, for both `True` and the fail-closed `False` default."""
+    class _CapturingBuilder:
+        provider = "capturing"; model = "m"; provider_family = "f"
+        def __init__(self):
+            self.seen_network_capability = None
+        def set_capabilities(self, capabilities):
+            self.seen_network_capability = capabilities.get("network_capability")
+        def build(self, mission, workspace, run_dir, allowed, correction):
+            (workspace / "module.py").write_text("VALUE = 2\n")
+            return {"ok": True, "provider": self.provider, "model": self.model}
+
+    work = sandbox(tmp_path)
+    builder = _CapturingBuilder()
+    rt = RunRuntime(tmp_path / "state", builder=builder, reviewer=AcceptedReviewer(), profiles=LocalProfileAdapter())
+    api = LocalAPIServer(rt)
+    api.serve_in_thread()
+    payload = json.dumps({
+        "project_id": "fixture", "workspace": str(work), "mission": "Fix value",
+        "allowed_paths": ["module.py"], "full_test_command": f"{sys.executable} test_module.py",
+        "network_capability": True,
+    }).encode()
+    request = urllib.request.Request(api.url + "missions", data=payload, method="POST",
+                                     headers={"Content-Type": "application/json", "X-JOAO-Token": api.token})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        run_id = json.loads(response.read())["run_id"]
+    for _ in range(30):
+        if api.runtime.get(run_id)["status"] in {"needs_approval", "blocked", "failed"}:
+            break
+        time.sleep(.1)
+    api.close()
+    assert builder.seen_network_capability is True
+
+
 def test_console_rejects_missing_token(tmp_path):
     api = LocalAPIServer(runtime(tmp_path, lambda *_: {"ok": True}))
     api.serve_in_thread()
@@ -157,6 +196,27 @@ def test_console_rejects_missing_token(tmp_path):
         urllib.request.urlopen(request, timeout=10)
     assert error.value.code == 401
     api.close()
+
+
+def test_console_rejects_wrong_token(tmp_path):
+    """Boss negative matrix: wrong UI token => rejected (distinct from a
+    MISSING token — both must fail closed, never a partial/lenient match)."""
+    api = LocalAPIServer(runtime(tmp_path, lambda *_: {"ok": True}))
+    api.serve_in_thread()
+    request = urllib.request.Request(api.url + "missions", data=b"{}", method="POST",
+                                     headers={"Content-Type": "application/json",
+                                             "X-JOAO-Token": "definitely-not-the-real-token"})
+    with pytest.raises(urllib.error.HTTPError) as error:
+        urllib.request.urlopen(request, timeout=10)
+    assert error.value.code == 401
+    api.close()
+
+
+def test_console_refuses_non_local_host_bind(tmp_path):
+    """Boss negative matrix: non-local host bind => rejected. LocalAPIServer
+    must never bind to a non-loopback address."""
+    with pytest.raises(ValueError):
+        LocalAPIServer(runtime(tmp_path, lambda *_: {"ok": True}), host="0.0.0.0")
 
 
 def test_console_refuses_duplicate_dispatch_for_same_worktree(tmp_path):

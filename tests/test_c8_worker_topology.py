@@ -188,3 +188,41 @@ def test_claude_builder_glm_reviewer_normal_tier_passes():
         builder_family=ClaudeCLIReviewer.provider_family,
         reviewer_verdicts=[_verdict(GLMReviewer)], candidate_tree=TREE)
     assert result["ok"] is True and result["reason_code"] == "G_DBL_AUDIT_OK"
+
+
+# ---------------------------------------------------------------------------
+# check_builder_availability — the central ClaudeCodeBuilder disable
+# (Boss directive, 2026-07-20/21): "must not return true merely because the
+# `claude` binary exists" — a standing POLICY block, consulted the same way
+# by automatic topology selection, the worker-host's request validation, and
+# any future UI worker-status surface.
+# ---------------------------------------------------------------------------
+def test_check_builder_availability_blocks_anthropic_with_stable_reason():
+    from src.joao_orchestrator.bubble.runtime import CLAUDE_BUILDER_UNAVAILABLE_REASON
+    from src.joao_orchestrator.bubble.worker_topology import check_builder_availability
+    result = check_builder_availability("anthropic")
+    assert result["ok"] is False
+    assert result["reason_code"] == "CLAUDE_BUILDER_UNAVAILABLE"
+    assert result["reason"] == CLAUDE_BUILDER_UNAVAILABLE_REASON
+
+
+def test_check_builder_availability_allows_zai():
+    from src.joao_orchestrator.bubble.worker_topology import check_builder_availability
+    result = check_builder_availability("zai")
+    assert result["ok"] is True
+
+
+def test_claude_code_builder_available_is_always_false_regardless_of_executable(tmp_path):
+    """Never true merely because the `claude` binary exists — even pointed
+    at a real, executable stand-in, `available()` must still be False."""
+    from src.joao_orchestrator.bubble.runtime import ClaudeCodeBuilder
+    fake_claude = tmp_path / "fake-claude"
+    fake_claude.write_text("#!/bin/sh\nexit 0\n")
+    fake_claude.chmod(0o755)
+    builder = ClaudeCodeBuilder(executable=str(fake_claude))
+    assert builder.available() is False
+
+
+def test_claude_code_builder_exposes_stable_unavailable_reason():
+    from src.joao_orchestrator.bubble.runtime import CLAUDE_BUILDER_UNAVAILABLE_REASON, ClaudeCodeBuilder
+    assert ClaudeCodeBuilder.unavailable_reason == CLAUDE_BUILDER_UNAVAILABLE_REASON

@@ -148,8 +148,8 @@ def main() -> int:
     short_sock_dir = Path(tempfile.mkdtemp(prefix="joao-wh-mission-"))
     server = WorkerHostServer(
         socket_path=short_sock_dir / "s.sock", state_dir=tmp / "worker-host-state",
-        builders={"zai-coding-plan": GLMBuilder(), "claude-cli": ClaudeCodeBuilder(executable=str(fake_claude))},
-        reviewers={"zai-coding-plan": GLMReviewer(), "claude-cli": ClaudeCLIReviewer(executable=str(fake_claude))},
+        builders={"zai-coding-plan": GLMBuilder, "claude-cli": lambda: ClaudeCodeBuilder(executable=str(fake_claude))},
+        reviewers={"zai-coding-plan": GLMReviewer, "claude-cli": lambda: ClaudeCLIReviewer(executable=str(fake_claude))},
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -157,7 +157,11 @@ def main() -> int:
 
     health = health_check(socket_path=server.socket_path)
     report: dict = {
-        "WORKER_HOST_INSTALLED": True, "WORKER_HOST_HEALTHY": bool(health.get("ok") and health.get("pong")),
+        # WORKER_HOST_INSTALLED is reserved for the actual launchd-managed
+        # service (see scripts/joao_worker_host_bootstrap.sh) — this script
+        # only ever starts a throwaway in-process test instance.
+        "WORKER_HOST_TEST_INSTANCE_STARTED": True,
+        "WORKER_HOST_HEALTHY": bool(health.get("ok") and health.get("pong")),
         "WORKER_HOST_SOCKET": str(server.socket_path),
         "WORKER_HOST_SOCKET_MODE": oct(server.socket_path.stat().st_mode & 0o777),
         "BOSS_COPY_PASTE_ACTIONS": 0, "MANUAL_WORKER_TERMINALS_OPENED": 0,

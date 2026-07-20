@@ -363,19 +363,39 @@ def _claude_bounded_available(executable: str) -> bool:
     return bool(shutil.which(executable))
 
 
+# Boss decision (2026-07-20/21): ClaudeCodeBuilder is disabled by STANDING
+# PRODUCT POLICY, not merely "the `claude` binary happens to be missing".
+# This is the single controller-owned reason string — reused verbatim by
+# `ClaudeCodeBuilder.available()`/`unavailable_reason`, `worker_topology.py`,
+# `worker_host/server.py`'s dispatch block, and any future UI/CLI surface —
+# never a second, independently-worded copy that could drift.
+CLAUDE_BUILDER_UNAVAILABLE_REASON = (
+    "subscription Keychain authentication cannot be automated safely under current "
+    "builder constraints without forbidden builder host-environment passthrough or a "
+    "paid API key"
+)
+
+
 class ClaudeCodeBuilder(BuilderAdapter):
     """`BuilderAdapter` for the real Claude Code CLI, dispatched exactly like
     `GLMBuilder` — same `ExecutionBackend`, same fresh-temp-HOME/Seatbelt
     sandbox, same frozen-scope network gating, no second dispatch path, no
     PTY (plain argv-based subprocess, one request/one response).
 
-    Bounded, not host-environment-passthrough, no API key (Boss directive,
-    2026-07-20): see the module-level note above `_CLAUDE_ENV_ALLOWLIST` for
-    why this means a live network dispatch cannot currently authenticate on
-    this host — `available()` still only probes for the executable, never a
-    fabricated "yes, and it will succeed" claim. Cannot select reviewers,
-    cannot write reviewer evidence or a Boss approval record, and cannot
-    alter `frozen_mission.json` — it implements exactly the
+    DISABLED by standing product policy (Boss decision, 2026-07-20/21) — see
+    `CLAUDE_BUILDER_UNAVAILABLE_REASON`. `available()` returns False
+    unconditionally: this is a POLICY decision, not merely "the `claude`
+    binary happens to be missing on this host" — a future host with the
+    binary installed must not silently become selectable again. Reactivation
+    requires either a safe official subscription-CLI automation mechanism or
+    an explicitly Boss-approved paid API path (`JOAO_C8_GATES_ROADMAP.md`
+    "Statut C8-B"), never a host-environment-passthrough workaround.
+
+    Kept fully implemented and tested (not deleted) for that future
+    reactivation: dispatch, sandboxing, argv contract and tests all remain
+    real and exercised — only `available()` is gated off. Cannot select
+    reviewers, cannot write reviewer evidence or a Boss approval record, and
+    cannot alter `frozen_mission.json` — it implements exactly the
     `BuilderAdapter.build()` contract `RunRuntime._execute` already enforces
     for every builder (allowed-path violations, one bounded correction, no
     mutation outside `profile.allowed_write_paths`), identically to
@@ -385,6 +405,7 @@ class ClaudeCodeBuilder(BuilderAdapter):
     model = os.environ.get("JOAO_CLAUDE_BUILD_MODEL", "sonnet")
     provider_family = "anthropic"
     requires_network_transport = True
+    unavailable_reason = CLAUDE_BUILDER_UNAVAILABLE_REASON
 
     def __init__(self, executable: str = "claude", backend: ExecutionBackend | None = None, timeout: int = 1200):
         self.executable = executable
@@ -392,7 +413,12 @@ class ClaudeCodeBuilder(BuilderAdapter):
         self.backend = backend or LocalUntrustedBackend()
 
     def available(self) -> bool:
-        return _claude_bounded_available(self.executable)
+        # Disabled by standing policy — never merely "the binary exists".
+        # `_claude_bounded_available` is kept as a named, testable probe of
+        # the underlying (irrelevant-while-disabled) executable presence,
+        # so re-enabling this later is a one-line change with an already
+        # correct helper, not a rewrite.
+        return False
 
     def build(self, mission, workspace, run_dir, allowed, correction):
         task = run_dir / ("correction.md" if correction else "builder-task.md")
@@ -923,12 +949,22 @@ class GLMReviewer(ReviewerAdapter):
 
 
 _CLAUDE_REVIEW_CONTRACT = (
-    "Respond with EXACTLY one JSON object as your FINAL answer (no markdown fences, "
-    "no prose before or after, nothing after it) shaped like: "
-    '{"candidate_tree": "<the exact candidate_tree given below>", '
+    "Your ENTIRE response must be EXACTLY one JSON object and NOTHING else — no "
+    "markdown fences, no explanation, no reasoning, no commentary, before or after "
+    "it, not even one summary sentence. The first character of your response must "
+    "be '{' and the last character must be '}'. Put ALL of your verification "
+    "reasoning INSIDE the \"findings\" array as strings (e.g. \"git diff touches "
+    "exactly module.py, VALUE 1->2\") — never as a sentence before the JSON. "
+    "WRONG (never do this): \"The diff is confirmed as a single-line change... "
+    "{\\\"candidate_tree\\\": ...}\" — that leading sentence makes the whole "
+    "response unparseable. RIGHT: your response starts immediately with '{' and "
+    "that same reasoning goes inside \"findings\" instead. Shaped like: "
+    '{"candidate_tree": "<the exact candidate_tree given below, verbatim>", '
     '"verdict": "ACCEPT"|"P1"|"BLOCK", "findings": ["..."], '
     '"reviewer": {"provider": "claude-cli", "model": "<your model>"}}. '
-    "A P1 finding must name the concrete repair."
+    "A P1 finding must name the concrete repair. Any text outside that single JSON "
+    "object makes your entire response unparseable and is treated as a hard "
+    "failure, not a partial credit."
 )
 
 

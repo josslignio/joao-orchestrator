@@ -48,12 +48,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "ui":
         from joao_orchestrator.bubble.api import LocalAPIServer
-        from joao_orchestrator.bubble.runtime import CodexCLIReviewer, RunRuntime
-        from joao_orchestrator.providers.cascade_runtime import CascadeBuilder
+        from joao_orchestrator.bubble.runtime import RunRuntime
+        from joao_orchestrator.worker_host.proxies import remote_claude_reviewer, remote_glm_builder
         state_root = Path(args.state_root).expanduser()
-        # 2.2c — missions launched from chat pass through the Phase-1 cost cascade (GLM→best-of-N→
-        # Claude) with memory injection, and the Phase-0 hard gate stays enforced for projects.
-        server = LocalAPIServer(RunRuntime(state_root, builder=CascadeBuilder(), reviewer=CodexCLIReviewer(),
+        # Boss architecture decision (2026-07-20/21): the normal UI execution
+        # path talks ONLY to the standalone joao-worker-host (never an
+        # in-process CascadeBuilder/CodexCLIReviewer dispatch) — GLMBuilder
+        # -> ClaudeCLIReviewer is the active zero-cost autonomous topology
+        # (`JOAO_C8_GATES_ROADMAP.md` "Statut C8-B"). An unreachable
+        # worker-host is a controlled BLOCK on the next mission dispatch
+        # (`RemoteBuilderProxy`/`RemoteReviewerProxy` never fall back to a
+        # local/legacy path), never a silent substitution.
+        server = LocalAPIServer(RunRuntime(state_root, builder=remote_glm_builder(),
+                                           reviewer=remote_claude_reviewer(),
                                            enforce_phase0=True, projects_root=state_root / "projects",
                                            ledger_sync=True))  # B-37: brain re-synced from the ledger at launch
         print(server.url)

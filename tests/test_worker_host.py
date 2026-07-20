@@ -125,8 +125,8 @@ class _CrashingBuilder:
 
 def _host(tmp_path, **kwargs):
     return WorkerHost(tmp_path / "state",
-                      builders=kwargs.pop("builders", {"zai-coding-plan": _FakeBuilder()}),
-                      reviewers=kwargs.pop("reviewers", {"zai-coding-plan": _FakeReviewer()}))
+                      builders=kwargs.pop("builders", {"zai-coding-plan": _FakeBuilder}),
+                      reviewers=kwargs.pop("reviewers", {"zai-coding-plan": _FakeReviewer}))
 
 
 def test_handle_dispatches_to_the_registered_builder(tmp_path):
@@ -151,24 +151,40 @@ def test_duplicate_detection_persists_across_host_restart(tmp_path):
     process instance already consumed — the ledger is on-disk, not
     in-memory-only."""
     state_dir = tmp_path / "state"
-    host1 = WorkerHost(state_dir, builders={"zai-coding-plan": _FakeBuilder()},
-                       reviewers={"zai-coding-plan": _FakeReviewer()})
+    host1 = WorkerHost(state_dir, builders={"zai-coding-plan": _FakeBuilder},
+                       reviewers={"zai-coding-plan": _FakeReviewer})
     req = _valid_builder_request(request_id="persisted-1", workspace=str(tmp_path))
     assert host1.handle(req)["ok"] is True
 
     # Simulate a process restart: a brand-new WorkerHost instance, same state_dir.
-    host2 = WorkerHost(state_dir, builders={"zai-coding-plan": _FakeBuilder()},
-                       reviewers={"zai-coding-plan": _FakeReviewer()})
+    host2 = WorkerHost(state_dir, builders={"zai-coding-plan": _FakeBuilder},
+                       reviewers={"zai-coding-plan": _FakeReviewer})
     replay = host2.handle(req)
     assert replay["ok"] is False
     assert replay["reason_code"] == "WORKER_HOST_DUPLICATE_REQUEST"
 
 
 def test_handle_never_dispatches_an_unavailable_worker(tmp_path):
-    host = _host(tmp_path, builders={"zai-coding-plan": _UnavailableBuilder()})
+    host = _host(tmp_path, builders={"zai-coding-plan": _UnavailableBuilder})
     result = host.handle(_valid_builder_request(request_id="unavail-1", workspace=str(tmp_path)))
     assert result["ok"] is False
     assert result["reason_code"] == "WORKER_HOST_WORKER_UNAVAILABLE"
+
+
+def test_explicit_claude_builder_selection_blocks_before_any_subprocess(tmp_path):
+    """Boss directive: a request that explicitly selects ClaudeCodeBuilder
+    must return a controlled BLOCK before launching a subprocess — uses the
+    REAL ClaudeCodeBuilder factory (disabled by standing policy), not a
+    fake, to prove the actual production wiring."""
+    from src.joao_orchestrator.bubble.runtime import CLAUDE_BUILDER_UNAVAILABLE_REASON, ClaudeCodeBuilder
+    host = WorkerHost(tmp_path / "state", builders={"claude-cli": ClaudeCodeBuilder},
+                      reviewers={"zai-coding-plan": _FakeReviewer})
+    result = host.handle(_valid_builder_request(request_id="claude-builder-1", worker="claude-cli",
+                                                workspace=str(tmp_path)))
+    assert result["ok"] is False
+    assert result["reason_code"] == "WORKER_HOST_WORKER_UNAVAILABLE"
+    assert result["unavailable_reason"] == CLAUDE_BUILDER_UNAVAILABLE_REASON
+    assert CLAUDE_BUILDER_UNAVAILABLE_REASON in result["reason"]
 
 
 def test_handle_unknown_worker_blocks(tmp_path):
@@ -187,7 +203,7 @@ def test_handle_malformed_payload_blocks_not_raises(tmp_path):
 
 
 def test_handle_worker_crash_fails_closed_never_raises(tmp_path):
-    host = _host(tmp_path, builders={"zai-coding-plan": _CrashingBuilder()})
+    host = _host(tmp_path, builders={"zai-coding-plan": _CrashingBuilder})
     result = host.handle(_valid_builder_request(request_id="crash-1", workspace=str(tmp_path)))
     assert result["ok"] is False
     assert result["reason_code"] == "WORKER_HOST_DISPATCH_EXCEPTION"
@@ -227,8 +243,8 @@ def running_server(tmp_path):
     # directory directly under /tmp instead.
     short_dir = Path(tempfile.mkdtemp(prefix="joao-wh-"))
     server = WorkerHostServer(socket_path=short_dir / "s.sock", state_dir=tmp_path / "state",
-                              builders={"zai-coding-plan": _FakeBuilder()},
-                              reviewers={"zai-coding-plan": _FakeReviewer()})
+                              builders={"zai-coding-plan": _FakeBuilder},
+                              reviewers={"zai-coding-plan": _FakeReviewer})
     import threading
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -236,9 +252,9 @@ def running_server(tmp_path):
     # flaky under host load (e.g. a concurrent real GLM/Claude dispatch
     # elsewhere competing for CPU can delay thread scheduling well past a
     # fixed 50ms).
-    deadline = time.monotonic() + 5.0
+    deadline = time.monotonic() + 15.0
     while time.monotonic() < deadline:
-        probe = client_mod.health_check(socket_path=server.socket_path, timeout=1)
+        probe = client_mod.health_check(socket_path=server.socket_path, timeout=3)
         if probe.get("ok") and probe.get("pong"):
             break
         time.sleep(0.02)
@@ -331,10 +347,115 @@ def test_remote_builder_proxy_sends_correct_worker_and_identity(running_server, 
 def test_remote_reviewer_proxy_available_uses_health_check(running_server):
     proxy = RemoteReviewerProxy(worker="zai-coding-plan", provider="zai-coding-plan", model="m",
                                provider_family="zai", socket_path=running_server.socket_path)
-    assert proxy.available() is True
+    # A brief retry absorbs transient scheduling delays under heavy parallel
+    # test-suite CPU load (many WorkerHostServer instances starting/stopping
+    # across this file) — the underlying behavior is deterministic once the
+    # server thread is actually scheduled; this is test-infra patience, not
+    # product retry logic.
+    deadline = time.monotonic() + 5.0
+    result = False
+    while time.monotonic() < deadline:
+        result = proxy.available()
+        if result:
+            break
+        time.sleep(0.05)
+    assert result is True
 
 
 def test_remote_reviewer_proxy_unavailable_when_no_host(tmp_path):
     proxy = RemoteReviewerProxy(worker="claude-cli", provider="claude-cli", model="m",
                                provider_family="anthropic", socket_path=tmp_path / "no-socket.sock")
     assert proxy.available() is False
+
+
+# ---------------------------------------------------------------------------
+# Concurrency isolation (Boss directive, 2026-07-21): `builders`/`reviewers`
+# hold FACTORIES, never shared instances — this is the regression test that
+# would FAIL under the pre-fix design (a single shared adapter instance
+# reused across concurrent `ThreadingUnixStreamServer` requests).
+# ---------------------------------------------------------------------------
+class _SlowCapturingBuilder:
+    """Records whatever capabilities THIS instance was given, after an
+    artificial delay between `set_capabilities()` and `build()` — maximizing
+    the race window a shared, mutable instance would be exposed to."""
+    provider = "cap-builder"; model = "m"; provider_family = "f"
+
+    def __init__(self):
+        self._capabilities = None
+
+    def available(self):
+        return True
+
+    def set_capabilities(self, capabilities):
+        self._capabilities = capabilities
+
+    def build(self, mission, workspace, run_dir, allowed, correction):
+        import time as _time
+        _time.sleep(0.05)
+        return {"ok": True, "network_capability_seen": (self._capabilities or {}).get("network_capability")}
+
+
+def test_concurrent_requests_never_cross_talk_capabilities(tmp_path):
+    """WORKER_ADAPTERS_REQUEST_SCOPED / CAPABILITY_CROSS_TALK proof: two
+    concurrent requests with OPPOSITE `network_capability` values must each
+    see only their own — with a shared instance (pre-fix), the 50ms sleep
+    between set_capabilities() and build() gives the other thread's
+    set_capabilities() call ample time to clobber the shared
+    `self._capabilities` before the first thread's build() reads it; with
+    fresh-per-request instances (the fix) this is structurally impossible
+    regardless of thread scheduling."""
+    import threading
+
+    host = WorkerHost(tmp_path / "state", builders={"zai-coding-plan": _SlowCapturingBuilder},
+                      reviewers={"zai-coding-plan": _FakeReviewer})
+    results: dict[str, dict] = {}
+
+    def run(request_id, network_capability):
+        req = _valid_builder_request(request_id=request_id, workspace=str(tmp_path))
+        req["network_capability"] = network_capability
+        results[request_id] = host.handle(req)
+
+    t1 = threading.Thread(target=run, args=("concurrent-true", True))
+    t2 = threading.Thread(target=run, args=("concurrent-false", False))
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+
+    assert results["concurrent-true"]["network_capability_seen"] is True, results["concurrent-true"]
+    assert results["concurrent-false"]["network_capability_seen"] is False, results["concurrent-false"]
+
+
+def test_concurrent_requests_have_distinct_run_dirs_no_worktree_cross_talk(tmp_path):
+    """WORKTREE_CROSS_TALK proof: two concurrent requests with different
+    run_dir/workspace values must each be dispatched with exactly their own
+    — never a shared/leaked path."""
+    import threading
+
+    class _PathRecordingBuilder:
+        provider = "path-cap"; model = "m"; provider_family = "f"
+        def available(self):
+            return True
+        def build(self, mission, workspace, run_dir, allowed, correction):
+            import time as _time
+            _time.sleep(0.05)
+            return {"ok": True, "seen_workspace": str(workspace), "seen_run_dir": str(run_dir)}
+
+    host = WorkerHost(tmp_path / "state", builders={"zai-coding-plan": _PathRecordingBuilder},
+                      reviewers={"zai-coding-plan": _FakeReviewer})
+    results: dict[str, dict] = {}
+
+    def run(request_id, subdir):
+        ws = tmp_path / f"workspace-{subdir}"
+        ws.mkdir()
+        rd = tmp_path / f"rundir-{subdir}"
+        req = _valid_builder_request(request_id=request_id, workspace=str(ws), run_dir=str(rd))
+        results[request_id] = host.handle(req)
+
+    t1 = threading.Thread(target=run, args=("worktree-a", "a"))
+    t2 = threading.Thread(target=run, args=("worktree-b", "b"))
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+
+    assert results["worktree-a"]["seen_workspace"].endswith("workspace-a")
+    assert results["worktree-a"]["seen_run_dir"].endswith("rundir-a")
+    assert results["worktree-b"]["seen_workspace"].endswith("workspace-b")
+    assert results["worktree-b"]["seen_run_dir"].endswith("rundir-b")

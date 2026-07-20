@@ -64,6 +64,7 @@ class LocalAPIServer:
                 try:
                     if not self.authorized(): return self.send(401, {"error": "missing or invalid local session token"})
                     if path == "/chat/classify": return self.send(200, outer.chat_classify(self.payload()))
+                    if path == "/chat/mission-intent": return self.send(200, outer.chat_mission_intent(self.payload()))
                     if path == "/chat/attach": return self.send(200, outer.chat_attach(self.payload()))
                     if path == "/chat/mission": return self.send(202, outer.launch(self.payload()))
                     if path == "/chat": return self.stream_chat(self.payload())
@@ -89,6 +90,8 @@ class LocalAPIServer:
 
     def capabilities(self):
         import shutil
+        from .worker_topology import check_builder_availability
+        from ..worker_host.client import health_check as worker_host_health_check
         # M0 safe-stop (D-043): release_stage is stated structurally, never inferred by a caller
         # from a test count — see SYSTEM_CONSTITUTION_V4.md §4, ROADMAP_V4.md GA checklist.
         return {"glm": {"available": bool(shutil.which("opencode"))},
@@ -96,7 +99,19 @@ class LocalAPIServer:
                 "claude": claude_capability(),
                 "chat": chatmod.available_brains(),
                 "web_search": {"available": False, "reason": "recherche web non branchée (annoncé honnêtement)"},
-                "release_stage": "ALPHA"}
+                "release_stage": "ALPHA",
+                # Boss architecture decision (2026-07-20/21): the normal
+                # mission path talks ONLY to the standalone joao-worker-host
+                # — surfaced here so the UI can show worker-host health,
+                # the active builder/reviewer pairing, and any unavailable-
+                # worker reason (e.g. ClaudeCodeBuilder, disabled by
+                # standing policy) rather than silently failing on dispatch.
+                "worker_host": worker_host_health_check(),
+                "active_builder": {"provider": getattr(self.runtime.builder, "provider", None),
+                                   "provider_family": getattr(self.runtime.builder, "provider_family", None)},
+                "active_reviewer": {"provider": getattr(self.runtime.reviewer, "provider", None),
+                                    "provider_family": getattr(self.runtime.reviewer, "provider_family", None)},
+                "claude_builder_status": check_builder_availability("anthropic")}
 
     @staticmethod
     def command(text):
@@ -131,6 +146,20 @@ class LocalAPIServer:
             with (self.chat_root / "routing-log.jsonl").open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps({"at": _now(), "message": message[:200], **result.to_dict()}, ensure_ascii=False) + "\n")
         return result.to_dict()
+
+    # ─────────────── chat message -> mission intent (Boss directive, 2026-07-21) ───────────────
+    def chat_mission_intent(self, data):
+        """Resolve a natural-language chat message (e.g. "Termine le prochain
+        lot <project>") into a real, honest next action — never a fabricated
+        mission. See `bubble.mission_intent` for why: no lot/task-level
+        roadmap data source is wired in for any project yet, so this never
+        returns a constructed mission; it routes to the real Phase-0 kickoff
+        state instead when a project is recognized."""
+        from . import mission_intent as mission_intent_mod
+        text = str(data.get("message", "")).strip()
+        if not text:
+            raise ValueError("message is required")
+        return mission_intent_mod.resolve_chat_intent(text, projects_root=self.runtime.projects_root)
 
     # ─────────────── V2.2 attachments (BLOC B3) ───────────────
     def chat_attach(self, data):
@@ -203,10 +232,18 @@ class LocalAPIServer:
         profile = ProjectProfile(project_id=ident, display_name=ident, repository_root=str(root),
                                  allowed_write_paths=paths, forbidden_paths=[], approval_required=True)
         target = str(data.get("targeted_test_command", "")).strip()
+        # Found via the real worker-host operational-closure proof: a
+        # network-requiring builder (GLMBuilder/ClaudeCodeBuilder both
+        # declare `requires_network_transport`) silently got `network=False`
+        # here — this call site never exposed `network_capability` at all —
+        # and hung until the sandbox's own timeout SIGTERM'd it, exactly the
+        # same class of gap `orchestrator.run_c8b_mission` had (also fixed).
+        # Default False is still fail-closed; the UI/chat caller must ask.
         run = self.runtime.start(project_id=ident, workspace=root, mission=str(data["mission"]),
                                  targeted_tests=[self.command(target)] if target else [],
                                  full_tests=[self.command(str(data["full_test_command"]))],
-                                 profile=profile, critical=bool(data.get("critical")))
+                                 profile=profile, critical=bool(data.get("critical")),
+                                 network_capability=bool(data.get("network_capability", False)))
         self.drive(run); return {"run_id": run, "status": "queued"}
     def drive(self, run_id):
         run = self.runtime.get(run_id)

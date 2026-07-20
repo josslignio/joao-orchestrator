@@ -8,10 +8,20 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 from pathlib import Path
 from typing import Any
 
 from .server import default_socket_path
+
+# A connection actively refused against a socket PATH THAT EXISTS is retried
+# briefly — the listener may not have reached its first `accept()` yet under
+# heavy host load (observed under a large concurrent test suite; the socket
+# file existing does not guarantee the accept loop is already scheduled).
+# Bounded and short: never masks a genuinely absent/dead worker-host (that
+# path never reaches here — `path.exists()` fails fast, no retry).
+_CONNECT_REFUSED_RETRIES = 5
+_CONNECT_REFUSED_RETRY_DELAY_S = 0.05
 
 
 class WorkerHostUnavailable(RuntimeError):
@@ -32,20 +42,28 @@ def send_request(payload: dict[str, Any], *, socket_path: Path | None = None, ti
     if not path.exists():
         return _block("WORKER_HOST_UNAVAILABLE",
                       f"no worker-host socket at {path} — is `joao-worker-host` running?")
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-            sock.settimeout(timeout)
-            sock.connect(str(path))
-            sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
-            sock.shutdown(socket.SHUT_WR)
-            chunks = []
-            while True:
-                chunk = sock.recv(65536)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-    except (OSError, socket.timeout) as exc:
-        return _block("WORKER_HOST_UNREACHABLE", f"{type(exc).__name__}: {exc}")
+    chunks = None
+    for attempt in range(_CONNECT_REFUSED_RETRIES + 1):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.settimeout(timeout)
+                sock.connect(str(path))
+                sock.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+                sock.shutdown(socket.SHUT_WR)
+                chunks = []
+                while True:
+                    chunk = sock.recv(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+            break
+        except ConnectionRefusedError as exc:
+            if attempt < _CONNECT_REFUSED_RETRIES:
+                time.sleep(_CONNECT_REFUSED_RETRY_DELAY_S)
+                continue
+            return _block("WORKER_HOST_UNREACHABLE", f"{type(exc).__name__}: {exc}")
+        except (OSError, socket.timeout) as exc:
+            return _block("WORKER_HOST_UNREACHABLE", f"{type(exc).__name__}: {exc}")
 
     raw = b"".join(chunks).decode("utf-8", errors="replace").strip()
     try:

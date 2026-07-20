@@ -86,3 +86,25 @@ def select_critical_reviewer_families(builder_family: str, *, codex_available: b
         }
     partner = _NORMAL_PARTNER_FAMILY[builder_family]
     return {"ok": True, "reviewer_families": [partner, CODEX_FAMILY]}
+
+
+# Builder-side availability — the CENTRAL, controller-owned check every
+# builder-selection path (automatic topology selection, the worker-host's own
+# request validation, a future UI worker-status surface) consults, so
+# ClaudeCodeBuilder's disabled state and reason can never drift between call
+# sites (Boss directive, 2026-07-20/21). Imports the single source of truth
+# from `bubble.runtime` rather than duplicating the reason string.
+def check_builder_availability(builder_family: str) -> dict[str, Any]:
+    """Central builder-selection check, mirroring the reviewer-side
+    `select_normal_reviewer_family`/`select_critical_reviewer_families`.
+
+    Returns `{"ok": True}` for a builder family this topology has no
+    standing objection to, or a fail-closed `{"ok": False, "reason_code":
+    "CLAUDE_BUILDER_UNAVAILABLE", "reason": ...}` for `anthropic` (
+    `ClaudeCodeBuilder`, disabled by standing product policy — see
+    `bubble.runtime.CLAUDE_BUILDER_UNAVAILABLE_REASON`)."""
+    from .runtime import CLAUDE_BUILDER_UNAVAILABLE_REASON  # local: avoid import at module load time
+    if builder_family == "anthropic":
+        return {"ok": False, "reason_code": "CLAUDE_BUILDER_UNAVAILABLE",
+                "reason": CLAUDE_BUILDER_UNAVAILABLE_REASON, "builder_family": builder_family}
+    return {"ok": True, "builder_family": builder_family}
