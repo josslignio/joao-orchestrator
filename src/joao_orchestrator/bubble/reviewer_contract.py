@@ -93,7 +93,16 @@ def validate_reviewer_verdict(raw_text: str, *, expected_candidate_tree: str | N
         return {"ok": False, "decision": "block", "schema_valid": False,
                 "reason": "A0-2: candidate_tree must be a string or absent"}
 
-    findings = obj.get("findings", [])
+    # A0.2 correctif 5 (run card #5, "Schéma JSON reviewer EXACT" — "l'ensemble
+    # complet des clés ... clés manquantes = REFUSÉ"): `findings` was
+    # previously `obj.get("findings", [])`, silently defaulting a MISSING key
+    # to an empty list — indistinguishable from a reviewer that explicitly
+    # answered "no findings". The key must be present; its value may still be
+    # an empty list once it is.
+    if "findings" not in obj:
+        return {"ok": False, "decision": "block", "schema_valid": False,
+                "reason": "A0-2/correctif-5: reviewer JSON is missing required key 'findings'"}
+    findings = obj["findings"]
     if not isinstance(findings, list) or not all(isinstance(item, str) for item in findings):
         return {"ok": False, "decision": "block", "schema_valid": False,
                 "reason": "A0-2: findings must be a list of strings"}
@@ -102,6 +111,18 @@ def validate_reviewer_verdict(raw_text: str, *, expected_candidate_tree: str | N
     if not isinstance(reviewer_meta, dict):
         return {"ok": False, "decision": "block", "schema_valid": False,
                 "reason": "A0-2: reviewer metadata object is missing or not an object"}
+    # A0.2 correctif 5: the shape check below only ever caught EXTRA keys —
+    # a `reviewer` object missing `provider` and/or `model` entirely (e.g.
+    # `{}`) passed it silently, even though those two keys are part of the
+    # same "ensemble complet des clés" the run card requires. Their VALUES
+    # are still never trusted (see the module docstring and `proof` below,
+    # which always uses the controller-computed `provider`/`model` args) —
+    # this only makes their structural PRESENCE mandatory, same as every
+    # other required key above.
+    reviewer_missing = sorted(_ALLOWED_REVIEWER_KEYS - set(reviewer_meta.keys()))
+    if reviewer_missing:
+        return {"ok": False, "decision": "block", "schema_valid": False,
+                "reason": f"A0-2/correctif-5: reviewer metadata is missing required key(s) {reviewer_missing}"}
     reviewer_extra = sorted(set(reviewer_meta.keys()) - _ALLOWED_REVIEWER_KEYS)
     if reviewer_extra:
         return {"ok": False, "decision": "block", "schema_valid": False,

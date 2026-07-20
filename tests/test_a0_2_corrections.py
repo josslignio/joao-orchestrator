@@ -400,6 +400,108 @@ def test_a02_8_local_untrusted_is_implemented_container_and_vm_are_declared_stub
 
 
 # ---------------------------------------------------------------------------
+# Correctif 5 (run card: "Schéma JSON reviewer EXACT" — "exiger l'ensemble
+# complet des clés (candidate_tree, verdict, findings, reviewer.provider,
+# reviewer.model) — clés manquantes = REFUSÉ. Attack tests de clés
+# manquantes.") had no dedicated attack tests in this file — its slot above
+# (`test_a02_5_declared_baseline_forbidden_for_critical_run`) actually covers
+# a different correctif (run card #6); left untouched per this run's "do not
+# modify any other A0.2 corrective item" scope. These tests close correctif
+# 5's own evidence gap, through the REAL ingestion path
+# (`CodexEvidenceReviewer.review()` reading an actual `review-import.json`
+# off disk — not `validate_reviewer_verdict`/`parse_reviewer_response` called
+# as isolated helpers).
+# ---------------------------------------------------------------------------
+from joao_orchestrator.bubble.runtime import CodexEvidenceReviewer  # noqa: E402
+
+_A02_5_TREE = "f" * 40
+
+
+def _a02_5_run_dir(tmp_path):
+    run_dir = tmp_path / "run-a02-5"
+    run_dir.mkdir()
+    return run_dir
+
+
+def _a02_5_write_proof(run_dir, payload: dict) -> None:
+    (run_dir / "review-import.json").write_text(json.dumps(payload))
+
+
+def _a02_5_review(run_dir):
+    reviewer = CodexEvidenceReviewer()
+    return reviewer.review({"candidate_tree": _A02_5_TREE}, run_dir)
+
+
+_A02_5_COMPLETE_PAYLOAD = {
+    "candidate_tree": _A02_5_TREE, "verdict": "ACCEPT", "findings": [],
+    "reviewer": {"provider": "codex", "model": "m"},
+}
+
+
+def test_a02_correctif5_reviewer_schema_missing_candidate_tree_blocked(tmp_path):
+    run_dir = _a02_5_run_dir(tmp_path)
+    payload = {k: v for k, v in _A02_5_COMPLETE_PAYLOAD.items() if k != "candidate_tree"}
+    _a02_5_write_proof(run_dir, payload)
+    result = _a02_5_review(run_dir)
+    assert result["ok"] is False and result["decision"] == "block"
+    assert "candidate_tree" in result["reason"]
+
+
+def test_a02_correctif5_reviewer_schema_missing_verdict_blocked(tmp_path):
+    run_dir = _a02_5_run_dir(tmp_path)
+    payload = {k: v for k, v in _A02_5_COMPLETE_PAYLOAD.items() if k != "verdict"}
+    _a02_5_write_proof(run_dir, payload)
+    result = _a02_5_review(run_dir)
+    assert result["ok"] is False and result["decision"] == "block"
+    assert "verdict" in result["reason"]
+
+
+def test_a02_correctif5_reviewer_schema_missing_findings_blocked(tmp_path):
+    run_dir = _a02_5_run_dir(tmp_path)
+    payload = {k: v for k, v in _A02_5_COMPLETE_PAYLOAD.items() if k != "findings"}
+    _a02_5_write_proof(run_dir, payload)
+    result = _a02_5_review(run_dir)
+    assert result["ok"] is False and result["decision"] == "block"
+    assert "findings" in result["reason"] and "correctif-5" in result["reason"]
+
+
+def test_a02_correctif5_reviewer_schema_missing_reviewer_object_blocked(tmp_path):
+    run_dir = _a02_5_run_dir(tmp_path)
+    payload = {k: v for k, v in _A02_5_COMPLETE_PAYLOAD.items() if k != "reviewer"}
+    _a02_5_write_proof(run_dir, payload)
+    result = _a02_5_review(run_dir)
+    assert result["ok"] is False and result["decision"] == "block"
+    assert "reviewer" in result["reason"]
+
+
+def test_a02_correctif5_reviewer_schema_missing_reviewer_provider_blocked(tmp_path):
+    run_dir = _a02_5_run_dir(tmp_path)
+    payload = dict(_A02_5_COMPLETE_PAYLOAD, reviewer={"model": "m"})
+    _a02_5_write_proof(run_dir, payload)
+    result = _a02_5_review(run_dir)
+    assert result["ok"] is False and result["decision"] == "block"
+    assert "provider" in result["reason"] and "correctif-5" in result["reason"]
+
+
+def test_a02_correctif5_reviewer_schema_missing_reviewer_model_blocked(tmp_path):
+    run_dir = _a02_5_run_dir(tmp_path)
+    payload = dict(_A02_5_COMPLETE_PAYLOAD, reviewer={"provider": "codex"})
+    _a02_5_write_proof(run_dir, payload)
+    result = _a02_5_review(run_dir)
+    assert result["ok"] is False and result["decision"] == "block"
+    assert "model" in result["reason"] and "correctif-5" in result["reason"]
+
+
+def test_a02_correctif5_reviewer_schema_complete_valid_verdict_accepted(tmp_path):
+    run_dir = _a02_5_run_dir(tmp_path)
+    _a02_5_write_proof(run_dir, _A02_5_COMPLETE_PAYLOAD)
+    result = _a02_5_review(run_dir)
+    assert result["ok"] is True and result["decision"] == "pass"
+    assert result["proof"]["candidate_tree"] == _A02_5_TREE
+    assert result["proof"]["reviewer"] == {"provider": "codex", "model": "worktree-sha-at-review-time"}
+
+
+# ---------------------------------------------------------------------------
 # Single dispatch point (§12.2): static AST guard — no adapter calls
 # subprocess.run/subprocess.Popen/run_sandboxed directly.
 # ---------------------------------------------------------------------------
