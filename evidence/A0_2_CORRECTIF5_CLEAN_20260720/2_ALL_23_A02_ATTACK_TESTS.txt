@@ -1,0 +1,33 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0 -- /Library/Frameworks/Python.framework/Versions/3.12/bin/python3
+cachedir: .pytest_cache
+rootdir: /private/tmp/claude-501/-Users-jocelyngrosjean-job-opportunity-radar-cvsec-core-v2/f3be8b52-7a82-4f88-b7b8-f8271743a2fe/scratchpad/joao_clean_wt
+configfile: setup.cfg
+collecting ... collected 23 items
+
+tests/test_a0_2_corrections.py::test_a02_1_builder_receives_frozen_capabilities_and_2_network_comes_only_from_scope PASSED [  4%]
+tests/test_a0_2_corrections.py::test_a02_3_full_scope_drift_beyond_the_original_three_fields_is_caught[critical-True] PASSED [  8%]
+tests/test_a0_2_corrections.py::test_a02_3_full_scope_drift_beyond_the_original_three_fields_is_caught[provider_transport_network-True] PASSED [ 13%]
+tests/test_a0_2_corrections.py::test_a02_3_full_scope_drift_beyond_the_original_three_fields_is_caught[required_backend-container] PASSED [ 17%]
+tests/test_a0_2_corrections.py::test_a02_3_builder_identity_drift_is_caught PASSED [ 21%]
+tests/test_a0_2_corrections.py::test_a02_4_secrets_scan_blocks_before_plan_review_or_builder_ever_run PASSED [ 26%]
+tests/test_a0_2_corrections.py::test_a02_5_declared_baseline_forbidden_for_critical_run PASSED [ 30%]
+tests/test_a0_2_corrections.py::test_a02_6_test_memory_isolation_redirects_lessons_write_target PASSED [ 34%]
+tests/test_a0_2_corrections.py::test_a02_7_promote_refuses_without_run_and_approval_record PASSED [ 39%]
+tests/test_a0_2_corrections.py::test_a02_7_promote_refuses_if_review_evidence_tampered_after_approval PASSED [ 43%]
+tests/test_a0_2_corrections.py::test_a02_8_protected_backend_unavailable_blocks_with_preflight_unavailable[container] PASSED [ 47%]
+tests/test_a0_2_corrections.py::test_a02_8_protected_backend_unavailable_blocks_with_preflight_unavailable[vm] PASSED [ 52%]
+tests/test_a0_2_corrections.py::test_a02_8_local_untrusted_is_implemented_container_and_vm_are_declared_stubs PASSED [ 56%]
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_missing_candidate_tree_blocked PASSED [ 60%]
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_missing_verdict_blocked PASSED [ 65%]
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_missing_findings_blocked PASSED [ 69%]
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_missing_reviewer_object_blocked PASSED [ 73%]
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_missing_reviewer_provider_blocked PASSED [ 78%]
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_missing_reviewer_model_blocked PASSED [ 82%]
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_complete_valid_verdict_accepted PASSED [ 86%]
+tests/test_a0_2_corrections.py::test_a02_single_dispatch_point_ast_guard_no_direct_subprocess_in_adapters PASSED [ 91%]
+tests/test_a0_2_corrections.py::test_a02_local_untrusted_backend_delegates_to_run_sandboxed_and_is_the_only_direct_caller PASSED [ 95%]
+tests/test_a0_2_corrections.py::test_a02_local_test_runner_sandboxed_path_uses_backend_not_run_sandboxed_directly PASSED [100%]
+
+============================== 23 passed in 3.70s ==============================
+EXIT=0

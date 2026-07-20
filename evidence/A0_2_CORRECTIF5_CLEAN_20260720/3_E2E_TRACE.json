@@ -1,0 +1,57 @@
+{
+  "base_commit": "98d6d7487775a242f12e42d67d609fbd1523809a",
+  "branch_tip_after_promotion": "012dacff80cf5c4652c72e08b44efe117dc1bf93",
+  "branch_tip_after_rollback": "98d6d7487775a242f12e42d67d609fbd1523809a",
+  "build_review_candidate_tree": "87216b5cf63d13b14a90f81b27672825c42d8ae2",
+  "candidate_commit": "012dacff80cf5c4652c72e08b44efe117dc1bf93",
+  "candidate_tree": "87216b5cf63d13b14a90f81b27672825c42d8ae2",
+  "final_review_candidate_tree": "87216b5cf63d13b14a90f81b27672825c42d8ae2",
+  "greeting_after_promotion": "def greet():\n    return 'hello, world'\n",
+  "greeting_at_base_workspace_untouched_throughout": "def greet():\n    return 'hello, world'\n",
+  "promoted_commit_tree": "87216b5cf63d13b14a90f81b27672825c42d8ae2",
+  "promoted_worktree": "/var/folders/3n/cp7h29p55gzds1ttv9rkjdgw0000gn/T/joao-a0-toy-xxc5bgim/state/runs/run-20260720T015850Z-a3df6385/promoted-worktree-run-20260720T015850Z-a3df6385",
+  "promotion_manifest": {
+    "acceptance_self_verified": true,
+    "approval_record": {
+      "approved_at": "2026-07-20T01:58:51Z",
+      "approved_by": "human",
+      "candidate_commit": "012dacff80cf5c4652c72e08b44efe117dc1bf93",
+      "candidate_tree": "87216b5cf63d13b14a90f81b27672825c42d8ae2",
+      "previous_status": "needs_approval",
+      "review_proof_sha256": "9567e19ac2542e60278887a5dd422a82622124ca09798ad9ba3381f033e492ca",
+      "run_id": "run-20260720T015850Z-a3df6385"
+    },
+    "branch": "main",
+    "candidate_tree": "87216b5cf63d13b14a90f81b27672825c42d8ae2",
+    "previous_tip": "98d6d7487775a242f12e42d67d609fbd1523809a",
+    "promoted_commit": "012dacff80cf5c4652c72e08b44efe117dc1bf93",
+    "promoted_worktree": "/var/folders/3n/cp7h29p55gzds1ttv9rkjdgw0000gn/T/joao-a0-toy-xxc5bgim/state/runs/run-20260720T015850Z-a3df6385/promoted-worktree-run-20260720T015850Z-a3df6385",
+    "rollback_command": [
+      "git",
+      "-C",
+      "/private/var/folders/3n/cp7h29p55gzds1ttv9rkjdgw0000gn/T/joao-a0-toy-xxc5bgim/workspace",
+      "update-ref",
+      "refs/heads/main",
+      "98d6d7487775a242f12e42d67d609fbd1523809a",
+      "012dacff80cf5c4652c72e08b44efe117dc1bf93"
+    ],
+    "run_id": "run-20260720T015850Z-a3df6385",
+    "tag": "joao-promoted-run-20260720T015850Z-a3df6385",
+    "verified": true,
+    "verified_tree": "87216b5cf63d13b14a90f81b27672825c42d8ae2"
+  },
+  "rollback_restored_base": true,
+  "rollback_result": {
+    "branch": "main",
+    "from_commit": "012dacff80cf5c4652c72e08b44efe117dc1bf93",
+    "restored_to": "98d6d7487775a242f12e42d67d609fbd1523809a",
+    "rolled_back": true,
+    "verified": true
+  },
+  "run_id": "run-20260720T015850Z-a3df6385",
+  "same_hash_end_to_end": true,
+  "same_hash_through_promotion": true,
+  "same_hash_through_review": true,
+  "status_after_approve": "accepted",
+  "status_after_run_once": "needs_approval"
+}

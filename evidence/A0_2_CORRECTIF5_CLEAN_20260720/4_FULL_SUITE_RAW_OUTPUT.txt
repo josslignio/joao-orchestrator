@@ -1,0 +1,73 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0
+rootdir: /private/tmp/claude-501/-Users-jocelyngrosjean-job-opportunity-radar-cvsec-core-v2/f3be8b52-7a82-4f88-b7b8-f8271743a2fe/scratchpad/joao_clean_wt
+configfile: setup.cfg
+testpaths: tests
+collected 330 items
+
+tests/test_a0_1_corrections.py ...........                               [  3%]
+tests/test_a0_2_corrections.py .......................                   [ 10%]
+tests/test_a0_attack_tests.py ........                                   [ 12%]
+tests/test_b28_import_ledger.py .....                                    [ 14%]
+tests/test_b28_injection.py .......                                      [ 16%]
+tests/test_b28_kickoff.py ........                                       [ 18%]
+tests/test_b28_retro.py .......                                          [ 20%]
+tests/test_b28_select_lessons.py .......                                 [ 23%]
+tests/test_b29_cascade.py ........                                       [ 25%]
+tests/test_b29_cascade_wired.py ............                             [ 29%]
+tests/test_boundary_conditions.py ...........                            [ 32%]
+tests/test_bubble_runtime.py ........                                    [ 34%]
+tests/test_control_plane.py ......................................       [ 46%]
+tests/test_cp1_checkpoint.py ........................................... [ 59%]
+......                                                                   [ 61%]
+tests/test_cp1_control_plane.py ..........................               [ 69%]
+tests/test_fail_closed_mutmut.py .....                                   [ 70%]
+tests/test_fail_closed_runtime.py ..............                         [ 74%]
+tests/test_governor/test_context_policy.py ...........                   [ 78%]
+tests/test_joao_glm_adapter.py ....                                      [ 79%]
+tests/test_m0_spec_loader.py ............                                [ 83%]
+tests/test_m0_traceability.py .......F                                   [ 85%]
+tests/test_package_boundaries.py ......                                  [ 87%]
+tests/test_phase4_foldins.py ....                                        [ 88%]
+tests/test_project_isolation.py .....                                    [ 90%]
+tests/test_subprocess_cli_argv.py .                                      [ 90%]
+tests/test_v22_api.py .....                                              [ 91%]
+tests/test_v22_chat.py .........                                         [ 94%]
+tests/test_v22_intent.py ..................                              [100%]
+
+=================================== FAILURES ===================================
+___________ test_real_repo_produces_zero_unmapped_with_cv_bot_specs ____________
+
+    def test_real_repo_produces_zero_unmapped_with_cv_bot_specs():
+        """M0.1 patch (deliverable 6): with the external cv_bot specs included, 0 UNMAPPED_PENDING_SPEC.
+    
+        Requires ~/job-opportunity-radar/governance/{PROJECT_SPEC_V4,cv_bot_business_rules}.yaml to
+        exist on disk (M0.1 deliverables 4 and 6) — skipped if that sibling repo isn't checked out.
+        """
+        repo = Path(__file__).resolve().parents[1]
+        if not all(p.is_file() for p in DEFAULT_EXTERNAL_SPECS):
+            pytest.skip("~/job-opportunity-radar governance specs not present in this environment")
+        rows = build_traceability(specs_dir=repo / "specs")
+        unmapped = [r for r in rows if r["status"] == "UNMAPPED_PENDING_SPEC"]
+>       assert unmapped == [], f"expected 0 UNMAPPED_PENDING_SPEC, got: {unmapped}"
+E       AssertionError: expected 0 UNMAPPED_PENDING_SPEC, got: [{'defect': 'D-044', 'requirement': None, 'spec': None, 'gate': None, 'milestone': None, 'status': 'UNMAPPED_PENDING_SPEC', 'note': "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ."}, {'defect': 'D-047', 'requirement': None, 'spec': None, 'gate': None, 'milestone': None, 'status': 'UNMAPPED_PENDING_SPEC', 'note': "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ."}, {'defect': 'D-048', 'requirement': None, 'spec': None, 'gate': None, 'milestone': None, 'status': 'UNMAPPED_PENDING_SPEC', 'note': "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ."}, {'defect': 'D-049', 'requirement': None, 'spec': None, 'gate': None, 'milestone': None, 'status': 'UNMAPPED_PENDING_SPEC', 'note': "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ."}, {'defect': 'D-050', 'requirement': None, 'spec': None, 'gate': None, 'milestone': None, 'status': 'UNMAPPED_PENDING_SPEC', 'note': "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ."}, {'defect': 'D-051', 'requirement': None, 'spec': None, 'gate': None, 'milestone': None, 'status': 'UNMAPPED_PENDING_SPEC', 'note': "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ."}, {'defect': 'D-052', 'requirement': None, 'spec': None, 'gate': None, 'milestone': None, 'status': 'UNMAPPED_PENDING_SPEC', 'note': "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ."}, {'defect': 'D-053', 'requirement': None, 'spec': None, 'gate': None, 'milestone': None, 'status': 'UNMAPPED_PENDING_SPEC', 'note': "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ."}, {'defect': 'D-054', 'requirement': None, 'spec': None, 'gate': None, 'milestone': None, 'status': 'UNMAPPED_PENDING_SPEC', 'note': "non couvert par les 8 specs V4 — règle métier (sourcing/scoring/salaire) ou incompatibilité d'environnement, pas une exigence de sécurité/intégrité d'artefact ; voir M0 report NON VÉRIFIÉ."}]
+E       assert [{'defect': '...ne, ...}, ...] == []
+E         
+E         Left contains 9 more items, first extra item: {'defect': 'D-044', 'requirement': None, 'spec': None, 'gate': None, ...}
+E         Use -v to get more diff
+
+tests/test_m0_traceability.py:118: AssertionError
+=============================== warnings summary ===============================
+tests/failure_injection_test.py:14
+  /private/tmp/claude-501/-Users-jocelyngrosjean-job-opportunity-radar-cvsec-core-v2/f3be8b52-7a82-4f88-b7b8-f8271743a2fe/scratchpad/joao_clean_wt/tests/failure_injection_test.py:14: PytestCollectionWarning: cannot collect test class 'TestResult' because it has a __init__ constructor (from: tests/failure_injection_test.py)
+    class TestResult(Enum):
+
+tests/test_package_boundaries.py::test_joss_compatibility_shim_exists
+  /private/tmp/claude-501/-Users-jocelyngrosjean-job-opportunity-radar-cvsec-core-v2/f3be8b52-7a82-4f88-b7b8-f8271743a2fe/scratchpad/joao_clean_wt/tests/test_package_boundaries.py:27: DeprecationWarning: joss_orchestrator is a compatibility shim; import from joao_orchestrator.
+    import joss_orchestrator
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_m0_traceability.py::test_real_repo_produces_zero_unmapped_with_cv_bot_specs
+================== 1 failed, 329 passed, 2 warnings in 53.20s ==================
+EXIT=1

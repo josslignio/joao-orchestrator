@@ -1,0 +1,17 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0 -- /Library/Frameworks/Python.framework/Versions/3.12/bin/python3
+cachedir: .pytest_cache
+rootdir: /private/tmp/claude-501/-Users-jocelyngrosjean-job-opportunity-radar-cvsec-core-v2/f3be8b52-7a82-4f88-b7b8-f8271743a2fe/scratchpad/joao_clean_wt
+configfile: setup.cfg
+collecting ... collected 23 items / 16 deselected / 7 selected
+
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_missing_candidate_tree_blocked PASSED [ 14%]
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_missing_verdict_blocked PASSED [ 28%]
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_missing_findings_blocked PASSED [ 42%]
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_missing_reviewer_object_blocked PASSED [ 57%]
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_missing_reviewer_provider_blocked PASSED [ 71%]
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_missing_reviewer_model_blocked PASSED [ 85%]
+tests/test_a0_2_corrections.py::test_a02_correctif5_reviewer_schema_complete_valid_verdict_accepted PASSED [100%]
+
+======================= 7 passed, 16 deselected in 0.20s =======================
+EXIT=0

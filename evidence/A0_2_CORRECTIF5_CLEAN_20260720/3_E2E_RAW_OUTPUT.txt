@@ -1,0 +1,15 @@
+[1/7] toy mission repo created at base commit 98d6d7487775
+[2/7] run started: run-20260720T015850Z-a3df6385
+[3/7] build+candidate+tests+review complete — candidate_tree = 87216b5cf63d13b14a90f81b27672825c42d8ae2
+[3/7] same candidate_tree bound by build review AND final review: True
+[4/7] approved (candidate_tree re-verified once more immediately before acceptance)
+[5/7] promoted: branch main -> 012dacff80cf, tag joao-promoted-run-20260720T015850Z-a3df6385, tree matches candidate_tree: True
+[5/7] the NEW sterile worktree (/var/folders/3n/cp7h29p55gzds1ttv9rkjdgw0000gn/T/joao-a0-toy-xxc5bgim/state/runs/run-20260720T015850Z-a3df6385/promoted-worktree-run-20260720T015850Z-a3df6385) reflects the promotion: "def greet():\n    return 'hello, world'" — the live workspace itself is deliberately untouched
+[6/7] rollback EXECUTED — branch main restored to base commit: True
+[7/7] the live workspace was never mutated by promote()/rollback(): "def greet():\n    return 'hello, world'"
+
+SAME HASH TRACED END TO END (freeze -> build review -> final review -> promoted commit tree): True
+  candidate_tree = 87216b5cf63d13b14a90f81b27672825c42d8ae2
+
+Evidence written to /private/tmp/claude-501/-Users-jocelyngrosjean-job-opportunity-radar-cvsec-core-v2/f3be8b52-7a82-4f88-b7b8-f8271743a2fe/scratchpad/joao_clean_evidence/e2e_evidence/trace.json
+EXIT=0
