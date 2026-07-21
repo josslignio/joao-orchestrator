@@ -43,6 +43,9 @@ select,.mini{background:#0f1a28;color:#cfe0f3;border:1px solid #2c4260;border-ra
 .chip.bad{border-color:#7a3b3b;color:#ff9d9d}.chip.ok{border-color:#2f6b48;color:#8fe6b4}
 .note{color:#7f93ab;font-size:11px}
 a.dl{color:#7fd0ff}
+.warn{background:#2a1c10;border:1px solid #8a5a24;color:#ffce9b;border-radius:9px;padding:9px 11px;font-size:12px;margin-bottom:10px}
+#advanced{display:none;border-top:1px solid #22344a;margin-top:10px;padding-top:10px}
+#advanced.open{display:block}
 </style>
 <div class=app>
   <aside class=side>
@@ -50,6 +53,16 @@ a.dl{color:#7fd0ff}
     <div class=tag>ALPHA · local · honnête</div>
     <button onclick=newChat()>＋ Nouveau chat</button>
     <button onclick=startKickoff() title="Phase 0 — nouveau projet">🧭 Nouveau projet (Kickoff)</button>
+    <button onclick="x('advanced').classList.toggle('open')" title="Interface technique de secours, jamais requise pour un projet reconnu">⚙️ Mode Avancé / Recovery</button>
+    <div id=advanced>
+      <div class=warn>⚠️ Interface technique de <b>secours</b>. Jamais nécessaire pour un projet reconnu (JobRadar, Twitter Bot…) — l'intention chat + l'autorité Phase 0 suffisent. À utiliser seulement si tu sais ce que tu fais.</div>
+      <div><textarea class=mini id=am placeholder="description de la mission" style="width:100%;min-height:50px"></textarea></div>
+      <div style=margin-top:6px><input class=mini id=mw placeholder="/chemin/worktree-git" style=width:100%></div>
+      <div style=margin-top:6px><input class=mini id=map placeholder="chemins modifiables (ex: src/,tests/)" style=width:100%></div>
+      <div style=margin-top:6px><input class=mini id=mt value="python3 -m pytest -q" style=width:100%></div>
+      <label class=note><input type=checkbox id=mc> critique (force best-of-3 — laisser décoché sauf autorité explicite)</label>
+      <div class=btns><button onclick=launchAdvancedMission()>Lancer (recovery)</button></div>
+    </div>
     <div class=note id=caps>capacités…</div>
     <div class=convs id=convs></div>
   </aside>
@@ -119,14 +132,70 @@ async function attach(ev){const f=ev.target.files[0];if(!f)return;const b=await 
 async function send(force){const text=x('in').value.trim();if(!text)return;
   const useMode=force||mode;x('in').value='';
   addMsg('user',esc(text));
+  window.__last=text;
+  // Boss directive (2026-07-21): /chat/mission-intent is called FIRST, on the
+  // real, visible text — deterministic project-alias + Phase-0 authority
+  // routing, never a fabricated mission. Only when it says this message
+  // doesn't read as a project-lot instruction do we fall back to the
+  // pre-existing classify()+general-chat path (general chat is preserved).
+  let mi=null;
+  try{mi=await j('/chat/mission-intent',{method:'POST',body:JSON.stringify({message:text})})}catch(e){mi=null}
+  if(mi && handleMissionIntent(mi))return;
   const r=await j('/chat/classify',{method:'POST',body:JSON.stringify({message:text,mode:useMode,has_attachment:pending.length>0})});
   if(r.intent==='AMBIGU'){const d=addMsg('assistant',`🤔 ${esc(r.reason)}`);
     d.querySelector('.bubble').innerHTML+=`<div class=btns><button onclick="reSend('chat')">💬 Répondre en chat</button><button onclick="reSend('mission')">🛠️ Lancer une mission</button></div>`;
-    window.__last=text;return}
+    return}
   if(r.intent==='KICKOFF'){addMsg('assistant','Nouveau projet détecté → je démarre le Kickoff (Phase 0).');startKickoff();return}
-  if(r.intent==='MISSION_CODE'){missionForm(text);return}
+  if(r.intent==='MISSION_CODE'){addMsg('assistant','🛠️ Ça ressemble à une demande de build générique, mais je ne reconnais aucun projet suivi dans ce message. '+
+    'Pour un projet suivi (JobRadar, Twitter Bot…), reformule avec son nom. Sinon, le <b>⚙️ Mode Avancé / Recovery</b> (barre latérale) permet un lancement manuel — interface technique, jamais requise normalement.');return}
   await streamReply(text);}
 function reSend(m){const t=window.__last;x('in').value=t;send(m)}
+
+// ── mission-intent action_type routing (Boss directive, 2026-07-21) ──
+function handleMissionIntent(mi){
+  switch(mi.action_type){
+    case 'NOT_A_MISSION_INTENT':
+      return false; // let the existing classify()/general-chat fallback handle it
+    case 'PROJECT_NOT_FOUND':
+      addMsg('assistant',`🤷 Je ne reconnais aucun projet suivi correspondant à ce message. ${esc(mi.reason||'')}`);
+      return true;
+    case 'CLARIFICATION_REQUIRED': {
+      const cands=(mi.candidates&&mi.candidates.length)?` Candidats possibles : ${mi.candidates.map(esc).join(', ')}.`:'';
+      addMsg('assistant',`🤔 ${esc(mi.reason||'Je ne peux pas identifier un projet unique à partir de ce message.')}${cands} Précise le nom exact du projet.`);
+      return true;
+    }
+    case 'PHASE0_KICKOFF_REQUIRED': {
+      const d=addMsg('assistant',`🧭 Phase 0 n'a pas encore démarré pour <b>${esc(mi.project_id)}</b> (alias reconnu : « ${esc(mi.matched_alias)} »). Aucune build n'est lancée tant que la Phase 0 n'est pas signée.`);
+      d.querySelector('.bubble').innerHTML+=`<div class=btns><button onclick="startKickoffFor('${esc(mi.project_id)}')">🧭 Démarrer le Kickoff</button></div>`;
+      return true;
+    }
+    case 'PHASE0_SIGNATURE_REQUIRED': {
+      addMsg('assistant',`✍️ Une spec Phase 0 existe pour <b>${esc(mi.project_id)}</b> (alias : « ${esc(mi.matched_alias)} ») mais n'est pas encore signée. Aucune build n'est lancée. Voici l'état actuel :`);
+      kickoff=mi.project_id;
+      j('/kickoff/'+encodeURIComponent(mi.project_id)).then(s=>askKickoff(s)).catch(()=>{
+        // No Kickoff interview session exists yet for this project (its spec
+        // was authored some other way) — offer the same real kickoff
+        // start/answer/sign actions rather than a bare error, per the
+        // required "exposes existing kickoff start/answer/sign actions".
+        const d=addMsg('assistant','Aucune session de Kickoff interactive en cours pour ce projet.');
+        d.querySelector('.bubble').innerHTML+=`<div class=btns><button onclick="startKickoffFor('${esc(mi.project_id)}')">🧭 Démarrer / continuer le Kickoff</button></div>`;
+      });
+      return true;
+    }
+    case 'NEXT_ROADMAP_LOT_READY': {
+      const d=addMsg('assistant',`✅ Prochain lot prêt pour <b>${esc(mi.project_id)}</b>. Aucune build n'est lancée avant ta validation explicite.`);
+      d.querySelector('.bubble').innerHTML+=`<pre>${esc(JSON.stringify(mi,null,2))}</pre>`+
+        `<div class=btns><button onclick='confirmNextLot(${JSON.stringify(mi)})'>✅ GO Boss</button></div>`;
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+async function confirmNextLot(mi){try{
+  const r=await j('/chat/mission-intent/confirm',{method:'POST',body:JSON.stringify(mi)});
+  const d=addMsg('assistant',`Mission lancée : <b>${esc(r.run_id)}</b>.`);
+  pollRun(r.run_id,d.querySelector('.bubble'))}catch(e){addMsg('assistant','⚠️ '+esc(e.message))}}
 
 async function streamReply(text){const brain=x('brain').value;
   const d=addMsg('assistant','',(brain==='glm'?'GLM':'Claude'));const bub=d.querySelector('.bubble');
@@ -146,19 +215,18 @@ async function streamReply(text){const brain=x('brain').value;
       else if(ev.event==='saved'){loadConvs()}}}
   scroll()}
 
-// ── mission from chat → cascade + Phase 0 gate (2.2c) ──
-function missionForm(text){const d=addMsg('assistant','🛠️ Demande de build détectée. Je passe par la <b>cascade</b> (GLM→best-of-N→Claude) avec mémoire injectée.');
-  d.querySelector('.bubble').innerHTML+=`<div style="margin-top:8px">
-    <div><input class=mini id=mw placeholder="/chemin/worktree-git" style=width:100%></div>
-    <div style=margin-top:6px><input class=mini id=map placeholder="chemins modifiables (ex: src/,tests/)" style=width:100%></div>
-    <div style=margin-top:6px><input class=mini id=mt value="python3 -m pytest -q" style=width:100%></div>
-    <label class=note><input type=checkbox id=mc checked> critique (force best-of-3)</label>
-    <div class=btns><button onclick='launchMission(${JSON.stringify(text)})'>Lancer la mission</button></div></div>`}
-async function launchMission(text){try{
+// ── Advanced / Recovery Mode: manual mission launch (Boss directive,
+// 2026-07-21) — hidden behind an explicit sidebar toggle, never auto-opened,
+// never required for a recognized project instruction (those go through
+// /chat/mission-intent above). Critical defaults to OFF (risk_tier=NORMAL);
+// use CRITICAL only when authority rules classify the mission as critical.
+async function launchAdvancedMission(){try{
+  const text=x('am').value.trim();
+  if(!text){alert('description de la mission requise');return}
   const body={mission:text,workspace:x('mw').value,allowed_paths:x('map').value.split(',').map(s=>s.trim()).filter(Boolean),
     full_test_command:x('mt').value,critical:x('mc').checked};
   const r=await j('/chat/mission',{method:'POST',body:JSON.stringify(body)});
-  const d=addMsg('assistant',`Mission lancée : <b>${esc(r.run_id)}</b>. Je route via la cascade…`);
+  const d=addMsg('assistant',`⚙️ Mission recovery lancée : <b>${esc(r.run_id)}</b>.`);
   pollRun(r.run_id,d.querySelector('.bubble'))}catch(e){addMsg('assistant','⚠️ '+esc(e.message))}}
 async function pollRun(id,bub){const t=setInterval(async()=>{try{const v=await j('/runs/'+id);
   bub.innerHTML=`Mission <b>${esc(id)}</b> · statut <b>${esc(v.status)}</b> · ${esc(v.current_step||'')}`;
@@ -172,6 +240,11 @@ async function showRun(id){const v=await j('/runs/'+id);x('split').classList.add
 // ── kickoff (Phase 0 as a routed intent, 2.2b) ──
 async function startKickoff(){const p=prompt('Nom du projet ?','nouveau-projet');if(!p)return;kickoff=p;
   const s=await j('/kickoff/'+encodeURIComponent(p)+'/start',{method:'POST'});addMsg('assistant','🧭 Kickoff « '+esc(p)+' » démarré.');askKickoff(s)}
+// same as startKickoff() but for a project_id ALREADY resolved deterministically
+// by /chat/mission-intent — never re-prompts, never lets the model rename it.
+async function startKickoffFor(projectId){kickoff=projectId;
+  const s=await j('/kickoff/'+encodeURIComponent(projectId)+'/start',{method:'POST'});
+  addMsg('assistant','🧭 Kickoff « '+esc(projectId)+' » démarré.');askKickoff(s)}
 function askKickoff(s){if(s.complete){addMsg('assistant',s.signed?'✅ Spec signée — missions autorisées.':'Interview terminée. Signe la spec avec « GO Boss » quand tu veux.'+
   ` <div class=btns><button onclick="signKickoff()">✅ GO Boss</button></div>`);return}
   const d=addMsg('assistant',`<b>[${esc(s.question.key)}]</b> ${esc(s.question.text)}`+

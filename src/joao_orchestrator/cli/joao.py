@@ -27,6 +27,13 @@ def main(argv: list[str] | None = None) -> int:
     ui = sub.add_parser("ui", help="start the local-only JOAO bubble")
     ui.add_argument("--state-root", default="~/.local/share/joao")
     ui.add_argument("--no-open", action="store_true", help="do not open the local browser automatically")
+    ui.add_argument("--projects-root", default=None,
+                    help="explicit override for the Phase-0 project-authority root "
+                         "(default: centralized ProjectRegistry resolution — see "
+                         "bubble/project_registry.py; never a silent HOME-wide search)")
+    ui.add_argument("--profiles-root", default=None,
+                    help="explicit override for the project_profiles/ alias-table root "
+                         "(default: centralized ProjectRegistry resolution)")
 
     mission = sub.add_parser("mission", help="C8-B: run a bounded mission through joao-worker-host")
     mission_sub = mission.add_subparsers(dest="mission_cmd")
@@ -59,9 +66,17 @@ def main(argv: list[str] | None = None) -> int:
         # worker-host is a controlled BLOCK on the next mission dispatch
         # (`RemoteBuilderProxy`/`RemoteReviewerProxy` never fall back to a
         # local/legacy path), never a silent substitution.
+        # Boss directive (2026-07-21): projects_root/profiles_root are no longer
+        # unconditionally forced onto state_root — an explicit CLI override wins
+        # (order 1), otherwise RunRuntime's own ProjectRegistry resolves them
+        # (this repo's committed project_profiles/projects/ dirs, order 2) rather
+        # than blindly defaulting onto an often-empty state-root subdirectory.
+        projects_root = Path(args.projects_root).expanduser() if args.projects_root else None
+        profiles_root = Path(args.profiles_root).expanduser() if args.profiles_root else None
         server = LocalAPIServer(RunRuntime(state_root, builder=remote_glm_builder(),
                                            reviewer=remote_claude_reviewer(),
-                                           enforce_phase0=True, projects_root=state_root / "projects",
+                                           enforce_phase0=True, projects_root=projects_root,
+                                           profiles_root=profiles_root,
                                            ledger_sync=True))  # B-37: brain re-synced from the ledger at launch
         print(server.url)
         if not args.no_open:

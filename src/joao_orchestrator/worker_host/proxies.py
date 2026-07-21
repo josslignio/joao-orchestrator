@@ -24,13 +24,14 @@ from . import client as client_mod
 class RemoteBuilderProxy(BuilderAdapter):
     def __init__(self, *, worker: str, provider: str, model: str, provider_family: str,
                 requires_network_transport: bool = False, socket_path: Path | None = None,
-                timeout: int = 1200):
+                state_dir: Path | None = None, timeout: int = 1200):
         self.worker = worker
         self.provider = provider
         self.model = model
         self.provider_family = provider_family
         self.requires_network_transport = requires_network_transport
         self.socket_path = socket_path
+        self.state_dir = state_dir
         self.timeout = timeout
 
     def build(self, mission: str, workspace: Path, run_dir: Path, allowed: list[str],
@@ -48,17 +49,19 @@ class RemoteBuilderProxy(BuilderAdapter):
             "mission": mission, "allowed_paths": list(allowed), "correction": bool(correction),
             "network_capability": bool(capabilities.get("network_capability", False)),
         }
-        return client_mod.send_request(request, socket_path=self.socket_path, timeout=self.timeout + 30)
+        return client_mod.send_request(request, socket_path=self.socket_path, state_dir=self.state_dir,
+                                       timeout=self.timeout + 30)
 
 
 class RemoteReviewerProxy(ReviewerAdapter):
     def __init__(self, *, worker: str, provider: str, model: str, provider_family: str,
-                socket_path: Path | None = None, timeout: int = 900):
+                socket_path: Path | None = None, state_dir: Path | None = None, timeout: int = 900):
         self.worker = worker
         self.provider = provider
         self.model = model
         self.provider_family = provider_family
         self.socket_path = socket_path
+        self.state_dir = state_dir
         self.timeout = timeout
 
     def available(self) -> bool:
@@ -67,9 +70,14 @@ class RemoteReviewerProxy(ReviewerAdapter):
 
     def review_stage(self, run: dict[str, Any], run_dir: Path, stage: str, active_rules: str = "") -> dict[str, Any]:
         candidate = run.get("candidate") if stage != "plan" else None
+        # mission_id == run_id, ALWAYS (Boss directive, 2026-07-21): a prior
+        # bug had the builder request use run_id while this reviewer request
+        # used project_id for the same mission — two different values for
+        # what must be one propagated identifier end-to-end.
+        run_id = run.get("run_id", Path(run_dir).name)
         request = {
-            "request_id": secrets.token_hex(16), "run_id": run.get("run_id", Path(run_dir).name),
-            "mission_id": run.get("project_id", run.get("run_id", Path(run_dir).name)),
+            "request_id": secrets.token_hex(16), "run_id": run_id,
+            "mission_id": run_id,
             "worker": self.worker, "role": "reviewer", "model": self.model,
             "workspace": run.get("workspace", ""), "run_dir": str(run_dir), "timeout": self.timeout,
             "mission": run.get("mission", ""), "stage": stage, "active_rules": active_rules,
@@ -77,7 +85,8 @@ class RemoteReviewerProxy(ReviewerAdapter):
             "candidate_readonly_copy": (candidate or {}).get("readonly_copy"),
             "candidate_commit": (candidate or {}).get("candidate_commit"),
         }
-        return client_mod.send_request(request, socket_path=self.socket_path, timeout=self.timeout + 30)
+        return client_mod.send_request(request, socket_path=self.socket_path, state_dir=self.state_dir,
+                                       timeout=self.timeout + 30)
 
     def review(self, run: dict[str, Any], run_dir: Path) -> dict[str, Any]:
         return self.review_stage(run, run_dir, "final")

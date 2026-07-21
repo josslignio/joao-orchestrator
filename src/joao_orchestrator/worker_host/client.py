@@ -12,7 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .server import default_socket_path
+from . import hmac_auth
+from .server import DEFAULT_STATE_DIR, default_socket_path
 
 # A connection actively refused against a socket PATH THAT EXISTS is retried
 # briefly — the listener may not have reached its first `accept()` yet under
@@ -32,16 +33,31 @@ def _block(reason_code: str, reason: str, **extra: Any) -> dict[str, Any]:
     return {"ok": False, "decision": "block", "reason_code": reason_code, "reason": reason, **extra}
 
 
-def send_request(payload: dict[str, Any], *, socket_path: Path | None = None, timeout: int = 1800) -> dict[str, Any]:
+def send_request(payload: dict[str, Any], *, socket_path: Path | None = None, timeout: int = 1800,
+                 state_dir: Path | None = None) -> dict[str, Any]:
     """Send one JSON request, read one JSON response line, close the
     connection. Returns a controlled BLOCK dict (never raises) when the
     worker host is unreachable, closes early, or replies with something that
     is not valid JSON — a caller can trust every returned dict has at least
-    `{"ok": bool, "decision": str, "reason_code": str}`."""
+    `{"ok": bool, "decision": str, "reason_code": str}`.
+
+    Every non-ping request is wrapped in an HMAC envelope (Boss directive,
+    2026-07-21) before it is sent — see `hmac_auth` for the honest
+    trust-boundary declaration. `state_dir` locates the controller secret
+    (shared with the worker-host process, same machine, same user); defaults
+    to the same `DEFAULT_STATE_DIR` the server itself defaults to."""
     path = Path(socket_path).expanduser() if socket_path else default_socket_path()
     if not path.exists():
         return _block("WORKER_HOST_UNAVAILABLE",
                       f"no worker-host socket at {path} — is `joao-worker-host` running?")
+
+    if not payload.get("ping"):
+        secret = hmac_auth.load_secret(state_dir or DEFAULT_STATE_DIR)
+        if secret is None:
+            return _block("WORKER_HOST_HMAC_SECRET_MISSING",
+                          "no controller secret found for this worker-host state dir — run the "
+                          "worker-host bootstrap script to generate one before dispatching a mission")
+        payload = hmac_auth.sign_request(payload, secret=secret)
     chunks = None
     for attempt in range(_CONNECT_REFUSED_RETRIES + 1):
         try:

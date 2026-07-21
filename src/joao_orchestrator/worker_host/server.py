@@ -28,7 +28,7 @@ from typing import Any
 
 from ..bubble.runtime import ClaudeCLIReviewer, ClaudeCodeBuilder, GLMBuilder, GLMReviewer
 from ..storage.atomic import append_line
-from . import protocol
+from . import hmac_auth, protocol
 
 DEFAULT_STATE_DIR = Path("~/.local/state/joao/worker-host").expanduser()
 DEFAULT_SOCKET_NAME = "worker-host.sock"
@@ -64,13 +64,34 @@ class WorkerHost:
     incorrectly"."""
 
     def __init__(self, state_dir: Path = DEFAULT_STATE_DIR, *, builders: dict | None = None,
-                reviewers: dict | None = None):
+                reviewers: dict | None = None, allowed_workspace_roots: list | None = None,
+                allowed_run_dir_roots: list | None = None):
         self.state_dir = Path(state_dir).expanduser()
         self.state_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(self.state_dir, 0o700)
         self.ledger_path = self.state_dir / "served-requests.jsonl"
         self._lock = threading.Lock()
         self._served: set[str] = set()
+        # HMAC envelope (Boss directive, 2026-07-21): defense-in-depth against
+        # an accidental/misconfigured same-machine client — see
+        # `hmac_auth`'s module docstring for the honest trust-boundary
+        # declaration (WORKER_HOST_TRUST_BOUNDARY=same_macOS_user). The
+        # secret is generated once, idempotently, outside any LaunchAgent
+        # plist, owner-only, never logged.
+        hmac_auth.ensure_secret(self.state_dir)
+        self.secret = hmac_auth.load_secret(self.state_dir)
+        self.replay_ledger = hmac_auth.ReplayLedger(self.state_dir / "hmac-nonces.jsonl")
+        # Server-side restrictions independent of the HMAC layer (Boss
+        # directive, 2026-07-21): when set (production wiring always sets
+        # these — see `serve_forever`), `workspace` must resolve inside one
+        # of `allowed_workspace_roots` and `run_dir` inside one of
+        # `allowed_run_dir_roots`. None (the default, used by unit tests that
+        # exercise unrelated behavior with arbitrary tmp_path fixtures) skips
+        # the check entirely — never a silent narrowing of existing tests.
+        self.allowed_workspace_roots = ([Path(p).expanduser().resolve() for p in allowed_workspace_roots]
+                                       if allowed_workspace_roots else None)
+        self.allowed_run_dir_roots = ([Path(p).expanduser().resolve() for p in allowed_run_dir_roots]
+                                     if allowed_run_dir_roots else None)
         if self.ledger_path.exists():
             for line in self.ledger_path.read_text().splitlines():
                 line = line.strip()
@@ -108,14 +129,40 @@ class WorkerHost:
 
     def handle(self, payload: Any) -> dict[str, Any]:
         # A dedicated liveness probe, never a builder/reviewer dispatch and
-        # never subject to the request_id ledger (a health check is not a
-        # mission and must be free to repeat).
+        # never subject to the request_id ledger or the HMAC envelope (a
+        # health check is not a mission, carries no build authority, and
+        # must be free to repeat).
         if isinstance(payload, dict) and payload.get("ping") is True:
-            return {"ok": True, "pong": True, "served_at": time.time()}
+            return {"ok": True, "pong": True, "served_at": time.time(),
+                   "trust_boundary": hmac_auth.WORKER_HOST_TRUST_BOUNDARY,
+                   "strong_same_uid_process_isolation_claimed": hmac_auth.STRONG_SAME_UID_PROCESS_ISOLATION_CLAIMED}
+        if not isinstance(payload, dict):
+            return _block("WORKER_HOST_MALFORMED_REQUEST",
+                          f"request must be a JSON object, got {type(payload).__name__}")
+
+        # Best-effort echo of request_id/run_id/mission_id, even on an EARLY
+        # block below — the client independently refuses (BLOCK) any
+        # response whose these fields don't match what it sent
+        # (`client.send_request`'s stale/cross-wired-response check). Without
+        # echoing them here too, every early block (bad signature, malformed
+        # body, an out-of-bounds workspace) would surface to the caller as a
+        # confusing WORKER_HOST_RESPONSE_MISMATCH instead of the real reason.
+        echo = {k: payload.get(k) for k in ("request_id", "run_id", "mission_id")
+               if isinstance(payload.get(k), str)}
+
+        # HMAC envelope verification happens BEFORE worker selection (Boss
+        # directive, 2026-07-21): a malformed/unsigned/tampered/stale/
+        # replayed request is blocked here, never reaching protocol
+        # validation or dispatch.
+        try:
+            hmac_auth.verify_envelope(payload, secret=self.secret, replay_ledger=self.replay_ledger)
+        except hmac_auth.EnvelopeError as exc:
+            return {**_block(exc.reason_code, exc.reason), **echo}
+
         try:
             protocol.validate_request(payload)
         except protocol.ProtocolError as exc:
-            return _block("WORKER_HOST_MALFORMED_REQUEST", str(exc))
+            return {**_block("WORKER_HOST_MALFORMED_REQUEST", str(exc)), **echo}
 
         request_id = payload["request_id"]
         if not self._mark_served(request_id):
@@ -126,6 +173,24 @@ class WorkerHost:
         worker = payload["worker"]
         role = payload["role"]
         run_dir = Path(payload["run_dir"]) if payload.get("run_dir") else self.state_dir / "runs" / request_id
+
+        # Server-side restrictions independent of the HMAC layer (Boss
+        # directive, 2026-07-21) — only enforced when the roots are
+        # configured (production wiring always configures them; see
+        # `serve_forever`).
+        if self.allowed_workspace_roots is not None:
+            workspace_resolved = Path(payload["workspace"]).expanduser().resolve()
+            if not any(workspace_resolved == root or root in workspace_resolved.parents
+                      for root in self.allowed_workspace_roots):
+                return {**_block("WORKER_HOST_WORKSPACE_OUTSIDE_ALLOWED_ROOTS",
+                                 f"workspace {payload['workspace']!r} is not inside any configured "
+                                 "project root — an arbitrary home-directory workspace is rejected"), **echo}
+        if self.allowed_run_dir_roots is not None:
+            run_dir_resolved = run_dir.expanduser().resolve()
+            if not any(run_dir_resolved == root or root in run_dir_resolved.parents
+                      for root in self.allowed_run_dir_roots):
+                return {**_block("WORKER_HOST_RUN_DIR_OUTSIDE_ALLOWED_ROOTS",
+                                 f"run_dir {str(run_dir)!r} is not inside the configured JOAO state root"), **echo}
         run_dir.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -219,7 +284,8 @@ class WorkerHostServer(socketserver.ThreadingUnixStreamServer):
     allow_reuse_address = True
 
     def __init__(self, socket_path: Path | None = None, state_dir: Path = DEFAULT_STATE_DIR,
-                 request_timeout: int = 1800, *, builders: dict | None = None, reviewers: dict | None = None):
+                 request_timeout: int = 1800, *, builders: dict | None = None, reviewers: dict | None = None,
+                 allowed_workspace_roots: list | None = None, allowed_run_dir_roots: list | None = None):
         state_dir = Path(state_dir).expanduser()
         socket_path = Path(socket_path).expanduser() if socket_path else default_socket_path(state_dir)
         socket_path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,19 +298,56 @@ class WorkerHostServer(socketserver.ThreadingUnixStreamServer):
         os.chmod(socket_path, 0o600)
         self.socket_path = socket_path
         self.request_timeout = request_timeout
-        self.host = WorkerHost(state_dir, builders=builders, reviewers=reviewers)
+        self.host = WorkerHost(state_dir, builders=builders, reviewers=reviewers,
+                               allowed_workspace_roots=allowed_workspace_roots,
+                               allowed_run_dir_roots=allowed_run_dir_roots)
 
     def health(self) -> dict[str, Any]:
         mode = self.socket_path.stat().st_mode & 0o777
-        return {"ok": True, "socket": str(self.socket_path), "socket_mode": oct(mode), "pid": os.getpid()}
+        # Boss directive (2026-07-21): the trust boundary is stated honestly
+        # in every health response — this HMAC-authenticated Unix socket is
+        # defense-in-depth against an accidental/misconfigured same-machine
+        # client, never a claim of isolation from another process running as
+        # the same user (see `hmac_auth`'s module docstring).
+        return {"ok": True, "socket": str(self.socket_path), "socket_mode": oct(mode), "pid": os.getpid(),
+                "trust_boundary": hmac_auth.WORKER_HOST_TRUST_BOUNDARY,
+                "strong_same_uid_process_isolation_claimed": hmac_auth.STRONG_SAME_UID_PROCESS_ISOLATION_CLAIMED}
 
     def close(self) -> None:
         self.server_close()
         self.socket_path.unlink(missing_ok=True)
 
 
+def _production_allowed_roots(state_dir: Path) -> tuple[list, list]:
+    """Real production allowlists (Boss directive, 2026-07-21): `workspace`
+    must be inside a configured project root (the controller's own
+    ProjectRegistry — this repo's `project_profiles/`/`projects/` dirs, plus
+    each registered project's own declared `repository_path`); `run_dir`
+    inside the JOAO controller's own state root. Never a blind "anything
+    under $HOME" allowance."""
+    from ..bubble.project_registry import ProjectRegistry
+    registry = ProjectRegistry()
+    profiles_root = registry.resolve_profiles_root()
+    projects_root = registry.resolve_projects_root()
+    workspace_roots = [r.path for r in (profiles_root, projects_root) if r.exists]
+    if profiles_root.exists:
+        for entry in sorted(Path(profiles_root.path).iterdir()):
+            if entry.is_dir() and (entry / "profile.json").is_file():
+                repo_path = registry.project_repository_path(entry.name)
+                if repo_path is not None:
+                    workspace_roots.append(repo_path)
+    # The JOAO controller's own state root (default `~/.local/share/joao`,
+    # matching `cli/joao.py`'s `ui` subcommand default) — where real run_dirs
+    # (`<state_root>/runs/<run_id>`) actually live; distinct from the
+    # worker-host's OWN operational `state_dir`.
+    run_dir_roots = [Path("~/.local/share/joao").expanduser()]
+    return workspace_roots, run_dir_roots
+
+
 def serve_forever(socket_path: Path | None = None, state_dir: Path = DEFAULT_STATE_DIR) -> None:
-    server = WorkerHostServer(socket_path=socket_path, state_dir=state_dir)
+    workspace_roots, run_dir_roots = _production_allowed_roots(state_dir)
+    server = WorkerHostServer(socket_path=socket_path, state_dir=state_dir,
+                              allowed_workspace_roots=workspace_roots, allowed_run_dir_roots=run_dir_roots)
     try:
         server.serve_forever()
     finally:

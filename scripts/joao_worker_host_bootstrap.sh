@@ -66,6 +66,24 @@ do_stop() {
   launchctl bootout "gui/${UID_NUM}/${PLIST_LABEL}" >/dev/null 2>&1 || true
 }
 
+# HMAC controller secret (Boss directive, 2026-07-21): generated once, here,
+# at install time — idempotent, never rotated implicitly by a later install
+# run. Stored OUTSIDE the LaunchAgent plist (never in ${PLIST_PATH}), inside
+# the worker-host's own state dir, owner-only (0600 file, 0700 parent dir),
+# never printed or logged by this script. Defense-in-depth against an
+# accidental/misconfigured same-machine client — NOT a claim of protection
+# against another process running as this same macOS user
+# (WORKER_HOST_TRUST_BOUNDARY=same_macOS_user; see worker_host/hmac_auth.py).
+do_ensure_hmac_secret() {
+  (cd "$REPO_ROOT" && "$PYTHON3" - <<'PYEOF'
+from src.joao_orchestrator.worker_host.hmac_auth import ensure_secret
+from src.joao_orchestrator.worker_host.server import DEFAULT_STATE_DIR
+path = ensure_secret(DEFAULT_STATE_DIR)
+print(f"joao-worker-host HMAC controller secret ready: {path} (never printed, owner-only)")
+PYEOF
+  )
+}
+
 do_health() {
   "$PYTHON3" "$REPO_ROOT/scripts/joao_worker_host_health.py"
 }
@@ -84,11 +102,13 @@ wait_healthy() {
 
 do_install() {
   write_plist
+  do_ensure_hmac_secret
   do_stop
   launchctl bootstrap "gui/${UID_NUM}" "$PLIST_PATH"
   launchctl enable "gui/${UID_NUM}/${PLIST_LABEL}" || true
   if wait_healthy; then
     echo "joao-worker-host installed and healthy: ${PLIST_PATH}"
+    echo "trust boundary: same_macOS_user (HMAC envelope is defense-in-depth against an accidental/misconfigured same-machine client, not isolation from another process running as this user)"
     do_health
   else
     echo "joao-worker-host installed but NOT healthy after ${HEALTH_TIMEOUT_S}s — check ${LOG_DIR}/worker-host.err.log" >&2

@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
+import sys
 import urllib.request
 from pathlib import Path
 
@@ -126,7 +127,7 @@ def test_chat_mission_intent_route_never_fabricates_a_mission(tmp_path):
         status, body = _post(api, "chat/mission-intent", {"message": "what's the weather"})
         result = json.loads(body)
         assert result["ok"] is False
-        assert result["kind"] == "not_a_mission_intent"
+        assert result["action_type"] == "NOT_A_MISSION_INTENT"
     finally:
         api.close()
 
@@ -140,6 +141,104 @@ def test_chat_mission_intent_route_requires_a_message(tmp_path):
             assert False, "expected an HTTP error for a missing message"
         except urllib.error.HTTPError as exc:
             assert exc.code == 409  # ValueError -> 409, matching every other malformed-request route here
+    finally:
+        api.close()
+
+
+def test_chat_mission_intent_confirm_rejects_stale_or_hand_built_payloads(tmp_path):
+    """No project has a real lot/task-level roadmap wired in today (Boss
+    directive, 2026-07-21) — this endpoint must fail closed rather than ever
+    fabricate a mission, both for a wrong action_type and for the (currently
+    unreachable) real one."""
+    import urllib.error
+    api = _server(tmp_path); api.serve_in_thread()
+    try:
+        try:
+            _post(api, "chat/mission-intent/confirm", {"project_id": "job-opportunity-radar",
+                                                       "action_type": "CLARIFICATION_REQUIRED"})
+            assert False, "expected an HTTP error for a non-NEXT_ROADMAP_LOT_READY payload"
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 409
+
+        try:
+            _post(api, "chat/mission-intent/confirm", {"project_id": "job-opportunity-radar",
+                                                       "action_type": "NEXT_ROADMAP_LOT_READY"})
+            assert False, "expected an HTTP error — no roadmap data source is wired in yet"
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 409
+    finally:
+        api.close()
+
+
+def test_chat_mission_intent_confirm_auto_derives_and_launches_a_real_declared_lot(tmp_path):
+    """When a project DOES declare a real `next_lot` (signed Phase 0), the
+    full automatic path works end to end: /chat/mission-intent resolves
+    NEXT_ROADMAP_LOT_READY with the real lot data, and /chat/mission-intent/
+    confirm re-derives workspace/allowed_paths/test_command/network_capability
+    from that SAME project data (never from client input) and launches a
+    real mission — no manual JSON needed anywhere in this path."""
+    import time as time_mod
+
+    workspace = tmp_path / "fixture-repo"
+    workspace.mkdir()
+    for argv in (["git", "init", "-q"], ["git", "config", "user.email", "f@example.invalid"],
+                ["git", "config", "user.name", "f"]):
+        subprocess.run(argv, cwd=workspace, check=True)
+    (workspace / "module.py").write_text("VALUE = 1\n")
+    (workspace / "test_module.py").write_text("from module import VALUE\nassert VALUE == 2\n")
+    subprocess.run(["git", "add", "."], cwd=workspace, check=True)
+    subprocess.run(["git", "commit", "-qm", "base"], cwd=workspace, check=True)
+
+    projects_root = tmp_path / "projects"
+    profiles_root = tmp_path / "project_profiles"
+    project_dir = projects_root / "fixture-project"
+    project_dir.mkdir(parents=True)
+    (project_dir / "PROJECT_SPEC.md").write_text("SIGNÉ : ✅ GO Boss\n\nfixture spec\n")
+    profile_dir = profiles_root / "fixture-project"
+    profile_dir.mkdir(parents=True)
+    profile_dir_data = {
+        "project_id": "fixture-project", "aliases": ["Fixture Project"],
+        "repository_path": str(workspace),
+        "next_lot": {"source_file": "ROADMAP.md#lot-1", "item": "bump VALUE to 2",
+                    "test_command": f"{sys.executable} test_module.py",
+                    "allowed_paths": ["module.py"], "risk_tier": "normal"},
+    }
+    (profile_dir / "profile.json").write_text(json.dumps(profile_dir_data))
+
+    def build(_m, ws, _c):
+        (ws / "module.py").write_text("VALUE = 2\n")
+        return {"ok": True}
+
+    class _AcceptedReviewer:
+        provider = "codex"; model = "fixture-independent"
+        def review(self, run, _):
+            return {"ok": True, "decision": "pass",
+                    "proof": {"verdict": "ACCEPT", "candidate_tree": run["candidate_tree"],
+                             "findings": [], "reviewer": {"provider": self.provider, "model": self.model}}}
+
+    rt = RunRuntime(tmp_path / "state", builder=SandboxBuilder(build), reviewer=_AcceptedReviewer(),
+                    profiles=LocalProfileAdapter(), projects_root=projects_root, profiles_root=profiles_root)
+    api = LocalAPIServer(rt); api.serve_in_thread()
+    try:
+        _, body = _post(api, "chat/mission-intent", {"message": "Termine le prochain lot Fixture Project"})
+        mi = json.loads(body)
+        assert mi["action_type"] == "NEXT_ROADMAP_LOT_READY"
+        assert mi["project_id"] == "fixture-project"
+        assert mi["lot"]["item"] == "bump VALUE to 2"
+
+        _, body = _post(api, "chat/mission-intent/confirm", mi)
+        confirmed = json.loads(body)
+        run_id = confirmed["run_id"]
+
+        for _ in range(50):
+            status = api.runtime.get(run_id)["status"]
+            if status in {"needs_approval", "accepted", "blocked", "failed"}:
+                break
+            time_mod.sleep(0.1)
+        run = api.runtime.get(run_id)
+        assert run["status"] in {"needs_approval", "accepted"}, run
+        assert run["network_capability"] is False  # SandboxBuilder declares no network requirement
+        assert run["critical"] is False  # risk_tier "normal" in the declared lot
     finally:
         api.close()
 

@@ -324,3 +324,157 @@ def test_add5_reviewer_cannot_write_approval_or_promotion():
     called by the controller, ever do)."""
     assert not hasattr(ClaudeCLIReviewer, "approve")
     assert not hasattr(ClaudeCLIReviewer, "promote")
+
+
+# ---------------------------------------------------------------------------
+# Bounded Claude reviewer format-retry (Boss directive, 2026-07-21): ONE
+# retry, ONLY for a pure malformed-JSON/prose-prefixed-or-suffixed failure
+# with a successful process exit and an unchanged candidate tree — never for
+# mutation, timeout, non-zero exit, or a schema-valid-but-wrong verdict.
+# ---------------------------------------------------------------------------
+class _SequencedBackend:
+    """Returns a different scripted answer on each successive `execute()`
+    call — models the retry dispatch genuinely producing a SECOND, distinct
+    response, never just the first call replayed."""
+    def __init__(self, answers: list, returncodes: list | None = None):
+        self.answers = answers
+        self.returncodes = returncodes or [0] * len(answers)
+        self.calls = []
+
+    def execute(self, argv, *, cwd, timeout, network=False, environment_allowlist=None,
+               protected=False, preserve_host_environment=False, extra_read_paths=None,
+               extra_write_paths=None, auth_stage=None):
+        i = len(self.calls)
+        self.calls.append({"argv": argv})
+        answer = self.answers[min(i, len(self.answers) - 1)]
+        returncode = self.returncodes[min(i, len(self.returncodes) - 1)]
+        answer_text = answer if isinstance(answer, str) else json.dumps(answer)
+        return {"pid": 1, "returncode": returncode, "stdout": _result_envelope(answer_text), "stderr": ""}
+
+
+def test_malformed_first_attempt_retries_and_accepts_a_well_formed_second_attempt(tmp_path):
+    workspace, run_dir, candidate = _git_candidate(tmp_path)
+    tree = candidate["candidate_tree"]
+    good = {"candidate_tree": tree, "verdict": "ACCEPT", "findings": [],
+           "reviewer": {"provider": "claude-cli", "model": "m"}}
+    backend = _SequencedBackend(["I confirm the diff is correct. " + json.dumps(good), good])
+    reviewer = ClaudeCLIReviewer(backend=backend)
+    run = {"mission": "x", "candidate": candidate, "candidate_tree": tree}
+    result = reviewer.review_stage(run, run_dir, "final")
+    assert len(backend.calls) == 2
+    assert result["ok"] is True
+    assert result["format_retry_count"] == 1
+    assert len(result["raw_attempts"]) == 2
+    # the retry prompt states the exact required contract-violation text
+    retry_argv = backend.calls[1]["argv"]
+    retry_prompt = retry_argv[retry_argv.index("-p") + 1]
+    assert ("Your previous response violated the output contract. Return only the "
+           "required JSON object. No prose, markdown or code fence.") in retry_prompt
+
+
+def test_both_attempts_malformed_still_blocks_with_retry_count_visible(tmp_path):
+    workspace, run_dir, candidate = _git_candidate(tmp_path)
+    tree = candidate["candidate_tree"]
+    backend = _SequencedBackend(["still prose, not json", "still prose, not json either"])
+    reviewer = ClaudeCLIReviewer(backend=backend)
+    run = {"mission": "x", "candidate": candidate, "candidate_tree": tree}
+    result = reviewer.review_stage(run, run_dir, "final")
+    assert len(backend.calls) == 2
+    assert result["ok"] is False
+    assert result["format_retry_count"] == 1
+    assert len(result["raw_attempts"]) == 2
+
+
+def test_non_zero_exit_with_malformed_json_is_never_retried(tmp_path):
+    """A non-zero exit is never masked/rescued by a retry — the failure
+    isn't PURELY a formatting problem."""
+    workspace, run_dir, candidate = _git_candidate(tmp_path)
+    tree = candidate["candidate_tree"]
+    backend = _SequencedBackend(["prose, not json"], returncodes=[124])
+    reviewer = ClaudeCLIReviewer(backend=backend)
+    run = {"mission": "x", "candidate": candidate, "candidate_tree": tree}
+    result = reviewer.review_stage(run, run_dir, "final")
+    assert len(backend.calls) == 1  # no retry dispatched at all
+    assert result["ok"] is False
+    assert result["format_retry_count"] == 0
+
+
+def test_schema_valid_negative_verdict_is_never_retried_into_positive(tmp_path):
+    """A P1 verdict is well-formed JSON, not a format failure — it must
+    never trigger a retry (a negative verdict is never retried into
+    positive)."""
+    workspace, run_dir, candidate = _git_candidate(tmp_path)
+    tree = candidate["candidate_tree"]
+    p1 = {"candidate_tree": tree, "verdict": "P1", "findings": ["needs a concrete repair"],
+         "reviewer": {"provider": "claude-cli", "model": "m"}}
+    backend = _SequencedBackend([p1])
+    reviewer = ClaudeCLIReviewer(backend=backend)
+    run = {"mission": "x", "candidate": candidate, "candidate_tree": tree}
+    result = reviewer.review_stage(run, run_dir, "final")
+    assert len(backend.calls) == 1  # no retry — this was never a format failure
+    assert result["format_retry_count"] == 0
+    assert result["ok"] is False
+    assert result.get("verdict") == "P1"
+
+
+def test_mutation_during_the_retry_dispatch_itself_blocks(tmp_path):
+    """The retry dispatch is held to the exact same tree-integrity discipline
+    as the first attempt — a mutation introduced by the SECOND dispatch must
+    also BLOCK, never be silently accepted just because it's a retry."""
+    workspace, run_dir, candidate = _git_candidate(tmp_path)
+    tree = candidate["candidate_tree"]
+    good = {"candidate_tree": tree, "verdict": "ACCEPT", "findings": [],
+           "reviewer": {"provider": "claude-cli", "model": "m"}}
+
+    class _MalformedThenMutatingBackend:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, argv, *, cwd, timeout, network=False, environment_allowlist=None,
+                   protected=False, preserve_host_environment=False, extra_read_paths=None,
+                   extra_write_paths=None, auth_stage=None):
+            self.calls.append(1)
+            if len(self.calls) == 1:
+                return {"pid": 1, "returncode": 0, "stdout": _result_envelope("prose, not json"), "stderr": ""}
+            import stat
+            target = Path(cwd) / "a.py"
+            target.chmod(target.stat().st_mode | stat.S_IWUSR)
+            target.write_text("X = 999  # mutated during the retry\n")
+            return {"pid": 1, "returncode": 0, "stdout": _result_envelope(json.dumps(good)), "stderr": ""}
+
+    backend = _MalformedThenMutatingBackend()
+    reviewer = ClaudeCLIReviewer(backend=backend)
+    run = {"mission": "x", "candidate": candidate, "candidate_tree": tree}
+    result = reviewer.review_stage(run, run_dir, "final")
+    assert len(backend.calls) == 2
+    assert result["ok"] is False
+    assert "retry" in result["reason"]
+    assert result["format_retry_count"] == 1
+
+
+def test_retry_never_dispatched_for_the_plan_stage_when_answer_is_well_formed(tmp_path):
+    """Sanity check: a well-formed plan-stage response (no candidate at all)
+    is never retried — same "only a pure format failure" gate applies."""
+    backend = _SequencedBackend([{"candidate_tree": None, "verdict": "ACCEPT", "findings": [],
+                                 "reviewer": {"provider": "claude-cli", "model": "m"}}])
+    reviewer = ClaudeCLIReviewer(backend=backend)
+    run = {"mission": "x", "workspace": str(tmp_path)}
+    result = reviewer.review_stage(run, tmp_path, "plan")
+    assert len(backend.calls) == 1
+    assert result["format_retry_count"] == 0
+
+
+def test_malformed_plan_stage_response_is_retried_too(tmp_path):
+    """The format-retry is not scoped to only build/final stages — a plan
+    stage has no candidate tree to protect, so "tree unchanged" is trivially
+    satisfied, and a pure format failure there is retried exactly the same
+    way."""
+    good = {"candidate_tree": None, "verdict": "ACCEPT", "findings": [],
+           "reviewer": {"provider": "claude-cli", "model": "m"}}
+    backend = _SequencedBackend(["prose before the json", good])
+    reviewer = ClaudeCLIReviewer(backend=backend)
+    run = {"mission": "x", "workspace": str(tmp_path)}
+    result = reviewer.review_stage(run, tmp_path, "plan")
+    assert len(backend.calls) == 2
+    assert result["ok"] is True
+    assert result["format_retry_count"] == 1

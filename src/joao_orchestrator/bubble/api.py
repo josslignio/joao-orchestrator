@@ -65,6 +65,7 @@ class LocalAPIServer:
                     if not self.authorized(): return self.send(401, {"error": "missing or invalid local session token"})
                     if path == "/chat/classify": return self.send(200, outer.chat_classify(self.payload()))
                     if path == "/chat/mission-intent": return self.send(200, outer.chat_mission_intent(self.payload()))
+                    if path == "/chat/mission-intent/confirm": return self.send(202, outer.chat_mission_intent_confirm(self.payload()))
                     if path == "/chat/attach": return self.send(200, outer.chat_attach(self.payload()))
                     if path == "/chat/mission": return self.send(202, outer.launch(self.payload()))
                     if path == "/chat": return self.stream_chat(self.payload())
@@ -111,7 +112,12 @@ class LocalAPIServer:
                                    "provider_family": getattr(self.runtime.builder, "provider_family", None)},
                 "active_reviewer": {"provider": getattr(self.runtime.reviewer, "provider", None),
                                     "provider_family": getattr(self.runtime.reviewer, "provider_family", None)},
-                "claude_builder_status": check_builder_availability("anthropic")}
+                "claude_builder_status": check_builder_availability("anthropic"),
+                # ProjectRegistry diagnostics (Boss directive, 2026-07-21): expose the
+                # ACTUAL resolved project-profile/project-authority roots and how each
+                # was resolved (explicit arg/env, this repo, or a declared state-root
+                # manifest) — never a silently-assumed HOME-wide search.
+                "project_registry": self.runtime.project_registry.diagnostics()}
 
     @staticmethod
     def command(text):
@@ -159,7 +165,62 @@ class LocalAPIServer:
         text = str(data.get("message", "")).strip()
         if not text:
             raise ValueError("message is required")
-        return mission_intent_mod.resolve_chat_intent(text, projects_root=self.runtime.projects_root)
+        return mission_intent_mod.resolve_chat_intent(text, projects_root=self.runtime.projects_root,
+                                                       profiles_root=self.runtime.profiles_root)
+
+    def chat_mission_intent_confirm(self, data):
+        """Boss GO for a `NEXT_ROADMAP_LOT_READY` resolution — the ONLY way
+        the automatic (non-Advanced/Recovery) chat path may create a mission.
+        Never trusts client-supplied workspace/allowed_paths/test_command/
+        critical/network_capability, and never trusts the client's claimed
+        `action_type`/`lot` either: EVERYTHING is re-derived here, fresh,
+        from the project's own authority documents/registry (Boss directive,
+        2026-07-21, section 5/6) — a stale or hand-built payload can never
+        talk this endpoint into a mission the current, real state doesn't
+        support. `network_capability` is ALWAYS derived from the active
+        builder's own declared `requires_network_transport` — never from
+        client input — so chat text can never escalate it.
+
+        No project registered today declares a real lot/task-level roadmap
+        (verified in `mission_intent.py`'s own docstring) — so this always
+        fails closed for the two production projects. It exists, real and
+        exercised (never a 404), for any project that DOES declare one."""
+        from . import kickoff as kickoff_mod
+        from . import mission_intent as mission_intent_mod
+        project_id = str(data.get("project_id", "")).strip()
+        if not project_id:
+            raise ValueError("project_id is required")
+
+        signed = kickoff_mod.spec_is_signed(self.runtime.projects_root, project_id)
+        if not signed:
+            raise ValueError(f"Phase 0 is not signed for project {project_id!r} — "
+                            "refusing to derive a mission from an unsigned authority")
+
+        lot = mission_intent_mod.resolve_next_lot(project_id, profiles_root=self.runtime.profiles_root)
+        if lot is None:
+            raise ValueError(f"project {project_id!r} declares no lot/task-level roadmap data — "
+                            "a mission is never fabricated from a missing roadmap")
+
+        repo_path = self.runtime.project_registry.project_repository_path(project_id)
+        workspace = lot.get("workspace") or (str(repo_path) if repo_path else None)
+        if not workspace:
+            raise ValueError(f"project {project_id!r} declares a lot but no resolvable workspace "
+                            "(neither the lot nor the project's profile.json declares one)")
+        root = Path(workspace).expanduser().resolve()
+        paths = [str(p).strip() for p in lot["allowed_paths"] if str(p).strip()]
+        if not paths:
+            raise ValueError("the declared lot has no non-empty allowed_paths")
+        profile = ProjectProfile(project_id=project_id, display_name=project_id, repository_root=str(root),
+                                 allowed_write_paths=paths, forbidden_paths=[], approval_required=True)
+        critical = str(lot.get("risk_tier", "normal")).strip().lower() == "critical"
+        mission_text = f"Complete the next roadmap lot: {lot['item']} (see {lot['source_file']})"
+        run = self.runtime.start(project_id=project_id, workspace=root, mission=mission_text,
+                                 targeted_tests=[], full_tests=[self.command(str(lot["test_command"]))],
+                                 profile=profile, critical=critical,
+                                 network_capability=bool(getattr(self.runtime.builder,
+                                                                "requires_network_transport", False)))
+        self.drive(run)
+        return {"run_id": run, "status": "queued", "project_id": project_id}
 
     # ─────────────── V2.2 attachments (BLOC B3) ───────────────
     def chat_attach(self, data):

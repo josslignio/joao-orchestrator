@@ -1,5 +1,6 @@
 {
   "project_id": "job-opportunity-radar",
+  "aliases": ["JobRadar", "Job Radar", "Job Opportunity Radar", "Job CV Auto", "job-cv-auto", "job-opportunity-radar"],
   "repository_path": "/Users/jocelyngrosjean/job-opportunity-radar",
   "runtime_root": "~/.local/share/joss-orchestrator/projects/job-opportunity-radar",
   "known_good_command": "scripts/run_daily.sh",

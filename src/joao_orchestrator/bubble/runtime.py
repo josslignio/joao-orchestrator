@@ -21,8 +21,9 @@ from ..storage.atomic import FileLock, LockAcquireError, append_line, atomic_wri
 from .sandbox import run_sandboxed
 from .execution_backend import ExecutionBackend, LocalUntrustedBackend, preflight_backend
 from .candidate import CandidateError, freeze_baseline, freeze_candidate, recompute_candidate_tree, release_candidate
+from . import project_registry as project_registry_mod
 from .change_capture import EMPTY_DIFF_SHA256, capture_full_diff, ignored_files_inventory
-from .reviewer_contract import validate_reviewer_verdict
+from .reviewer_contract import parse_reviewer_response, validate_reviewer_verdict
 from . import promotion as promotion_mod
 from . import secure_import as secure_import_mod
 from .gates import build_frozen_mission
@@ -559,9 +560,12 @@ class GPTFormalEvidenceReviewer(ReviewerAdapter):
             expected_model=self.model, now=now())
 
     def review(self, run, run_dir):
-        # `run` has no distinct "mission_id" field in this schema — the
-        # closest stable identifier RunRuntime tracks is `project_id`.
-        return self.review_secure(run_id=run.get("run_id", ""), mission_id=run.get("project_id", ""),
+        # mission_id == run_id, ALWAYS (Boss directive, 2026-07-21): the one
+        # identifier RunRuntime mints per mission and propagates everywhere —
+        # never `project_id` (a prior bug substituted it here, diverging from
+        # the builder side, which always used run_id).
+        run_id = run.get("run_id", "")
+        return self.review_secure(run_id=run_id, mission_id=run_id,
                                   candidate_tree=run.get("candidate_tree", ""))
 
 
@@ -608,9 +612,12 @@ class ClaudeChatEvidenceReviewer(ReviewerAdapter):
             expected_model=self.model, now=now())
 
     def review(self, run, run_dir):
-        # `run` has no distinct "mission_id" field in this schema — the
-        # closest stable identifier RunRuntime tracks is `project_id`.
-        return self.review_secure(run_id=run.get("run_id", ""), mission_id=run.get("project_id", ""),
+        # mission_id == run_id, ALWAYS (Boss directive, 2026-07-21): the one
+        # identifier RunRuntime mints per mission and propagates everywhere —
+        # never `project_id` (a prior bug substituted it here, diverging from
+        # the builder side, which always used run_id).
+        run_id = run.get("run_id", "")
+        return self.review_secure(run_id=run_id, mission_id=run_id,
                                   candidate_tree=run.get("candidate_tree", ""))
 
 
@@ -1077,7 +1084,6 @@ class ClaudeCLIReviewer(ReviewerAdapter):
             "edit, commit, push, install packages or call external services. "
             f"{_CLAUDE_REVIEW_CONTRACT}"
         )
-        output = run_dir / f"claude-{stage}-review.jsonl"
         # `--bare`: ANTHROPIC_API_KEY-only auth (see class docstring) — no
         # Keychain/OAuth read, so this dispatch can run under a genuinely
         # fresh temp HOME, never `preserve_host_environment`.
@@ -1091,28 +1097,33 @@ class ClaudeCLIReviewer(ReviewerAdapter):
         # NOTE: no `--bare` here (unlike ClaudeCodeBuilder) — `--bare` would
         # explicitly disable the real Keychain/OAuth session this dispatch
         # relies on (see class docstring, ADD-5).
-        argv = [self.executable, "-p", prompt, "--model", self.model,
-                "--permission-mode", "plan", "--output-format", "json",
-                "--add-dir", str(review_root)]
-        # A0.2 (§12.2): `network=True` here is `provider_transport_network`
-        # (Claude must reach its own backend to answer at all), never the
-        # mission's own `task_network` — identical framing to
-        # `CodexCLIReviewer`/`GLMReviewer` above. `preserve_host_environment=
-        # True` (ADD-5, scoped to REVIEWERS only — see class docstring for
-        # the three compensating factors): the real Keychain-backed
-        # subscription session, never staged/bounded — `ClaudeCodeBuilder`
-        # never receives this flag (`tests/test_a0_2_corrections.py` asserts
-        # it statically).
-        dispatch = self.backend.execute(argv, cwd=review_root, timeout=self.timeout,
-                                        network=True, preserve_host_environment=True,
-                                        extra_read_paths=_executable_read_paths(self.executable),
-                                        extra_write_paths=[str(run_dir)])
+        def _dispatch_one(prompt_text: str, output_path: Path) -> dict[str, Any]:
+            argv = [self.executable, "-p", prompt_text, "--model", self.model,
+                    "--permission-mode", "plan", "--output-format", "json",
+                    "--add-dir", str(review_root)]
+            # A0.2 (§12.2): `network=True` here is `provider_transport_network`
+            # (Claude must reach its own backend to answer at all), never the
+            # mission's own `task_network` — identical framing to
+            # `CodexCLIReviewer`/`GLMReviewer` above. `preserve_host_environment=
+            # True` (ADD-5, scoped to REVIEWERS only — see class docstring for
+            # the three compensating factors): the real Keychain-backed
+            # subscription session, never staged/bounded — `ClaudeCodeBuilder`
+            # never receives this flag (`tests/test_a0_2_corrections.py` asserts
+            # it statically).
+            d = self.backend.execute(argv, cwd=review_root, timeout=self.timeout,
+                                     network=True, preserve_host_environment=True,
+                                     extra_read_paths=_executable_read_paths(self.executable),
+                                     extra_write_paths=[str(run_dir)])
+            if d.get("pid"):
+                atomic_write_text(output_path, d.get("stdout", ""))
+            return d
+
+        output = run_dir / f"claude-{stage}-review.jsonl"
+        dispatch = _dispatch_one(prompt, output)
         if not dispatch.get("pid"):
             return {"ok": False, "decision": "block", "stage": stage,
                     "reason": f"Claude reviewer unavailable: {dispatch.get('stderr', '')}",
                     "reviewed_path": str(review_root)}
-
-        atomic_write_text(output, dispatch.get("stdout", ""))
 
         post_tree = None
         if stage != "plan":
@@ -1134,10 +1145,63 @@ class ClaudeCLIReviewer(ReviewerAdapter):
         result = validate_reviewer_verdict(answer_text, expected_candidate_tree=candidate_tree,
                                           provider=self.provider, model=self.model,
                                           returncode=dispatch.get("returncode", -1))
+
+        # Bounded format-only retry (Boss directive, 2026-07-21): ONE retry,
+        # ONLY when the process exited successfully, the candidate tree is
+        # unchanged (already proven above for non-plan stages — this point is
+        # unreachable otherwise), AND the response failed SOLELY because the
+        # contractual JSON was malformed/prefixed/suffixed with prose
+        # (`parse_reviewer_response` returning None — never for a
+        # schema-valid-but-wrong-shape response, a P1/BLOCK verdict, a
+        # mutation, a timeout, or a non-zero exit). Same candidate
+        # commit/tree, same reviewer identity, no builder rerun. Both raw
+        # attempts are preserved; the retry count is always visible.
+        format_retry_count = 0
+        raw_attempts = [dispatch.get("stdout", "")]
+        if dispatch.get("returncode", -1) == 0 and parse_reviewer_response(answer_text) is None:
+            retry_prompt = (
+                f"{prompt}\n\nYour previous response violated the output contract. "
+                "Return only the required JSON object. No prose, markdown or code fence."
+            )
+            retry_output = run_dir / f"claude-{stage}-review-retry.jsonl"
+            retry_dispatch = _dispatch_one(retry_prompt, retry_output)
+            format_retry_count = 1
+            raw_attempts.append(retry_dispatch.get("stdout", ""))
+            if retry_dispatch.get("pid"):
+                retry_post_tree = post_tree
+                retry_tree_ok = True
+                retry_mutation_reason = None
+                if stage != "plan":
+                    try:
+                        retry_post_tree = recompute_candidate_tree(review_root)
+                    except Exception as exc:  # fail-closed: cannot verify => the retry cannot be trusted
+                        retry_tree_ok = False
+                        retry_mutation_reason = f"could not verify candidate after format retry: {type(exc).__name__}: {exc}"
+                    else:
+                        if retry_post_tree != candidate_tree:
+                            retry_tree_ok = False
+                            retry_mutation_reason = "candidate was tampered during or after the format retry"
+                if retry_tree_ok:
+                    retry_answer_text = _extract_claude_final_answer(retry_dispatch.get("stdout", ""))
+                    result = validate_reviewer_verdict(retry_answer_text, expected_candidate_tree=candidate_tree,
+                                                      provider=self.provider, model=self.model,
+                                                      returncode=retry_dispatch.get("returncode", -1))
+                    post_tree = retry_post_tree
+                    dispatch = retry_dispatch
+                    output = retry_output
+                else:
+                    result = {"ok": False, "decision": "block", "schema_valid": False,
+                             "reason": retry_mutation_reason, "candidate_commit": candidate.get("candidate_commit"),
+                             "expected_candidate_tree": candidate_tree,
+                             "recomputed_tree_after_review": retry_post_tree}
+            # else: the retry dispatch itself never launched — keep the original
+            # malformed-JSON `result` unchanged; never fabricate a pass.
+
         return {**result, "stage": stage, "returncode": dispatch.get("returncode", -1), "output": str(output),
                 "stderr": dispatch.get("stderr", "")[-4000:], "reviewed_path": str(review_root),
                 "candidate_commit": candidate.get("candidate_commit") if candidate else None,
-                "recomputed_tree_before_review": pre_tree, "recomputed_tree_after_review": post_tree}
+                "recomputed_tree_before_review": pre_tree, "recomputed_tree_after_review": post_tree,
+                "format_retry_count": format_retry_count, "raw_attempts": raw_attempts}
 
     def review(self, run, run_dir):
         return self.review_stage(run, run_dir, "final")
@@ -1156,13 +1220,16 @@ def claude_capability() -> dict[str, Any]:
 
 class RunRuntime:
     """Persistent CP2 state machine, evidence writer and bounded repair loop."""
-    def __init__(self, state_root: Path, *, builder: BuilderAdapter, reviewer: ReviewerAdapter | None = None, tests: TestRunnerAdapter | None = None, memory: MemoryAdapter | None = None, profiles: ProjectProfileAdapter | None = None, enforce_phase0: bool = False, projects_root: Path | None = None, ledger_sync: bool = False):
+    def __init__(self, state_root: Path, *, builder: BuilderAdapter, reviewer: ReviewerAdapter | None = None, tests: TestRunnerAdapter | None = None, memory: MemoryAdapter | None = None, profiles: ProjectProfileAdapter | None = None, enforce_phase0: bool = False, projects_root: Path | None = None, profiles_root: Path | None = None, ledger_sync: bool = False):
         self.root = Path(state_root).expanduser(); self.builder = builder
         self.reviewer = reviewer or CodexEvidenceReviewer(); self.tests = tests or LocalTestRunner()
         self.memory = memory or LocalMemoryAdapter(self.root / "memory"); self.profiles = profiles or LocalProfileAdapter()
         self.enforce_phase0 = enforce_phase0
         self.ledger_sync = ledger_sync
-        self.projects_root = Path(projects_root).expanduser() if projects_root else self.root / "projects"
+        self.project_registry = project_registry_mod.ProjectRegistry(
+            state_root=self.root, projects_root=projects_root, profiles_root=profiles_root)
+        self.projects_root = self.project_registry.resolve_projects_root().path
+        self.profiles_root = self.project_registry.resolve_profiles_root().path
     def _dir(self, run_id: str) -> Path: return self.root / "runs" / run_id
     def _inject(self, run: dict[str, Any], role: str, *, files_touched: list[str] | None = None, stage: str | None = None):
         """Compose the role's RÈGLES ACTIVES block, persist it as evidence, log the ids.

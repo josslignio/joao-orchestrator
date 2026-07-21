@@ -16,11 +16,20 @@ from pathlib import Path
 import pytest
 
 from src.joao_orchestrator.worker_host import client as client_mod
-from src.joao_orchestrator.worker_host import protocol
+from src.joao_orchestrator.worker_host import hmac_auth, protocol
 from src.joao_orchestrator.worker_host.proxies import RemoteBuilderProxy, RemoteReviewerProxy
 from src.joao_orchestrator.worker_host.server import WorkerHost, WorkerHostServer
 
 TREE = "a" * 40
+
+
+def _signed(host, body):
+    """Test helper: wrap a raw request body in a valid HMAC envelope using
+    the given WorkerHost's own secret — every `host.handle(...)` call below
+    that expects to reach protocol validation/dispatch must go through this
+    (Boss directive, 2026-07-21: the envelope is verified before worker
+    selection, so an unsigned payload never gets that far)."""
+    return hmac_auth.sign_request(body, secret=host.secret)
 
 
 # ---------------------------------------------------------------------------
@@ -131,19 +140,20 @@ def _host(tmp_path, **kwargs):
 
 def test_handle_dispatches_to_the_registered_builder(tmp_path):
     host = _host(tmp_path)
-    result = host.handle(_valid_builder_request(request_id="req-1", workspace=str(tmp_path)))
+    result = host.handle(_signed(host, _valid_builder_request(request_id="req-1", workspace=str(tmp_path))))
     assert result["ok"] is True
     assert result["request_id"] == "req-1"
 
 
 def test_handle_rejects_duplicate_request_id(tmp_path):
     host = _host(tmp_path)
-    req = _valid_builder_request(request_id="dup-1", workspace=str(tmp_path))
+    # Same signed envelope replayed verbatim — request_id AND nonce collide.
+    req = _signed(host, _valid_builder_request(request_id="dup-1", workspace=str(tmp_path)))
     first = host.handle(req)
     assert first["ok"] is True
     replay = host.handle(req)
     assert replay["ok"] is False
-    assert replay["reason_code"] == "WORKER_HOST_DUPLICATE_REQUEST"
+    assert replay["reason_code"] in {"WORKER_HOST_DUPLICATE_REQUEST", "WORKER_HOST_REPLAYED_NONCE"}
 
 
 def test_duplicate_detection_persists_across_host_restart(tmp_path):
@@ -153,20 +163,21 @@ def test_duplicate_detection_persists_across_host_restart(tmp_path):
     state_dir = tmp_path / "state"
     host1 = WorkerHost(state_dir, builders={"zai-coding-plan": _FakeBuilder},
                        reviewers={"zai-coding-plan": _FakeReviewer})
-    req = _valid_builder_request(request_id="persisted-1", workspace=str(tmp_path))
+    req = _signed(host1, _valid_builder_request(request_id="persisted-1", workspace=str(tmp_path)))
     assert host1.handle(req)["ok"] is True
 
-    # Simulate a process restart: a brand-new WorkerHost instance, same state_dir.
+    # Simulate a process restart: a brand-new WorkerHost instance, same state_dir
+    # (same on-disk secret too — `ensure_secret` never rotates an existing one).
     host2 = WorkerHost(state_dir, builders={"zai-coding-plan": _FakeBuilder},
                        reviewers={"zai-coding-plan": _FakeReviewer})
     replay = host2.handle(req)
     assert replay["ok"] is False
-    assert replay["reason_code"] == "WORKER_HOST_DUPLICATE_REQUEST"
+    assert replay["reason_code"] in {"WORKER_HOST_DUPLICATE_REQUEST", "WORKER_HOST_REPLAYED_NONCE"}
 
 
 def test_handle_never_dispatches_an_unavailable_worker(tmp_path):
     host = _host(tmp_path, builders={"zai-coding-plan": _UnavailableBuilder})
-    result = host.handle(_valid_builder_request(request_id="unavail-1", workspace=str(tmp_path)))
+    result = host.handle(_signed(host, _valid_builder_request(request_id="unavail-1", workspace=str(tmp_path))))
     assert result["ok"] is False
     assert result["reason_code"] == "WORKER_HOST_WORKER_UNAVAILABLE"
 
@@ -179,8 +190,8 @@ def test_explicit_claude_builder_selection_blocks_before_any_subprocess(tmp_path
     from src.joao_orchestrator.bubble.runtime import CLAUDE_BUILDER_UNAVAILABLE_REASON, ClaudeCodeBuilder
     host = WorkerHost(tmp_path / "state", builders={"claude-cli": ClaudeCodeBuilder},
                       reviewers={"zai-coding-plan": _FakeReviewer})
-    result = host.handle(_valid_builder_request(request_id="claude-builder-1", worker="claude-cli",
-                                                workspace=str(tmp_path)))
+    result = host.handle(_signed(host, _valid_builder_request(request_id="claude-builder-1", worker="claude-cli",
+                                                             workspace=str(tmp_path))))
     assert result["ok"] is False
     assert result["reason_code"] == "WORKER_HOST_WORKER_UNAVAILABLE"
     assert result["unavailable_reason"] == CLAUDE_BUILDER_UNAVAILABLE_REASON
@@ -189,8 +200,8 @@ def test_explicit_claude_builder_selection_blocks_before_any_subprocess(tmp_path
 
 def test_handle_unknown_worker_blocks(tmp_path):
     host = _host(tmp_path)
-    result = host.handle(_valid_builder_request(request_id="unknown-1", worker="claude-cli",
-                                                workspace=str(tmp_path)))
+    result = host.handle(_signed(host, _valid_builder_request(request_id="unknown-1", worker="claude-cli",
+                                                             workspace=str(tmp_path))))
     assert result["ok"] is False
     assert result["reason_code"] == "WORKER_HOST_UNKNOWN_WORKER"
 
@@ -199,20 +210,34 @@ def test_handle_malformed_payload_blocks_not_raises(tmp_path):
     host = _host(tmp_path)
     result = host.handle({"nonsense": True})
     assert result["ok"] is False
+    # An entirely unsigned payload is blocked by the HMAC envelope check —
+    # BEFORE protocol validation even runs (Boss directive, 2026-07-21:
+    # "malformed/unsigned requests BLOCK before worker selection").
+    assert result["reason_code"] == "WORKER_HOST_UNSIGNED_REQUEST"
+
+
+def test_handle_signed_but_protocol_malformed_payload_blocks(tmp_path):
+    """A properly signed envelope whose BODY is still protocol-malformed
+    (missing required business fields) is caught by protocol validation,
+    one layer after HMAC verification — proves the two layers are genuinely
+    independent, not just one masking the other."""
+    host = _host(tmp_path)
+    result = host.handle(_signed(host, {"nonsense": True, "request_id": "malformed-1"}))
+    assert result["ok"] is False
     assert result["reason_code"] == "WORKER_HOST_MALFORMED_REQUEST"
 
 
 def test_handle_worker_crash_fails_closed_never_raises(tmp_path):
     host = _host(tmp_path, builders={"zai-coding-plan": _CrashingBuilder})
-    result = host.handle(_valid_builder_request(request_id="crash-1", workspace=str(tmp_path)))
+    result = host.handle(_signed(host, _valid_builder_request(request_id="crash-1", workspace=str(tmp_path))))
     assert result["ok"] is False
     assert result["reason_code"] == "WORKER_HOST_DISPATCH_EXCEPTION"
 
 
 def test_handle_reviewer_dispatch_binds_candidate_tree(tmp_path):
     host = _host(tmp_path)
-    request = _valid_builder_request(request_id="rev-1", role="reviewer", stage="final",
-                                     candidate_tree=TREE, candidate_readonly_copy=str(tmp_path))
+    request = _signed(host, _valid_builder_request(request_id="rev-1", role="reviewer", stage="final",
+                                                   candidate_tree=TREE, candidate_readonly_copy=str(tmp_path)))
     result = host.handle(request)
     assert result["ok"] is True
     assert result["proof"]["candidate_tree"] == TREE
@@ -223,11 +248,11 @@ def test_worker_identity_never_supplied_by_the_request_or_model_output(tmp_path)
     trying to impersonate a different identity, the DISPATCHED adapter's own
     class-level identity (never a request field) is what ends up in the
     proof — the protocol doesn't even accept a `provider` override field."""
+    host = _host(tmp_path)
     request = _valid_builder_request(request_id="identity-1", role="reviewer", stage="final",
                                      candidate_tree=TREE, candidate_readonly_copy=str(tmp_path))
     request["provider"] = "forged-provider"  # not part of the contract; must be ignored
-    host = _host(tmp_path)
-    result = host.handle(request)
+    result = host.handle(_signed(host, request))
     assert result["ok"] is True
     assert result["proof"]["reviewer"]["provider"] == "fake-reviewer"  # the REAL registered reviewer's identity
 
@@ -285,7 +310,11 @@ def test_real_socket_round_trip_dispatch(running_server, tmp_path):
     request = {"request_id": "socket-1", "run_id": "run-1", "mission_id": "mission-1",
               "worker": "zai-coding-plan", "role": "builder", "model": "m",
               "workspace": str(tmp_path), "timeout": 30, "mission": "do it"}
-    result = client_mod.send_request(request, socket_path=running_server.socket_path)
+    # `running_server` was built with state_dir=tmp_path/"state" — the client
+    # must look for the controller secret in that SAME state dir to sign
+    # this request the server will accept.
+    result = client_mod.send_request(request, socket_path=running_server.socket_path,
+                                     state_dir=tmp_path / "state")
     assert result["ok"] is True
     assert result["request_id"] == "socket-1"
 
@@ -324,8 +353,9 @@ def test_client_rejects_a_response_bound_to_a_different_run(monkeypatch, tmp_pat
 
     monkeypatch.setattr(socket_mod, "socket", lambda *a, **k: _FakeSocket())
     (tmp_path / "fake.sock").touch()
+    hmac_auth.ensure_secret(tmp_path / "state")
     result = client_mod.send_request({"request_id": "x", "run_id": "run-1", "mission_id": "m"},
-                                     socket_path=tmp_path / "fake.sock")
+                                     socket_path=tmp_path / "fake.sock", state_dir=tmp_path / "state")
     assert result["ok"] is False
     assert result["reason_code"] == "WORKER_HOST_RESPONSE_MISMATCH"
 
@@ -336,7 +366,8 @@ def test_client_rejects_a_response_bound_to_a_different_run(monkeypatch, tmp_pat
 def test_remote_builder_proxy_sends_correct_worker_and_identity(running_server, tmp_path):
     from src.joao_orchestrator.bubble.runtime import BuilderAdapter
     proxy = RemoteBuilderProxy(worker="zai-coding-plan", provider="zai-coding-plan", model="m",
-                              provider_family="zai", socket_path=running_server.socket_path)
+                              provider_family="zai", socket_path=running_server.socket_path,
+                              state_dir=tmp_path / "state")
     assert isinstance(proxy, BuilderAdapter)
     run_dir = tmp_path / "runs" / "run-abc"
     run_dir.mkdir(parents=True)
@@ -366,6 +397,39 @@ def test_remote_reviewer_proxy_unavailable_when_no_host(tmp_path):
     proxy = RemoteReviewerProxy(worker="claude-cli", provider="claude-cli", model="m",
                                provider_family="anthropic", socket_path=tmp_path / "no-socket.sock")
     assert proxy.available() is False
+
+
+def test_builder_and_reviewer_proxies_use_the_same_mission_id_for_one_mission(tmp_path, monkeypatch):
+    """Boss directive (2026-07-21) root-cause fix: the builder proxy always
+    set `mission_id = run_id`, but the reviewer proxy used to set
+    `mission_id = project_id` for the SAME mission — two different values
+    for what must be one propagated identifier end-to-end. mission_id ==
+    run_id, always, on both sides."""
+    captured = {}
+
+    def fake_send_request(request, **_kwargs):
+        captured[request["role"]] = request
+        return {"ok": True}
+
+    monkeypatch.setattr(client_mod, "send_request", fake_send_request)
+
+    run_id = "run-xyz"
+    run_dir = tmp_path / "runs" / run_id
+    run_dir.mkdir(parents=True)
+
+    builder_proxy = RemoteBuilderProxy(worker="zai-coding-plan", provider="zai-coding-plan",
+                                       model="m", provider_family="zai")
+    builder_proxy.build("do it", tmp_path, run_dir, [], False)
+
+    reviewer_proxy = RemoteReviewerProxy(worker="zai-coding-plan", provider="zai-coding-plan",
+                                        model="m", provider_family="zai")
+    run = {"run_id": run_id, "project_id": "some-totally-different-project-id",
+          "workspace": str(tmp_path), "mission": "do it"}
+    reviewer_proxy.review(run, run_dir)
+
+    assert captured["builder"]["mission_id"] == run_id
+    assert captured["reviewer"]["mission_id"] == run_id
+    assert captured["builder"]["mission_id"] == captured["reviewer"]["mission_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +477,7 @@ def test_concurrent_requests_never_cross_talk_capabilities(tmp_path):
     def run(request_id, network_capability):
         req = _valid_builder_request(request_id=request_id, workspace=str(tmp_path))
         req["network_capability"] = network_capability
-        results[request_id] = host.handle(req)
+        results[request_id] = host.handle(_signed(host, req))
 
     t1 = threading.Thread(target=run, args=("concurrent-true", True))
     t2 = threading.Thread(target=run, args=("concurrent-false", False))
@@ -448,7 +512,7 @@ def test_concurrent_requests_have_distinct_run_dirs_no_worktree_cross_talk(tmp_p
         ws.mkdir()
         rd = tmp_path / f"rundir-{subdir}"
         req = _valid_builder_request(request_id=request_id, workspace=str(ws), run_dir=str(rd))
-        results[request_id] = host.handle(req)
+        results[request_id] = host.handle(_signed(host, req))
 
     t1 = threading.Thread(target=run, args=("worktree-a", "a"))
     t2 = threading.Thread(target=run, args=("worktree-b", "b"))

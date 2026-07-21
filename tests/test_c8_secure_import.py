@@ -163,7 +163,10 @@ def test_gpt_formal_evidence_reviewer_no_import_yet_blocks(tmp_path):
 
 def test_gpt_formal_evidence_reviewer_valid_import_accepts(tmp_path):
     inbox = tmp_path / "inbox"
-    challenge = _issue(inbox, mission_id="fixture")
+    # mission_id == run_id (Boss directive, 2026-07-21 fix): `.review()` used
+    # to derive mission_id from project_id — a prior bug, diverging from the
+    # worker-host builder side, which always used run_id.
+    challenge = _issue(inbox, mission_id="run-1")
     (inbox / "gpt-review-import.json").write_text(_envelope(challenge["nonce"], _accept_payload()))
     reviewer = GPTFormalEvidenceReviewer(inbox_dir=inbox)
     result = reviewer.review({"run_id": "run-1", "project_id": "fixture", "candidate_tree": TREE}, tmp_path)

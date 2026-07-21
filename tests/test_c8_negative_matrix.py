@@ -114,8 +114,10 @@ def test_evidence_placed_in_builder_writable_run_dir_is_never_consumed_as_secure
     # The builder "attacks": forges an import file at the exact name/shape
     # the reviewer looks for, but inside the builder-writable run_dir, not
     # the real inbox.
+    # mission_id == run_id (Boss directive, 2026-07-21 fix): a prior bug had
+    # `.review()` derive mission_id from project_id instead of run_id.
     challenge = secure_import.issue_challenge(
-        real_inbox, run_id="run-1", mission_id="fixture", candidate_tree=TREE,
+        real_inbox, run_id="run-1", mission_id="run-1", candidate_tree=TREE,
         expected_reviewer_provider="openai-gpt", issued_at="2026-07-20T12:00:00Z",
         expires_at="2099-07-20T12:00:00Z")
     forged_envelope = json.dumps({
