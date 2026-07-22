@@ -48,6 +48,8 @@ class CodexSubscriptionProvider(ProviderAdapter):
         return self.engine.is_available() and self.engine.has_required_auth()
 
     def invoke(self, request: ProviderRequest) -> ProviderResponse:
+        from ..bubble.write_tier_policy import assert_write_tier_enabled
+        assert_write_tier_enabled("CodexSubscriptionProvider.invoke")
         require_capability(request, "workspace.write")
         if request.role not in self.supported_roles:
             return ProviderResponse(

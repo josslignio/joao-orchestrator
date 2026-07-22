@@ -984,6 +984,8 @@ def _invoke_fixer(
     
     Fail-closed behavior: an unavailable or unimplemented real fixer returns
     non-zero failure, never a synthetic success."""
+    from ..bubble.write_tier_policy import assert_write_tier_enabled
+    assert_write_tier_enabled("convergence._invoke_fixer")
     exe = config.fix_executable
     if exe:
         return _run_fake_fixer(

@@ -223,6 +223,8 @@ class WorkerHost:
                           + (f": {reason}" if reason else " (capability probe failed)")
                           + " — an unavailable worker is never dispatched",
                           unavailable_reason=reason)
+        from ..bubble.write_tier_policy import assert_write_tier_enabled as _awte
+        _awte("worker_host.dispatch")
         if hasattr(builder, "set_capabilities"):
             builder.set_capabilities({"network_capability": bool(payload.get("network_capability", False))})
         workspace = Path(payload["workspace"])

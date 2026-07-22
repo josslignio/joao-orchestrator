@@ -422,6 +422,8 @@ class ClaudeCodeBuilder(BuilderAdapter):
         return False
 
     def build(self, mission, workspace, run_dir, allowed, correction):
+        from .write_tier_policy import assert_write_tier_enabled
+        assert_write_tier_enabled("builder.build")
         task = run_dir / ("correction.md" if correction else "builder-task.md")
         atomic_write_text(task, mission)
         output = run_dir / ("claude-correction.jsonl" if correction else "claude-builder.jsonl")
@@ -484,6 +486,8 @@ class GLMBuilder(BuilderAdapter):
         self.backend = backend or LocalUntrustedBackend()
 
     def build(self, mission, workspace, run_dir, allowed, correction):
+        from .write_tier_policy import assert_write_tier_enabled
+        assert_write_tier_enabled("builder.build")
         task = run_dir / ("correction.md" if correction else "builder-task.md"); atomic_write_text(task, mission)
         output = run_dir / ("glm-correction.jsonl" if correction else "glm-builder.jsonl")
         argv = [str(self.executable), "--workspace", str(workspace), "--task-file", str(task), "--output", str(output), "--mode", "workspace-write", "--budget", "small"]
@@ -1671,6 +1675,8 @@ class RunRuntime:
                 # it already reaches tests (`network=scope[...]` below) and the
                 # reviewer (`active_rules`/candidate binding) — delivered fresh
                 # before every dispatch, never assumed from a prior call.
+                from .write_tier_policy import assert_write_tier_enabled as _awte
+                _awte("RunRuntime._execute")
                 if hasattr(self.builder, "set_capabilities"):
                     self.builder.set_capabilities(dict(scope))
                 before = self._paths(workspace); builder = self.builder.build(mission_for_builder, workspace, folder, profile.allowed_write_paths, correction)

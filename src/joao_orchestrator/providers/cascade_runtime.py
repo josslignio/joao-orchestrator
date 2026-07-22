@@ -165,6 +165,8 @@ def real_glm_runner(executable: Path, timeout: int = 900) -> Callable:
     from ..bubble.runtime import digest  # local import avoids a cycle
 
     def _run(workspace: Path, task_file: Path, output: Path, allowed: list[str], angle: str) -> dict:
+        from ..bubble.write_tier_policy import assert_write_tier_enabled
+        assert_write_tier_enabled("cascade.runner")
         argv = [str(executable), "--workspace", str(workspace), "--task-file", str(task_file),
                 "--output", str(output), "--mode", "workspace-write", "--budget", "small"]
         for item in allowed:
@@ -195,6 +197,8 @@ def real_claude_runner(executable: str = "claude", timeout: int = 1200,
     from ..bubble.runtime import digest
 
     def _run(workspace: Path, task_file: Path, output: Path, allowed: list[str], angle: str) -> dict:
+        from ..bubble.write_tier_policy import assert_write_tier_enabled
+        assert_write_tier_enabled("cascade.runner")
         prompt = task_file.read_text()
         argv = [executable, "-p", prompt, "--model", claude_model, "--permission-mode", "acceptEdits",
                 "--add-dir", str(workspace)]
@@ -272,6 +276,8 @@ class CascadeBuilder:
                         critical=bool(run.get("critical")), recurrence=bool(run.get("recurrence")),
                         gate_failed=bool(correction), tags=list(run.get("tags") or []))
         git = WorkspaceGit(workspace)
+        from ..bubble.write_tier_policy import assert_write_tier_enabled
+        assert_write_tier_enabled("CascadeBuilder.build")
         cascade_dir = run_dir / "cascade"
         cascade_dir.mkdir(parents=True, exist_ok=True)
         base = git.snapshot_base(cascade_dir / "_base-untracked")  # preserves pre-existing WIP (P2-A)

@@ -137,7 +137,7 @@ def _safe_opencode_config(model: str) -> dict:
             "glob": "allow",
             "grep": "allow",
             "lsp": "allow",
-            "edit": "allow",
+            "edit": "deny",
             "task": "deny",
             "question": "deny",
             "webfetch": "deny",
@@ -147,21 +147,21 @@ def _safe_opencode_config(model: str) -> dict:
                 "*": "deny",
                 "pwd": "allow",
                 "ls*": "allow",
-                "find *": "allow",
-                "grep *": "allow",
-                "sed *": "allow",
-                "cat *": "allow",
-                "head *": "allow",
-                "tail *": "allow",
-                "wc *": "allow",
+                "find *": "deny",
+                "grep *": "deny",
+                "sed *": "deny",
+                "cat *": "deny",
+                "head *": "deny",
+                "tail *": "deny",
+                "wc *": "deny",
                 "git status*": "allow",
-                "git diff*": "allow",
+                "git diff*": "deny",
                 "git ls-files*": "allow",
                 "git rev-parse*": "allow",
-                "git show*": "allow",
-                "python -m pytest*": "allow",
-                "python3 -m pytest*": "allow",
-                "pytest*": "allow",
+                "git show*": "deny",
+                "python -m pytest*": "deny",
+                "python3 -m pytest*": "deny",
+                "pytest*": "deny",
                 "python -m compileall*": "allow",
                 "python3 -m compileall*": "allow",
                 "python -m pip *": "deny",
@@ -306,6 +306,8 @@ class OpenCodeProvider(ProviderAdapter):
         return bool(self._probe_report and self._probe_report.available)
 
     def invoke(self, request: ProviderRequest) -> ProviderResponse:
+        from ..bubble.write_tier_policy import assert_write_tier_enabled
+        assert_write_tier_enabled("OpenCodeProvider.invoke")
         require_capability(request, "workspace.write")
         if request.role not in self.supported_roles:
             return ProviderResponse(
