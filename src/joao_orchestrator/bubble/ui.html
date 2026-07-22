@@ -199,21 +199,29 @@ async function confirmNextLot(mi){try{
 
 async function streamReply(text){const brain=x('brain').value;
   const d=addMsg('assistant','',(brain==='glm'?'GLM':'Claude'));const bub=d.querySelector('.bubble');
-  const who=d.querySelector('.who');let acc='',model='';
-  const resp=await fetch('/chat',{method:'POST',headers:H(),body:JSON.stringify({message:text,model:brain,conversation:conv,attachments:pending})});
-  pending=[];x('chips').innerHTML='';
-  const reader=resp.body.getReader(),dec=new TextDecoder();let buf='';
-  while(true){const{value,done}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});
-    let i;while((i=buf.indexOf('\n\n'))>=0){const line=buf.slice(0,i);buf=buf.slice(i+2);
-      if(!line.startsWith('data: '))continue;const ev=JSON.parse(line.slice(6));
-      if(ev.event==='start'){conv=ev.conversation}
-      else if(ev.event==='model'){model=ev.model;who.innerHTML=esc('JOÃO')+` <span class=model>${esc(model)}</span>`}
-      else if(ev.event==='delta'){acc+=ev.text;bub.innerHTML=esc(acc);scroll()}
-      else if(ev.event==='error'){acc+='\n⚠️ '+ev.message;bub.innerHTML=esc(acc)}
-      else if(ev.event==='done'){model=ev.model||model;bub.innerHTML=renderAssistant(acc,model);
-        who.innerHTML=esc('JOÃO')+` <span class=model>${esc(model)}</span>`+(ev.cost!=null?` <span class=note>coût ${ev.cost}</span>`:'')}
-      else if(ev.event==='saved'){loadConvs()}}}
-  scroll()}
+  const who=d.querySelector('.who');let acc='',model='',hadError=false;
+  try{
+    const resp=await fetch('/chat',{method:'POST',headers:H(),body:JSON.stringify({message:text,model:brain,conversation:conv,attachments:pending})});
+    pending=[];x('chips').innerHTML='';
+    const reader=resp.body.getReader(),dec=new TextDecoder();let buf='';
+    while(true){const{value,done}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});
+      let i;while((i=buf.indexOf('\n\n'))>=0){const line=buf.slice(0,i);buf=buf.slice(i+2);
+        if(!line.startsWith('data: '))continue;const ev=JSON.parse(line.slice(6));
+        if(ev.event==='start'){conv=ev.conversation}
+        else if(ev.event==='model'){model=ev.model;who.innerHTML=esc('JOÃO')+` <span class=model>${esc(model)}</span>`}
+        else if(ev.event==='delta'){acc+=ev.text;bub.innerHTML=esc(acc);scroll()}
+        else if(ev.event==='error'){hadError=true;acc+='\n⚠️ '+ev.message;bub.innerHTML=esc(acc);scroll()}
+        else if(ev.event==='done'){model=ev.model||model;bub.innerHTML=renderAssistant(acc,model);
+          who.innerHTML=esc('JOÃO')+` <span class=model>${esc(model)}</span>`+(ev.cost!=null?` <span class=note>coût ${ev.cost}</span>`:'')}
+        else if(ev.event==='saved'){loadConvs()}}}
+  }catch(e){
+    hadError=true;
+    acc+='\n⚠️ Erreur de connexion: '+esc(e.message);
+    bub.innerHTML=esc(acc);
+  }finally{
+    if(hadError){bub.style.border='1px solid #ff6b6b';bub.style.background='#2a1c10'}
+    scroll()}
+  x('in').disabled=false;x('in').focus();}
 
 // ── Advanced / Recovery Mode: manual mission launch (Boss directive,
 // 2026-07-21) — hidden behind an explicit sidebar toggle, never auto-opened,

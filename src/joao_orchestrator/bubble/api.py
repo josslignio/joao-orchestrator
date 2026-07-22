@@ -272,17 +272,23 @@ class LocalAPIServer:
         if not message: yield {"event": "error", "message": "message vide"}; return
         model = str(data.get("model", "claude"))
         cid = str(data.get("conversation") or ("conv-" + secrets.token_hex(6)))
+        # Finding 1 fix: extract and pass active_project_id to resolve B defect
+        project_id = str(data.get("project_id", "")).strip() or None
         atts = [a for a in (self._load_attachment(i) for i in data.get("attachments", [])) if a]
         history = self._load_conversation(cid)["messages"]
         self._append_message(cid, "user", message)
         yield {"event": "start", "conversation": cid}
         full, model_used = [], model
-        for event in self.brain.reply_stream(message, history=history, model=model, attachments=atts):
+        had_error = False
+        for event in self.brain.reply_stream(message, history=history, model=model, attachments=atts, active_project_id=project_id):
             if event.get("event") == "delta": full.append(event["text"])
             if event.get("event") in {"model", "done"} and event.get("model"): model_used = event["model"]
+            if event.get("event") == "error": had_error = True
             yield event
-        self._append_message(cid, "assistant", "".join(full), model=model_used)
-        yield {"event": "saved", "conversation": cid, "model": model_used}
+        # D defect fix: only save assistant message if we got actual content (no error, not empty)
+        if not had_error and full:
+            self._append_message(cid, "assistant", "".join(full), model=model_used)
+            yield {"event": "saved", "conversation": cid, "model": model_used}
 
     # ─────────────── missions (through the Phase-1 cascade when so wired) ───────────────
     def launch(self, data):

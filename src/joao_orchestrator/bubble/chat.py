@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import signal
 import subprocess
 import time
@@ -135,6 +136,225 @@ def compose_prompt(message: str, history: Optional[list[dict]] = None,
     return "\n\n".join(chunks)
 
 
+def _is_identity_or_capability_question(message: str) -> bool:
+    """Detect if message is asking about identity or capabilities (H defect fix)."""
+    low = message.lower().strip()
+    identity_patterns = [
+        "qui es-tu", "qui etes vous", "who are you", "what are you",
+        "qu'est-ce que tu es", "quest-ce que tu es", "what is joao",
+        "c'est quoi joao", "cest quoi joao", "what is this",
+    ]
+    # Finding 2 fix: pure capability questions (no action/internet required)
+    pure_capability_patterns = [
+        "que peux-tu faire", "que peut tu faire", "que peux tu faire",
+        "what can you do", "de quoi es-tu capable", "de quoi tu es capable",
+        "quels outils as-tu", "quels outils as tu", "quels outils tu as",
+        "quel outil as-tu", "quel outil as tu", "what tools do you have",
+    ]
+    capability_patterns = [
+        "peux-tu", "peut tu", "peux tu", "can you",
+        "est-ce que tu peux", "est ce que tu peux",
+        "as-tu", "as tu", "do you have",
+        "sais-tu", "sais tu", "can you",
+        "es-tu capable", "es tu capable", "are you capable",
+        "quels outils", "quel outil", "what tools", "what can you do",
+    ]
+    action_patterns = [
+        "modifier un fichier", "modifier des fichiers", "modify a file",
+        "exécuter une commande", "executer une commande", "execute a command",
+        "lancer des tests", "lancer un test", "run tests",
+        "écrire du code", "ecrire du code", "write code",
+        "créer un fichier", "creer un fichier", "create a file",
+    ]
+    internet_patterns = [
+        "internet", "web", "en ligne", "online", "réseau", "reseau",
+        "accès internet", "acces web", "web search", "search the web",
+    ]
+
+    # Check if message asks about identity
+    if any(p in low for p in identity_patterns):
+        return True
+
+    # Finding 2 fix: check for pure capability questions FIRST (no action/internet required)
+    if any(p in low for p in pure_capability_patterns):
+        return True
+
+    # Check if message asks about capabilities with actions
+    if any(p in low for p in capability_patterns):
+        if any(p in low for p in action_patterns):
+            return True
+        if any(p in low for p in internet_patterns):
+            return True
+
+    return False
+
+
+def _capability_manifest() -> dict[str, str]:
+    """Authoritative capability manifest - single source of truth for identity/capability responses."""
+    return {
+        "identity": (
+            "Je suis JOÃO, un assistant d'orchestration local. "
+            "Je fonctionne en mode chat normal : je peux répondre à des questions, "
+            "expliquer du code, et analyser des documents que tu me fournis."
+        ),
+        "what_is_joao": (
+            "JOÃO est un système d'orchestration local pour le développement logiciel. "
+            "Je suis actuellement en mode chat normal : je réponds à tes questions "
+            "et t'aide à comprendre du code, sans exécuter de commandes."
+        ),
+        "write_capability": (
+            "En mode chat normal, je ne peux pas modifier de fichiers. "
+            "Le write-tier (écriture/exécution) est actuellement désactivé par SEC-BOOT. "
+            "Les missions avec écriture sont indisponibles actuellement."
+        ),
+        "execute_capability": (
+            "En mode chat normal, je ne peux pas exécuter de commandes ou lancer des tests. "
+            "L'exécution est désactivée par SEC-BOOT. "
+            "Les missions avec exécution sont indisponibles actuellement."
+        ),
+        "code_creation_capability": (
+            "En mode chat normal, je ne peux pas écrire ou créer de fichiers. "
+            "Le write-tier est désactivé par SEC-BOOT. "
+            "Les missions avec création de code sont indisponibles actuellement."
+        ),
+        "internet_capability": (
+            "Je n'ai pas accès à internet. Je fonctionne uniquement en local, "
+            "avec les fichiers et documents que tu me fournis."
+        ),
+        "tools_capability": (
+            "En mode chat normal, j'ai accès à des modèles de langage (Claude, GLM) "
+            "pour répondre à tes questions et analyser du texte. Je peux lire "
+            "les fichiers que tu m'envoies (PDF, code, textes), mais je ne peux "
+            "pas écrire ou exécuter de code."
+        ),
+        "general": (
+            "En mode chat normal, je peux répondre à tes questions, expliquer du code, "
+            "et analyser des documents. Je ne peux pas modifier de fichiers, exécuter "
+            "des commandes, ou accéder à internet — ces capacités sont désactivées "
+            "par SEC-BOOT. Les missions avec écriture/exécution sont indisponibles actuellement."
+        ),
+        "mission_write_unavailable": (
+            "Les missions avec écriture (write-tier) sont indisponibles actuellement "
+            "car SEC-BOOT bloque cette fonctionnalité. En mode chat normal, "
+            "je peux uniquement répondre à des questions et analyser des documents, "
+            "sans aucune capacité d'écriture, d'exécution ou de modification de fichiers."
+        ),
+    }
+
+
+def _get_identity_or_capability_response(message: str) -> str:
+    """Generate local response for identity/capability questions from capability_manifest (H defect fix)."""
+    manifest = _capability_manifest()
+    low = message.lower()
+
+    if any(p in low for p in ["qui es-tu", "qui etes vous", "who are you", "what are you"]):
+        return manifest["identity"]
+
+    if "what is joao" in low or "c'est quoi joao" in low or "cest quoi joao" in low:
+        return manifest["what_is_joao"]
+
+    if any(p in low for p in ["modifier un fichier", "modifier des fichiers", "modify a file"]):
+        return manifest["write_capability"]
+
+    if any(p in low for p in ["exécuter une commande", "executer une commande", "execute a command",
+                               "lancer des tests", "lancer un test", "run tests"]):
+        return manifest["execute_capability"]
+
+    if any(p in low for p in ["écrire du code", "ecrire du code", "write code",
+                               "créer un fichier", "creer un fichier", "create a file"]):
+        return manifest["code_creation_capability"]
+
+    if any(p in low for p in ["internet", "web", "en ligne", "online"]):
+        return manifest["internet_capability"]
+
+    if "quels outils" in low or "quel outil" in low or "what tools" in low:
+        return manifest["tools_capability"]
+
+    return manifest["general"]
+
+
+def _is_execution_request_without_project(message: str, history: Optional[list[dict]] = None,
+                                          attachments: Optional[list[Attachment]] = None,
+                                          active_project_id: Optional[str] = None) -> bool:
+    """Detect if message is an execution request WITHOUT an active project (B defect fix).
+
+    Uses ONLY authoritative project state (active_project_id), never deduces from words
+    in history or attachments (I&B defect fix).
+    """
+    low = message.lower().strip()
+
+    # Finding 3 fix: exclude interrogative/how-to forms (questions) to avoid false positives
+    question_indicators = [
+        "?", " pourquoi", " comment", " comment ", " expliqu", " qu'est-ce que",
+        " quest-ce que", " c'est quoi", " c quoi", " how do", " how can",
+        " explain", " what is", " what are", " why does",
+    ]
+    is_question = any(indicator in low for indicator in question_indicators)
+
+    # Finding 3 fix: match whole words only, not substrings (e.g., "run" shouldn't match "runner")
+    import re
+    word_pattern = r'\b'
+
+    # Build verbs from intent.py (whole-word matching)
+    build_verbs = (
+        "crée", "creer", "créer", "cree", "écris", "ecris", "écrire", "build", "buildé", "builde",
+        "implémente", "implemente", "implémenter", "génère", "genere", "générer", "code", "coder",
+        "développe", "developpe", "développer", "programme", "programmer", "refactor", "refactore",
+        "refactorise", "corrige", "fixe", "débugge", "debugge", "réécris", "reecris", "ajoute",
+        "write", "create", "implement", "generate", "develop", "refactor", "add", "fix", "make",
+    )
+
+    # Build nouns (whole-word matching)
+    build_nouns = (
+        "script", "fichier", "fichiers", "app", "application", "fonction", "fonctions", "classe",
+        "classes", "module", "modules", "endpoint", "api", "programme", "package", "cli", "test",
+        "tests", "composant", "librairie", "bibliothèque", "repo", "dépôt", "file", "function",
+    )
+
+    # Finding 3 fix: check for imperative action verbs (beginning of sentence or after comma)
+    # rather than just presence anywhere in the sentence
+    imperative_start = r'^[,\s]*[a-z]+'
+    has_imperative_verb = any(
+        re.search(rf'{word_pattern}{re.escape(verb)}{word_pattern}', low.split('.')[0].split(',')[0].strip())
+        for verb in build_verbs
+    )
+
+    # Check for explicit execution requests (also whole-word)
+    execution_patterns = [
+        r"\blance les tests\b", r"\blance un test\b", r"\brun tests\b", r"\brun test\b",
+        r"\bexécute\b", r"\bexecute\b", r"\blance\b", r"\brun\b",
+        r"\bcorrige le bug\b", r"\bfix the bug\b", r"\bcorrige\b",
+    ]
+    has_execution = any(re.search(pattern, low) for pattern in execution_patterns)
+
+    # Finding 3 fix: if it's a question, treat as general question, not execution request
+    if is_question:
+        return False
+
+    # Finding 3 fix: require clear imperative intent for execution
+    if not (has_imperative_verb or has_execution):
+        return False
+
+    # I&B defect fix: Use ONLY authoritative active_project_id, never deduce from history/attachments
+    has_active_project = active_project_id is not None and active_project_id != ""
+
+    # If it looks like an execution request but has NO active project, it's a B defect case
+    if has_imperative_verb or has_execution:
+        return not has_active_project
+
+    return False
+
+
+def _get_execution_requires_project_response(message: str) -> str:
+    """Generate local response for execution requests without project (B defect fix)."""
+    return ("Cette demande ressemble à une demande d'exécution (modification de code, lancement de tests, "
+            "correction de bug), mais ces capacités sont indisponibles en mode chat normal.\n\n"
+            "Le write-tier (écriture/exécution) est désactivé par SEC-BOOT. "
+            "Les missions avec écriture ou exécution sont indisponibles actuellement.\n\n"
+            "En mode chat normal, je peux uniquement répondre à tes questions et analyser des documents, "
+            "sans aucune capacité d'écriture, d'exécution ou de modification de fichiers.")
+
+
 # ─────────────────────────── streaming brains ───────────────────────────
 @dataclass
 class ChatBrain:
@@ -147,8 +367,29 @@ class ChatBrain:
     _line_source: object = field(default=None, repr=False)
 
     def reply_stream(self, message: str, *, history: Optional[list[dict]] = None,
-                     model: str = "claude", attachments: Optional[list[Attachment]] = None) -> Iterator[dict]:
+                     model: str = "claude", attachments: Optional[list[Attachment]] = None,
+                     active_project_id: Optional[str] = None) -> Iterator[dict]:
         """Yield {event: model|delta|done|error, ...}. The real model is always surfaced."""
+        # H defect fix: handle identity/capability questions locally
+        if _is_identity_or_capability_question(message):
+            response = _get_identity_or_capability_response(message)
+            yield {"event": "model", "model": "JOAO-local", "provider": "local-controller"}
+            for char in response:
+                yield {"event": "delta", "text": char}
+            yield {"event": "done", "text": response, "model": "JOAO-local",
+                   "provider": "local-controller", "cost": None}
+            return
+
+        # B defect fix: handle execution requests without project locally (Finding 1: use active_project_id)
+        if _is_execution_request_without_project(message, history, attachments, active_project_id):
+            response = _get_execution_requires_project_response(message)
+            yield {"event": "model", "model": "JOAO-local", "provider": "local-controller"}
+            for char in response:
+                yield {"event": "delta", "text": char}
+            yield {"event": "done", "text": response, "model": "JOAO-local",
+                   "provider": "local-controller", "cost": None}
+            return
+
         prompt = compose_prompt(message, history, attachments)
         if model == "glm":
             yield from self._stream_glm(prompt)
@@ -163,35 +404,57 @@ class ChatBrain:
         model_seen = f"claude-cli:{self.claude_model}"
         announced = False
         full: list[str] = []
-        for line in self._lines(argv):
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            kind = obj.get("type")
-            if kind == "stream_event":
-                ev = obj.get("event", {})
-                et = ev.get("type")
-                if et == "message_start":
-                    model_seen = ev.get("message", {}).get("model", model_seen)
-                    if not announced:
-                        announced = True
-                        yield {"event": "model", "model": model_seen, "provider": "claude-cli"}
-                elif et == "content_block_delta":
-                    delta = ev.get("delta", {})
-                    if delta.get("type") == "text_delta" and delta.get("text"):
-                        full.append(delta["text"])
-                        yield {"event": "delta", "text": delta["text"]}
-            elif kind == "result" and not full:
-                # no deltas arrived (older CLI) → fall back to the final result text
-                text = obj.get("result", "")
-                if text:
-                    full.append(text)
-                    yield {"event": "delta", "text": text}
-        if not announced:
-            yield {"event": "model", "model": model_seen, "provider": "claude-cli"}
-        yield {"event": "done", "text": "".join(full), "model": model_seen,
-               "provider": "claude-cli", "cost": None}
+        any_delta = False
+
+        try:
+            for line in self._lines(argv):
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                kind = obj.get("type")
+                if kind == "stream_event":
+                    ev = obj.get("event", {})
+                    et = ev.get("type")
+                    if et == "message_start":
+                        model_seen = ev.get("message", {}).get("model", model_seen)
+                        if not announced:
+                            announced = True
+                            yield {"event": "model", "model": model_seen, "provider": "claude-cli"}
+                    elif et == "content_block_delta":
+                        delta = ev.get("delta", {})
+                        if delta.get("type") == "text_delta" and delta.get("text"):
+                            full.append(delta["text"])
+                            any_delta = True
+                            yield {"event": "delta", "text": delta["text"]}
+                elif kind == "result" and not full:
+                    # no deltas arrived (older CLI) → fall back to the final result text
+                    text = obj.get("result", "")
+                    if text:
+                        full.append(text)
+                        any_delta = True
+                        yield {"event": "delta", "text": text}
+        except OSError as exc:
+            yield {"event": "error", "message": f"CLI indisponible: {exc}"}
+            return
+        except TimeoutError as exc:
+            yield {"event": "error", "message": str(exc)}
+            return
+        except Exception as exc:
+            yield {"event": "error", "message": f"Erreur Claude: {type(exc).__name__}: {exc}"}
+            return
+
+        # D defect fix: if no text was produced, emit an explicit error
+        if not any_delta and not full:
+            yield {"event": "error", "message": "Le provider Claude n'a retourné aucun texte (stream vide)"}
+            return
+
+        # D defect fix: only emit done if we have content (no error, not empty)
+        if any_delta or full:
+            if not announced:
+                yield {"event": "model", "model": model_seen, "provider": "claude-cli"}
+            yield {"event": "done", "text": "".join(full), "model": model_seen,
+                   "provider": "claude-cli", "cost": None}
 
     # ── GLM via opencode: text parts + real cost from step_finish (0 Claude forfait) ──
     def _stream_glm(self, prompt: str) -> Iterator[dict]:
@@ -199,19 +462,40 @@ class ChatBrain:
         yield {"event": "model", "model": self.glm_model, "provider": "zai-coding-plan"}
         full: list[str] = []
         cost = None
-        for line in self._lines(argv):
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            part = obj.get("part", {})
-            if obj.get("type") == "text" and part.get("text"):
-                full.append(part["text"])
-                yield {"event": "delta", "text": part["text"]}
-            elif obj.get("type") == "step_finish":
-                cost = part.get("cost", cost)
-        yield {"event": "done", "text": "".join(full), "model": self.glm_model,
-               "provider": "zai-coding-plan", "cost": cost}
+        any_delta = False
+
+        try:
+            for line in self._lines(argv):
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                part = obj.get("part", {})
+                if obj.get("type") == "text" and part.get("text"):
+                    full.append(part["text"])
+                    any_delta = True
+                    yield {"event": "delta", "text": part["text"]}
+                elif obj.get("type") == "step_finish":
+                    cost = part.get("cost", cost)
+        except OSError as exc:
+            yield {"event": "error", "message": f"CLI indisponible: {exc}"}
+            return
+        except TimeoutError as exc:
+            yield {"event": "error", "message": str(exc)}
+            return
+        except Exception as exc:
+            yield {"event": "error", "message": f"Erreur GLM: {type(exc).__name__}: {exc}"}
+            return
+
+        # D defect fix: if no text was produced, emit an explicit error
+        if not any_delta and not full:
+            yield {"event": "error", "message": "Le provider GLM n'a retourné aucun texte (stream vide)"}
+            return
+
+        # D defect fix: only emit done if we have content (no error, not empty)
+        if any_delta or full:
+            yield {"event": "done", "text": "".join(full), "model": self.glm_model,
+                   "provider": "zai-coding-plan", "cost": cost}
 
     # ── bounded line source (real subprocess by default; injectable for tests) ──
     def _lines(self, argv: list[str]) -> Iterator[str]:
@@ -220,25 +504,60 @@ class ChatBrain:
             return
         try:
             proc = subprocess.Popen(argv, shell=False, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                                    stderr=subprocess.PIPE, text=True, bufsize=1,
                                     start_new_session=True)
         except OSError as exc:
-            yield json.dumps({"type": "result", "result": f"(CLI indisponible: {exc})"})
-            return
+            raise OSError(f"CLI indisponible: {exc}")
+
         deadline = time.monotonic() + self.deadline_s
+        timed_out = False
+
         try:
-            for line in proc.stdout:  # type: ignore[union-attr]
-                yield line
+            # Use select to check if stdout has data with timeout
+            import select
+
+            while True:
+                # Check deadline first (timeout interruptible even without stdout output - D defect fix)
                 if time.monotonic() > deadline:
+                    timed_out = True
                     self._kill(proc)
                     break
+
+                # Wait up to 100ms for data on stdout
+                try:
+                    rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
+                except (ValueError, OSError):
+                    break
+
+                if rlist:
+                    line = proc.stdout.readline()
+                    if line:
+                        yield line
+                    else:
+                        break  # EOF
+
+                # Check if process has terminated
+                if proc.poll() is not None:
+                    break
         finally:
+            # Drain stderr to avoid deadlock (D defect fix)
             if proc.poll() is None:
                 self._kill(proc)
+
+            # Read any remaining stderr to avoid deadlock
+            try:
+                _ = proc.stderr.read()  # type: ignore[union-attr]
+            except Exception:
+                pass
+
             try:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 pass
+
+        # D defect fix: if timed out, raise an error to be caught by the stream methods
+        if timed_out:
+            raise TimeoutError(f"Provider timeout après {self.deadline_s}s")
 
     @staticmethod
     def _kill(proc: subprocess.Popen) -> None:

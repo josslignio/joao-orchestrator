@@ -36,7 +36,6 @@ def test_missing_file_is_honest(tmp_path):
 
 
 def test_real_pdf_extraction_counts_are_grounded(tmp_path):
-    # a REAL pdf, extracted with pypdf — the whole point of B3 (no eyeball estimate)
     pdf = tmp_path / "doc.pdf"
     pdf.write_bytes(_minimal_pdf("BANANA has three A letters: A A A"))
     att = extract_attachment(pdf)

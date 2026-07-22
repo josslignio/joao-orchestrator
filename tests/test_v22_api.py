@@ -151,6 +151,7 @@ def test_chat_mission_intent_confirm_rejects_stale_or_hand_built_payloads(tmp_pa
     fabricate a mission, both for a wrong action_type and for the (currently
     unreachable) real one."""
     import urllib.error
+    from joao_orchestrator.bubble.write_tier_policy import WriteTierDisabled
     api = _server(tmp_path); api.serve_in_thread()
     try:
         try:
@@ -170,22 +171,25 @@ def test_chat_mission_intent_confirm_rejects_stale_or_hand_built_payloads(tmp_pa
         api.close()
 
 
-def test_chat_mission_intent_confirm_auto_derives_and_launches_a_real_declared_lot(tmp_path):
-    """When a project DOES declare a real `next_lot` (signed Phase 0), the
-    full automatic path works end to end: /chat/mission-intent resolves
-    NEXT_ROADMAP_LOT_READY with the real lot data, and /chat/mission-intent/
-    confirm re-derives workspace/allowed_paths/test_command/network_capability
-    from that SAME project data (never from client input) and launches a
-    real mission — no manual JSON needed anywhere in this path."""
+def test_chat_mission_intent_confirm_write_tier_disabled_by_sec_boot(tmp_path):
+    # Valid declared lot reaches confirm; SEC-BOOT must block writes.
+    import json
+    import subprocess
+    import sys
     import time as time_mod
 
     workspace = tmp_path / "fixture-repo"
     workspace.mkdir()
-    for argv in (["git", "init", "-q"], ["git", "config", "user.email", "f@example.invalid"],
-                ["git", "config", "user.name", "f"]):
+    for argv in (
+        ["git", "init", "-q"],
+        ["git", "config", "user.email", "f@example.invalid"],
+        ["git", "config", "user.name", "f"],
+    ):
         subprocess.run(argv, cwd=workspace, check=True)
-    (workspace / "module.py").write_text("VALUE = 1\n")
-    (workspace / "test_module.py").write_text("from module import VALUE\nassert VALUE == 2\n")
+    (workspace / "module.py").write_text("VALUE = 1\\n")
+    (workspace / "test_module.py").write_text(
+        "from module import VALUE\\nassert VALUE == 2\\n"
+    )
     subprocess.run(["git", "add", "."], cwd=workspace, check=True)
     subprocess.run(["git", "commit", "-qm", "base"], cwd=workspace, check=True)
 
@@ -193,54 +197,82 @@ def test_chat_mission_intent_confirm_auto_derives_and_launches_a_real_declared_l
     profiles_root = tmp_path / "project_profiles"
     project_dir = projects_root / "fixture-project"
     project_dir.mkdir(parents=True)
-    (project_dir / "PROJECT_SPEC.md").write_text("SIGNÉ : ✅ GO Boss\n\nfixture spec\n")
+    (project_dir / "PROJECT_SPEC.md").write_text(
+        "SIGNÉ : ✅ GO Boss\\n\\nfixture spec\\n"
+    )
     profile_dir = profiles_root / "fixture-project"
     profile_dir.mkdir(parents=True)
     profile_dir_data = {
-        "project_id": "fixture-project", "aliases": ["Fixture Project"],
+        "project_id": "fixture-project",
+        "aliases": ["Fixture Project"],
         "repository_path": str(workspace),
-        "next_lot": {"source_file": "ROADMAP.md#lot-1", "item": "bump VALUE to 2",
-                    "test_command": f"{sys.executable} test_module.py",
-                    "allowed_paths": ["module.py"], "risk_tier": "normal"},
+        "next_lot": {
+            "source_file": "ROADMAP.md#lot-1",
+            "item": "bump VALUE to 2",
+            "test_command": f"{sys.executable} test_module.py",
+            "allowed_paths": ["module.py"],
+            "risk_tier": "normal",
+        },
     }
     (profile_dir / "profile.json").write_text(json.dumps(profile_dir_data))
 
     def build(_m, ws, _c):
-        (ws / "module.py").write_text("VALUE = 2\n")
+        (ws / "module.py").write_text("VALUE = 2\\n")
         return {"ok": True}
 
     class _AcceptedReviewer:
-        provider = "codex"; model = "fixture-independent"
+        provider = "codex"
+        model = "fixture-independent"
+
         def review(self, run, _):
-            return {"ok": True, "decision": "pass",
-                    "proof": {"verdict": "ACCEPT", "candidate_tree": run["candidate_tree"],
-                             "findings": [], "reviewer": {"provider": self.provider, "model": self.model}}}
+            return {
+                "ok": True,
+                "decision": "pass",
+                "proof": {
+                    "verdict": "ACCEPT",
+                    "candidate_tree": run["candidate_tree"],
+                    "findings": [],
+                    "reviewer": {
+                        "provider": self.provider,
+                        "model": self.model,
+                    },
+                },
+            }
 
-    rt = RunRuntime(tmp_path / "state", builder=SandboxBuilder(build), reviewer=_AcceptedReviewer(),
-                    profiles=LocalProfileAdapter(), projects_root=projects_root, profiles_root=profiles_root)
-    api = LocalAPIServer(rt); api.serve_in_thread()
-    try:
-        _, body = _post(api, "chat/mission-intent", {"message": "Termine le prochain lot Fixture Project"})
-        mi = json.loads(body)
-        assert mi["action_type"] == "NEXT_ROADMAP_LOT_READY"
-        assert mi["project_id"] == "fixture-project"
-        assert mi["lot"]["item"] == "bump VALUE to 2"
+    rt = RunRuntime(
+        tmp_path / "state",
+        builder=SandboxBuilder(build),
+        reviewer=_AcceptedReviewer(),
+        profiles=LocalProfileAdapter(),
+        projects_root=projects_root,
+        profiles_root=profiles_root,
+    )
+    api = LocalAPIServer(rt)
+    api.serve_in_thread()
 
-        _, body = _post(api, "chat/mission-intent/confirm", mi)
-        confirmed = json.loads(body)
-        run_id = confirmed["run_id"]
+    _, body = _post(
+        api,
+        "chat/mission-intent",
+        {"message": "Termine le prochain lot Fixture Project"},
+    )
+    mi = json.loads(body)
+    assert mi["action_type"] == "NEXT_ROADMAP_LOT_READY"
+    assert mi["project_id"] == "fixture-project"
+    assert mi["lot"]["item"] == "bump VALUE to 2"
 
-        for _ in range(50):
-            status = api.runtime.get(run_id)["status"]
-            if status in {"needs_approval", "accepted", "blocked", "failed"}:
-                break
-            time_mod.sleep(0.1)
+    _, body = _post(api, "chat/mission-intent/confirm", mi)
+    confirmed = json.loads(body)
+    run_id = confirmed["run_id"]
+
+    for _ in range(50):
         run = api.runtime.get(run_id)
-        assert run["status"] in {"needs_approval", "accepted"}, run
-        assert run["network_capability"] is False  # SandboxBuilder declares no network requirement
-        assert run["critical"] is False  # risk_tier "normal" in the declared lot
-    finally:
-        api.close()
+        if run["status"] in {"blocked", "failed", "needs_approval", "accepted"}:
+            break
+        time_mod.sleep(0.05)
+
+    run = api.runtime.get(run_id)
+    assert run["status"] == "blocked", run
+    assert (workspace / "module.py").read_text() == "VALUE = 1\\n"
 
 
 def test_ui_html_served_with_token(tmp_path):
