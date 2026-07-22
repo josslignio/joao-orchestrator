@@ -13,7 +13,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Mapping, Optional
 
 from .base import ProviderAdapter, ProviderRequest, ProviderResponse, require_capability
 from .subprocess_cli import CLIEngineConfig, SubprocessCLIEngine
@@ -111,6 +111,89 @@ class ProviderProbeReport:
         return payload
 
 
+def _validate_opencode_execution_policy(config: Mapping[str, object]) -> None:
+    """Validate OpenCode execution policy is deny-by-default for dangerous commands.
+
+    Fail-closed validator that rejects the config unless all required security conditions hold.
+    Raises PermissionError if validation fails.
+
+    This function is called in OpenCodeProvider.invoke() before engine.run_argv().
+    """
+    if not isinstance(config, dict):
+        raise PermissionError("OpenCode config must be a dictionary")
+
+    # Check permission section exists
+    if "permission" not in config:
+        raise PermissionError("OpenCode config missing required 'permission' section")
+
+    permission = config["permission"]
+    if not isinstance(permission, dict):
+        raise PermissionError("OpenCode 'permission' section must be a dictionary")
+
+    # Check wildcard deny
+    if permission.get("*") != "deny":
+        raise PermissionError("OpenCode permission['*'] must be 'deny'")
+
+    # Check external_directory deny
+    if permission.get("external_directory") != "deny":
+        raise PermissionError("OpenCode permission['external_directory'] must be 'deny'")
+
+    # Check web access deny
+    if permission.get("webfetch") != "deny":
+        raise PermissionError("OpenCode permission['webfetch'] must be 'deny'")
+
+    if permission.get("websearch") != "deny":
+        raise PermissionError("OpenCode permission['websearch'] must be 'deny'")
+
+    # Check bash section exists
+    if "bash" not in permission:
+        raise PermissionError("OpenCode config missing required 'bash' section")
+
+    bash = permission["bash"]
+    if not isinstance(bash, dict):
+        raise PermissionError("OpenCode 'bash' section must be a dictionary")
+
+    # Check bash wildcard deny
+    if bash.get("*") != "deny":
+        raise PermissionError("OpenCode bash['*'] must be 'deny'")
+
+    # Required find/sed deny patterns
+    required_denies = [
+        "find *",
+        "gfind *",
+        "/bin/find *",
+        "/usr/bin/find *",
+        "/usr/local/bin/find *",
+        "command find *",
+        "command gfind *",
+        "env * find *",
+        "env * gfind *",
+        "sed *",
+        "gsed *",
+        "/bin/sed *",
+        "/usr/bin/sed *",
+        "/usr/local/bin/sed *",
+        "command sed *",
+        "command gsed *",
+        "env * sed *",
+        "env * gsed *",
+    ]
+
+    for pattern in required_denies:
+        if bash.get(pattern) != "deny":
+            raise PermissionError(f"OpenCode bash['{pattern}'] must be 'deny'")
+
+    # Check secret file deny rules exist in read section
+    read = permission.get("read", {})
+    if not isinstance(read, dict):
+        raise PermissionError("OpenCode 'read' section must be a dictionary")
+
+    secret_patterns = ["*.env", "*.env.*", "*.pem", "*.key"]
+    for pattern in secret_patterns:
+        if read.get(pattern) != "deny":
+            raise PermissionError(f"OpenCode read['{pattern}'] must be 'deny'")
+
+
 def _safe_opencode_config(model: str) -> dict:
     """Return a deny-by-default coding policy for a bounded worktree.
 
@@ -148,8 +231,24 @@ def _safe_opencode_config(model: str) -> dict:
                 "pwd": "allow",
                 "ls*": "allow",
                 "find *": "deny",
+                "gfind *": "deny",
+                "/bin/find *": "deny",
+                "/usr/bin/find *": "deny",
+                "/usr/local/bin/find *": "deny",
+                "command find *": "deny",
+                "command gfind *": "deny",
+                "env * find *": "deny",
+                "env * gfind *": "deny",
                 "grep *": "deny",
                 "sed *": "deny",
+                "gsed *": "deny",
+                "/bin/sed *": "deny",
+                "/usr/bin/sed *": "deny",
+                "/usr/local/bin/sed *": "deny",
+                "command sed *": "deny",
+                "command gsed *": "deny",
+                "env * sed *": "deny",
+                "env * gsed *": "deny",
                 "cat *": "deny",
                 "head *": "deny",
                 "tail *": "deny",
@@ -337,6 +436,7 @@ class OpenCodeProvider(ProviderAdapter):
             )
 
         config = _safe_opencode_config(self.model)
+        _validate_opencode_execution_policy(config)
         env = {
             "OPENCODE_CONFIG_CONTENT": json.dumps(config, sort_keys=True, separators=(",", ":")),
             "OPENCODE_DISABLE_AUTOUPDATE": "1",
