@@ -517,15 +517,16 @@ class ChatBrain:
             import select
 
             while True:
-                # Check deadline first (timeout interruptible even without stdout output - D defect fix)
-                if time.monotonic() > deadline:
+                # Check deadline first (timeout interruptible even without stdout output).
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     timed_out = True
                     self._kill(proc)
                     break
 
-                # Wait up to 100ms for data on stdout
+                # Never sleep past the configured deadline.
                 try:
-                    rlist, _, _ = select.select([proc.stdout], [], [], 0.1)
+                    rlist, _, _ = select.select([proc.stdout], [], [], min(0.1, remaining))
                 except (ValueError, OSError):
                     break
 

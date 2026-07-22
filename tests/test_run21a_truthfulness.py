@@ -41,6 +41,77 @@ def _get(api, path):
         return json.loads(resp.read())
 
 
+def _parse_sse(raw: bytes) -> list[dict]:
+    return [
+        json.loads(block[6:])
+        for block in raw.decode().split("\n\n")
+        if block.startswith("data: ")
+    ]
+
+
+def _make_silent_timeout_cli(tmp_path: Path, name: str = "silent_provider") -> tuple[Path, Path]:
+    """Create a fast shell fixture that records its PID, then stays silent."""
+    import shlex
+
+    pid_file = tmp_path / f"{name}.pid"
+    script = tmp_path / name
+    script.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s' \"$$\" > {shlex.quote(str(pid_file))}\n"
+        "exec /bin/sleep 30\n"
+    )
+    script.chmod(0o755)
+    return script, pid_file
+
+
+def _assert_process_gone(pid_file: Path, *, timeout_s: float = 2.0) -> int:
+    import os
+    import time
+
+    created_deadline = time.monotonic() + timeout_s
+    while not pid_file.exists() and time.monotonic() < created_deadline:
+        time.sleep(0.01)
+    assert pid_file.exists(), "provider fixture never recorded its PID"
+    pid = int(pid_file.read_text())
+
+    gone_deadline = time.monotonic() + timeout_s
+    while time.monotonic() < gone_deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return pid
+        time.sleep(0.02)
+    raise AssertionError(f"provider process {pid} is still alive after timeout")
+
+
+def _run_real_ui_harness(api, tmp_path: Path, *, project_id: str, message: str) -> dict:
+    """Execute the actual ui.html JavaScript in Node against the live local API."""
+    import shutil
+    import subprocess
+    import urllib.request
+
+    node = shutil.which("node")
+    assert node, "Node.js is required for the deterministic DOM harness"
+
+    req = urllib.request.Request(api.url, headers={"X-JOAO-Token": api.token})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        html_file = tmp_path / "ui-under-test.html"
+        html_file.write_bytes(resp.read())
+
+    harness = tmp_path / "ui-harness.js"
+    harness.write_text("\nconst fs = require('fs');\nconst vm = require('vm');\nconst baseUrl = process.argv[2];\nconst htmlPath = process.argv[3];\nconst projectId = process.argv[4];\nconst message = process.argv[5];\nconst html = fs.readFileSync(htmlPath, 'utf8');\nconst match = html.match(/<script>([\\s\\S]*)<\\/script>/);\nif (!match) throw new Error('ui script not found');\n\nconst state = { requestBody: null, bubbleHistory: [], sendHistory: [], inputHistory: [] };\nclass MockElement {\n  constructor(id='') {\n    this.id=id; this.value=''; this.children=[]; this.style={}; this.dataset={}; this.focused=false;\n    this._innerHTML=''; this._disabled=false;\n    this.classList={add(){},remove(){},toggle(){},contains(){return false}};\n  }\n  set innerHTML(v){ this._innerHTML=String(v); if(this.id==='bubble') state.bubbleHistory.push(this._innerHTML); }\n  get innerHTML(){ return this._innerHTML; }\n  set disabled(v){ this._disabled=Boolean(v); if(this.id==='send')state.sendHistory.push(this._disabled); if(this.id==='in')state.inputHistory.push(this._disabled); }\n  get disabled(){ return this._disabled; }\n  appendChild(child){ this.children.push(child); globalThis.__lastMessage=child; }\n  querySelector(sel){ if(sel==='.bubble')return this.bubble; if(sel==='.who')return this.who; return null; }\n  insertAdjacentHTML(_where, value){ this.innerHTML += value; }\n  addEventListener(_type, _listener){}\n  removeEventListener(_type, _listener){}\n  focus(){ this.focused=true; }\n}\nconst elements = {\n  in:new MockElement('in'), send:new MockElement('send'), brain:new MockElement('brain'),\n  chips:new MockElement('chips'), stream:new MockElement('stream'), split:new MockElement('split'),\n  ptitle:new MockElement('ptitle'), pbody:new MockElement('pbody'), convs:new MockElement('convs'),\n  modeseg:new MockElement('modeseg'), advanced:new MockElement('advanced')\n};\nelements.brain.value='claude'; elements.stream.scrollHeight=10; elements.stream.scrollTop=0;\nconst document = {\n  getElementById(id){ if(!elements[id])elements[id]=new MockElement(id); return elements[id]; },\n  createElement(){ const d=new MockElement('msg'); d.bubble=new MockElement('bubble'); d.who=new MockElement('who'); return d; }\n};\nglobalThis.document=document; globalThis.window=globalThis; globalThis.alert=()=>{};\nconst nativeFetch=globalThis.fetch;\nglobalThis.fetch=async function(input, options={}){\n  const absolute=new URL(input, baseUrl).toString();\n  if(absolute.endsWith('/chat') && options.body) state.requestBody=JSON.parse(options.body);\n  return nativeFetch(absolute, options);\n};\nvm.runInThisContext(match[1] + '\\n;globalThis.__streamReply=streamReply;globalThis.__setProject=(v)=>{activeProject=v};globalThis.__getConversation=()=>conv;');\n__setProject(projectId);\nconst promise=__streamReply(message);\nstate.immediate={sendDisabled:elements.send.disabled,inputDisabled:elements.in.disabled,spinner:__lastMessage.innerHTML.includes('spinner')};\npromise.then(()=>{\n  state.final={\n    sendDisabled:elements.send.disabled,\n    inputDisabled:elements.in.disabled,\n    spinner:__lastMessage.bubble.innerHTML.includes('spinner'),\n    bubble:__lastMessage.bubble.innerHTML,\n    errorBorder:__lastMessage.bubble.style.border||'',\n    focused:elements.in.focused,\n    conversation:__getConversation()\n  };\n  process.stdout.write(JSON.stringify(state));\n}).catch(err=>{ console.error(err); process.exit(1); });\n")
+
+    completed = subprocess.run(
+        [node, str(harness), api.url, str(html_file), project_id, message],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    return json.loads(completed.stdout)
+
+
 def test_a1_who_are_you_answered_locally_no_provider_call(tmp_path):
     """A1: « Qui es-tu ? » → réponse locale JOAO ; fake ChatBrain lève s'il est appelé ; appels provider = 0."""
     api = _server(tmp_path)
@@ -247,119 +318,77 @@ def test_a5_provider_unavailable_returns_explicit_error_event(tmp_path):
 
 
 def test_a6_timeout_provider_returns_explicit_error_conversation_reusable(tmp_path):
-    """A6: timeout provider → event=error ou timed_out explicite ; conversation réutilisable après échec."""
+    """A6: the real subprocess path times out, kills the child, and keeps chat reusable."""
     import time
+
     api = _server(tmp_path)
-
-    api.brain.deadline_s = 0.05  # Very short deadline to trigger timeout quickly
-
-    # Finding 4 fix: use a source that simulates a slow provider by yielding nothing until deadline
-    def slow_blocking_source(argv):
-        # Simulate a provider that starts but produces no output before deadline
-        time.sleep(0.15)  # Sleep longer than deadline (0.05s)
-        return []  # Return empty after delay (simulates timeout)
-
-    api.brain._line_source = slow_blocking_source
+    timeout_cli, pid_file = _make_silent_timeout_cli(tmp_path, "a6-provider")
+    api.brain.claude_executable = str(timeout_cli)
+    api.brain.deadline_s = 0.50
+    api.brain._line_source = None
     api.serve_in_thread()
     try:
-        status, raw = _post(api, "chat", {"message": "test", "model": "claude"})
+        started = time.monotonic()
+        status, raw = _post(api, "chat", {"message": "Question générale de timeout", "model": "claude"})
+        elapsed = time.monotonic() - started
         assert status == 200
+        assert elapsed < 2.0, f"timeout path took too long: {elapsed:.3f}s"
 
-        events = []
-        for block in raw.decode().split("\n\n"):
-            if block.startswith("data: "):
-                events.append(json.loads(block[6:]))
+        events = _parse_sse(raw)
+        errors = [event for event in events if event.get("event") == "error"]
+        assert errors and "timeout" in errors[0].get("message", "").lower(), events
+        assert not any(event.get("event") == "done" for event in events)
+        assert not any(event.get("event") == "saved" for event in events)
+        _assert_process_gone(pid_file)
 
-        error_events = [e for e in events if e.get("event") in ("error", "timed_out")]
-        assert len(error_events) > 0, "Should have error or timed_out event"
-        assert error_events[0].get("message"), "Error message should not be empty"
+        cid = next(event["conversation"] for event in events if event.get("event") == "start")
+        history = _get(api, "chat/history/" + cid)
+        assert not [m for m in history["messages"] if m["role"] == "assistant"]
 
-        done_events = [e for e in events if e.get("event") == "done"]
-        assert len(done_events) == 0, "Should not have done event after timeout error"
-
-        saved_events = [e for e in events if e.get("event") == "saved"]
-        assert len(saved_events) == 0, "Should not have saved event after timeout error"
-
-        cid = next((e["conversation"] for e in events if e.get("event") == "start"), None)
-        assert cid is not None, "Conversation should be created even on timeout"
-
-        def working_provider(argv):
-            return [
-                json.dumps({"type": "stream_event", "event": {"type": "message_start",
-                            "message": {"model": "claude-sonnet-5"}}}),
-                json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
-                            "delta": {"type": "text_delta", "text": "Response 2"}}}),
-                json.dumps({"type": "result", "result": "Response 2"}),
-            ]
-        api.brain._line_source = working_provider
-
-        status2, raw2 = _post(api, "chat", {"message": "another message", "model": "claude", "conversation": cid})
+        api.brain._line_source = lambda _argv: [
+            json.dumps({"type": "stream_event", "event": {"type": "message_start", "message": {"model": "claude-test"}}}),
+            json.dumps({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Recovered"}}}),
+        ]
+        status2, raw2 = _post(api, "chat", {"message": "Question suivante", "model": "claude", "conversation": cid})
         assert status2 == 200
-
-        events2 = []
-        for block in raw2.decode().split("\n\n"):
-            if block.startswith("data: "):
-                events2.append(json.loads(block[6:]))
-
-        assert any(e.get("event") == "done" for e in events2), "Conversation should be reusable after timeout"
+        assert any(event.get("event") == "done" for event in _parse_sse(raw2))
     finally:
         api.close()
 
 
 def test_a7_frontend_error_handling_removes_spinner_shows_error(tmp_path):
-    """A7: frontend après event=error → spinner supprimé ; bulle d'erreur visible ; textarea+Send réactivés."""
-    import urllib.request
-    import re
+    """A7: execute the real UI JavaScript and observe loading/error/recovery states."""
     api = _server(tmp_path)
-
-    def error_provider(argv):
-        raise OSError("CLI indisponible: test error")
-
-    api.brain._line_source = error_provider
+    timeout_cli, pid_file = _make_silent_timeout_cli(tmp_path, "a7-provider")
+    api.brain.claude_executable = str(timeout_cli)
+    api.brain.deadline_s = 0.50
+    api.brain._line_source = None
     api.serve_in_thread()
     try:
-        status, raw = _post(api, "chat", {"message": "test", "model": "claude"})
-        assert status == 200
+        result = _run_real_ui_harness(
+            api,
+            tmp_path,
+            project_id="job-radar-active",
+            message="Corrige ce fichier.",
+        )
+        assert result["requestBody"]["project_id"] == "job-radar-active"
+        assert result["immediate"] == {
+            "sendDisabled": True,
+            "inputDisabled": True,
+            "spinner": True,
+        }
+        final = result["final"]
+        assert final["sendDisabled"] is False
+        assert final["inputDisabled"] is False
+        assert final["spinner"] is False
+        assert "timeout" in final["bubble"].lower()
+        assert "ff6b6b" in final["errorBorder"].lower()
+        assert final["focused"] is True
+        assert final["conversation"]
+        _assert_process_gone(pid_file)
 
-        # Finding 4 fix: Fetch the HTML page to verify actual DOM state
-        html_resp = urllib.request.Request(api.url, headers={"X-JOAO-Token": api.token})
-        with urllib.request.urlopen(html_resp, timeout=10) as resp:
-            html_content = resp.read().decode()
-
-        events = []
-        for block in raw.decode().split("\n\n"):
-            if block.startswith("data: "):
-                events.append(json.loads(block[6:]))
-
-        error_events = [e for e in events if e.get("event") == "error"]
-        assert len(error_events) > 0
-        assert error_events[0].get("message")
-
-        done_events = [e for e in events if e.get("event") == "done"]
-        assert len(done_events) == 0, "Should not have done event after error"
-
-        saved_events = [e for e in events if e.get("event") == "saved"]
-        assert len(saved_events) == 0, "Should not save after error"
-
-        # Finding 4 fix: verify real DOM behavior after error event
-        cid = next((e["conversation"] for e in events if e.get("event") == "start"), None)
-        assert cid is not None, "Conversation should be created even on error"
-
-        # Fetch conversation history to verify no empty assistant message was saved
-        hist = _get(api, "chat/history/" + cid)
-        assistant_msgs = [m for m in hist["messages"] if m["role"] == "assistant"]
-        assert len(assistant_msgs) == 0, "Should not save empty assistant messages"
-
-        # Finding 4 fix: verify DOM contains error indication in the HTML
-        # The UI should show error styling (border color changed, error message displayed)
-        # Look for the error event that was added to the conversation bubble
-        assert "⚠️" in html_content or "error" in html_content.lower() or "cli indisponible" in html_content.lower()
-
-        # Finding 4 fix: verify textarea and Send button are present and functional (not disabled)
-        # In ui.html: <textarea id=in> and <button class=send onclick=send()>
-        assert '<textarea id=in' in html_content or 'textarea' in html_content.lower()
-        assert 'send' in html_content.lower() or 'Envoyer' in html_content
-
+        history = _get(api, "chat/history/" + final["conversation"])
+        assert not [m for m in history["messages"] if m["role"] == "assistant"]
     finally:
         api.close()
 
@@ -422,54 +451,41 @@ def test_a8_non_regression_claude_glm_route_attachments_write_tier_disabled(tmp_
 # Functional Proofs F1-F4 for GPT Audit
 
 def test_f1_active_project_transmission_to_reply_stream(tmp_path):
-    """F1: Test API real with active project_id - verify transmission to reply_stream."""
+    """F1: API → ChatBrain receives project_id and avoids the projectless local block."""
     api = _server(tmp_path)
+    provider_calls = []
 
-    # Track what parameters reply_stream receives
-    reply_stream_params = []
-    original_reply_stream = api.brain.reply_stream
+    def provider(argv):
+        provider_calls.append(argv)
+        return [
+            json.dumps({"type": "stream_event", "event": {"type": "message_start", "message": {"model": "claude-test"}}}),
+            json.dumps({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "provider-path"}}}),
+        ]
 
-    def tracking_reply_stream(message, **kwargs):
-        reply_stream_params.append(kwargs)
-        # Don't actually call the provider - simulate local response
-        yield {"event": "model", "model": "JOAO-local", "provider": "local-controller"}
-        yield {"event": "delta", "text": "Test response with project"}
-        yield {"event": "done", "text": "Test response with project", "model": "JOAO-local",
-               "provider": "local-controller", "cost": None}
-
-    api.brain.reply_stream = tracking_reply_stream
+    api.brain._line_source = provider
     api.serve_in_thread()
     try:
-        # Test WITH active project_id
-        active_project_id = "test-job-radar"
         status, raw = _post(api, "chat", {
-            "message": "Modifie le code et lance les tests",
+            "message": "Corrige ce fichier.",
             "model": "claude",
-            "project_id": active_project_id
+            "project_id": "test-job-radar",
         })
         assert status == 200
+        events = _parse_sse(raw)
+        assert provider_calls, "active project request did not reach the provider path"
+        assert any(event.get("event") == "done" and event.get("text") == "provider-path" for event in events)
+        assert not any(event.get("model") == "JOAO-local" for event in events)
 
-        # Verify reply_stream received active_project_id
-        assert len(reply_stream_params) == 1
-        assert "active_project_id" in reply_stream_params[0]
-        assert reply_stream_params[0]["active_project_id"] == active_project_id
-
-        # Verify it's NOT classified as "without project"
-        # (In real scenario, this would go to mission path, not local "unavailable" response)
-
-        # Test WITHOUT project_id
-        reply_stream_params.clear()
-        status, raw = _post(api, "chat", {
-            "message": "Modifie le code et lance les tests",
-            "model": "claude"
+        calls_before = len(provider_calls)
+        status2, raw2 = _post(api, "chat", {
+            "message": "Corrige ce fichier.",
+            "model": "claude",
         })
-        assert status == 200
-
-        # Verify reply_stream received None for active_project_id
-        assert len(reply_stream_params) == 1
-        assert "active_project_id" in reply_stream_params[0]
-        assert reply_stream_params[0]["active_project_id"] is None
-
+        assert status2 == 200
+        events2 = _parse_sse(raw2)
+        assert len(provider_calls) == calls_before, "projectless execution request called the provider"
+        assert any(event.get("model") == "JOAO-local" for event in events2)
+        assert "SEC-BOOT" in "".join(event.get("text", "") for event in events2)
     finally:
         api.close()
 
@@ -558,77 +574,21 @@ def test_f3_general_questions_vs_execution_requests(tmp_path):
 
 
 def test_f4_real_timeout_and_real_dom_execution(tmp_path):
-    """F4: Test real timeout interruptible + real DOM execution with JavaScript."""
-    import subprocess
+    """F4: exercise ChatBrain._lines directly with a silent real child and prove it is killed."""
     import time
 
-    api = _server(tmp_path)
-
-    # F4-A6: Test real timeout with actual subprocess
-    api.brain.deadline_s = 0.1
-
-    def real_blocking_subprocess(argv):
-        # Create a REAL subprocess that blocks longer than deadline
-        try:
-            proc = subprocess.Popen(
-                ["sleep", "0.5"],  # Sleep 500ms, longer than 100ms deadline
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            # This should be interrupted by timeout
-            stdout, stderr = proc.communicate(timeout=api.brain.deadline_s + 0.05)
-            return []  # Should not reach here
-        except subprocess.TimeoutExpired:
-            # Timeout occurred - this is expected
-            return []
-
-    api.brain._line_source = real_blocking_subprocess
-    api.serve_in_thread()
+    timeout_cli, pid_file = _make_silent_timeout_cli(tmp_path, "f4-provider")
+    brain = ChatBrain(deadline_s=0.50)
+    started = time.monotonic()
     try:
-        # A6: Test real timeout behavior
-        status, raw = _post(api, "chat", {"message": "test timeout", "model": "claude"})
-        assert status == 200
-
-        events = []
-        for block in raw.decode().split("\n\n"):
-            if block.startswith("data: "):
-                events.append(json.loads(block[6:]))
-
-        # Should have error event
-        error_events = [e for e in events if e.get("event") in ("error", "timed_out")]
-        assert len(error_events) > 0, "Should have error/timed_out event"
-
-        # Verify conversation is still reusable
-        cid = next((e["conversation"] for e in events if e.get("event") == "start"), None)
-
-        def working_provider(argv):
-            return [
-                json.dumps({"type": "stream_event", "event": {"type": "message_start",
-                            "message": {"model": "claude-sonnet-5"}}}),
-                json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
-                            "delta": {"type": "text_delta", "text": "Recovery response"}}}),
-            ]
-
-        api.brain._line_source = working_provider
-
-        # Conversation should be reusable after timeout
-        status2, raw2 = _post(api, "chat", {"message": "another message", "model": "claude", "conversation": cid})
-        assert status2 == 200
-
-        events2 = []
-        for block in raw2.decode().split("\n\n"):
-            if block.startswith("data: "):
-                events2.append(json.loads(block[6:]))
-
-        assert any(e.get("event") == "done" for e in events2), "Conversation should be reusable after real timeout"
-
-        # A7: Test real DOM execution (requires actual browser interaction)
-        # For now, we test that the error handling logic is in place
-        # Real JavaScript execution would require a browser automation tool
-
-    finally:
-        api.close()
+        list(brain._lines([str(timeout_cli)]))
+    except TimeoutError as exc:
+        assert "timeout" in str(exc).lower()
+    else:
+        raise AssertionError("ChatBrain._lines did not raise TimeoutError")
+    elapsed = time.monotonic() - started
+    assert elapsed < 2.0, f"real timeout was not bounded: {elapsed:.3f}s"
+    _assert_process_gone(pid_file)
 
 
 if __name__ == "__main__":
