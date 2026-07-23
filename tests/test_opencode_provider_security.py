@@ -260,13 +260,6 @@ class TestRealInvokePath:
                 duration_seconds=1.0,
             )
 
-    def get_capability_grant(self):
-        """Get a capability grant that allows workspace.write."""
-        from joao_orchestrator.policy.capabilities import CapabilitySet
-        grant = CapabilitySet()
-        grant.grant("workspace.write")  # Use the grant method
-        return grant
-
     def test_invoke_with_safe_config_calls_engine(self, tmp_path):
         """With unmodified safe config, the engine is called."""
         engine = self.RecordingEngine()
@@ -282,10 +275,10 @@ class TestRealInvokePath:
             project_id="test-project",
             prompt="safe task",
             worktree_path=str(tmp_path),
-            capability_grant=self.get_capability_grant(),
+            capability_grant=CapabilitySet.for_role("coder"),
         )
         
-        # Mock write tier check
+        # Mock SEC-BOOT to exercise post-gate production path
         with patch('joao_orchestrator.bubble.write_tier_policy.assert_write_tier_enabled'):
             response = provider.invoke(request)
         
@@ -308,20 +301,21 @@ class TestRealInvokePath:
             project_id="test-project",
             worktree_path=str(tmp_path),
             prompt="any task",
-            capability_grant=self.get_capability_grant(),
+            capability_grant=CapabilitySet.for_role("coder"),
         )
         
         # Monkeypatch _safe_opencode_config to return unsafe policy
         unsafe_config = _safe_opencode_config("test-model")
         unsafe_config["permission"]["bash"]["find *"] = "allow"  # UNSAFE MUTATION
         
+        # Mock SEC-BOOT to exercise post-gate production path
         with patch('joao_orchestrator.bubble.write_tier_policy.assert_write_tier_enabled'):
             with patch('joao_orchestrator.providers.opencode_provider._safe_opencode_config', return_value=unsafe_config):
                 response = provider.invoke(request)
         
         assert not engine.called, "Engine must NOT be called with unsafe config"
         assert not response.ok, "Response must fail"
-        assert "bash['find *'] must be 'deny'" in response.error, "Error must mention policy violation"
+        assert "execution policy rejected" in response.error, "Error must mention policy rejection"
 
     def test_malicious_prompt_text_not_parsed_as_security_boundary(self, tmp_path):
         """Malicious prompt containing find -exec, sed -i, newlines, quoting is NOT parsed as security boundary."""
@@ -348,22 +342,23 @@ class TestRealInvokePath:
             project_id="test-project",
             worktree_path=str(tmp_path),
             prompt="",
-            capability_grant=self.get_capability_grant(),
+            capability_grant=CapabilitySet.for_role("coder"),
         )
         
-        for malicious_prompt in malicious_prompts:
-            # Reset engine state
-            engine.called = False
-            
-            request.prompt = malicious_prompt
-            
-            with patch('joao_orchestrator.bubble.write_tier_policy.assert_write_tier_enabled'):
+        # Mock SEC-BOOT to exercise post-gate production path
+        with patch('joao_orchestrator.bubble.write_tier_policy.assert_write_tier_enabled'):
+            for malicious_prompt in malicious_prompts:
+                # Reset engine state
+                engine.called = False
+                
+                request.prompt = malicious_prompt
+                
                 response = provider.invoke(request)
-            
-            # The key assertion: prompt text does NOT control security
-            # Security comes from the policy, not from parsing the prompt
-            assert response.ok, f"Prompt must not control security: {malicious_prompt}"
-            assert engine.called, "Engine called because policy (not prompt) controls execution"
+                
+                # The key assertion: prompt text does NOT control security
+                # Security comes from the policy, not from parsing the prompt
+                assert response.ok, f"Prompt must not control security: {malicious_prompt}"
+                assert engine.called, "Engine called because policy (not prompt) controls execution"
 
     def test_security_from_policy_not_prompt_text(self, tmp_path):
         """Security comes from the execution policy handed to OpenCode, not from prompt text."""
@@ -380,35 +375,37 @@ class TestRealInvokePath:
             project_id="test-project",
             worktree_path=str(tmp_path),
             prompt="",
-            capability_grant=self.get_capability_grant(),
+            capability_grant=CapabilitySet.for_role("coder"),
         )
         
         # Test 1: Safe policy allows safe prompts
         safe_prompts = ["list files", "show code", "grep pattern"]
-        for safe_prompt in safe_prompts:
-            engine.called = False
-            request.prompt = safe_prompt
-            
-            with patch('joao_orchestrator.bubble.write_tier_policy.assert_write_tier_enabled'):
+        
+        # Mock SEC-BOOT to exercise post-gate production path
+        with patch('joao_orchestrator.bubble.write_tier_policy.assert_write_tier_enabled'):
+            for safe_prompt in safe_prompts:
+                engine.called = False
+                request.prompt = safe_prompt
+                
                 response = provider.invoke(request)
-            
-            assert response.ok, f"Safe prompt with safe policy: {safe_prompt}"
-            assert engine.called, "Engine called"
+                
+                assert response.ok, f"Safe prompt with safe policy: {safe_prompt}"
+                assert engine.called, "Engine called"
         
         # Test 2: Unsafe policy blocks ALL prompts (even safe ones)
         unsafe_config = _safe_opencode_config("test-model")
         unsafe_config["permission"]["bash"]["find *"] = "allow"  # UNSAFE
         
-        with patch('joao_orchestrator.providers.opencode_provider._safe_opencode_config', return_value=unsafe_config):
-            for safe_prompt in safe_prompts:
-                engine.called = False
-                request.prompt = safe_prompt
-                
-                with patch('joao_orchestrator.providers.opencode_provider.assert_write_tier_enabled'):
+        with patch('joao_orchestrator.bubble.write_tier_policy.assert_write_tier_enabled'):
+            with patch('joao_orchestrator.providers.opencode_provider._safe_opencode_config', return_value=unsafe_config):
+                for safe_prompt in safe_prompts:
+                    engine.called = False
+                    request.prompt = safe_prompt
+                    
                     response = provider.invoke(request)
-                
-                assert not response.ok, "Unsafe policy blocks all prompts"
-                assert not engine.called, "Engine not called due to policy violation"
+                    
+                    assert not response.ok, "Unsafe policy blocks all prompts"
+                    assert not engine.called, "Engine not called due to policy violation"
 
 
 class TestNoDeadCode:
@@ -463,6 +460,8 @@ class TestNoDeadCode:
 class TestSecBootBehavior:
     """E. SEC-BOOT behavior: Keep write_tier_policy.py byte-identical."""
     
+    M1_SEC_BOOT_HASH = "a0de9819151da3f8b8a2aa8a7630a282545503999e2d01d8ca237b3a6ddf88cd"
+    
     def test_sec_boot_file_integrity(self):
         """write_tier_policy.py must remain byte-identical to M1."""
         import hashlib
@@ -470,13 +469,10 @@ class TestSecBootBehavior:
         
         sec_boot_path = Path(__file__).parent.parent / "src" / "joao_orchestrator" / "bubble" / "write_tier_policy.py"
         
-        # Calculate SHA256 of the file
+        # Calculate SHA256 of the current file
         with open(sec_boot_path, "rb") as f:
-            file_hash = hashlib.sha256(f.read()).hexdigest()
+            current_hash = hashlib.sha256(f.read()).hexdigest()
         
-        # This test passes if the file exists and has not been modified
-        # The actual hash comparison is done during evidence collection
-        assert sec_boot_path.exists(), "write_tier_policy.py must exist"
-        
-        # Store hash for evidence comparison
-        return file_hash
+        # Compare with M1 hash
+        assert current_hash == self.M1_SEC_BOOT_HASH, \
+            f"SEC-BOOT file changed: M1={self.M1_SEC_BOOT_HASH}, current={current_hash}"

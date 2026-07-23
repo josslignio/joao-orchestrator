@@ -436,7 +436,16 @@ class OpenCodeProvider(ProviderAdapter):
             )
 
         config = _safe_opencode_config(self.model)
-        _validate_opencode_execution_policy(config)
+        try:
+            _validate_opencode_execution_policy(config)
+        except PermissionError as exc:
+            return ProviderResponse(
+                role=request.role,
+                task_id=request.task_id,
+                ok=False,
+                error=f"OpenCode execution policy rejected: {exc}",
+                provider_name=self.name,
+            )
         env = {
             "OPENCODE_CONFIG_CONTENT": json.dumps(config, sort_keys=True, separators=(",", ":")),
             "OPENCODE_DISABLE_AUTOUPDATE": "1",
