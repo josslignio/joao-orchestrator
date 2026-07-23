@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -74,8 +75,24 @@ def main() -> int:
             max_provider_calls=1,
             worktree_path=str(provider_root),
         ))
-        record = result.to_dict()
-        record["marker_match"] = is_exact_marker(result.final_content)
+        # Redact raw provider content from evidence: never persist prompts or
+        # raw responses.  Only record the SHA256, the marker-match boolean, and
+        # the status/verdict — never the content itself.
+        record = {
+            "task_id": result.task_id,
+            "mode": result.mode,
+            "status": result.status,
+            "selected_provider": result.selected_provider,
+            "verdict": result.verdict,
+            "reason": result.reason,
+            "prompt_sha256": result.prompt_sha256,
+            "final_content_sha256": hashlib.sha256(
+                result.final_content.encode("utf-8")
+            ).hexdigest() if result.final_content else "",
+            "marker_match": is_exact_marker(result.final_content),
+            "needs_human": result.needs_human,
+            "call_count": len(result.calls),
+        }
         attempts.append(record)
         if result.status == "completed" and is_exact_marker(result.final_content):
             success = result
