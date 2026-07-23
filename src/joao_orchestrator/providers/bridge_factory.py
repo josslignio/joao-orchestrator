@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 from .chat_cli import ChatCLIProvider
+from .codex_review import CodexReviewProvider
 from .codex_subscription import CodexSubscriptionProvider
 from .opencode_provider import OpenCodeProvider, DEFAULT_MODEL
 from .zai_coding_plan import ZAICodingPlanProvider
@@ -32,6 +33,16 @@ def build_default_bridge(*, environment_allowlist: Optional[Iterable[str]] = Non
         family="zai",
         model="zai-coding-plan/glm-4.5-air",
         priority=90,
+        enabled_by_policy=True,
+    )
+
+    # Independent read-only Codex reviewer.  This is a separate adapter from
+    # the write-tier Codex coder and never requests workspace.write.
+    bridge.register(
+        CodexReviewProvider.default(env, timeout_seconds=timeout_seconds),
+        family="openai",
+        model="codex-subscription/read-only",
+        priority=110,
         enabled_by_policy=True,
     )
 

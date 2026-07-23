@@ -10,6 +10,7 @@ from typing import Optional
 
 from ..bubble.chat import ChatBrain, available_brains
 from .base import ProviderAdapter, ProviderRequest, ProviderResponse
+from .codex_review import classify_provider_failure
 
 
 class ChatCLIProvider(ProviderAdapter):
@@ -47,14 +48,15 @@ class ChatCLIProvider(ProviderAdapter):
                 errors.append(str(event.get("message", "provider error")))
             elif kind in {"model", "done"} and event.get("model"):
                 model_seen = str(event["model"])
-        content = "".join(chunks)
-        if errors or not content:
+        content = "".join(chunks).strip()
+        semantic_error = classify_provider_failure(content) if content else ""
+        if errors or not content or semantic_error:
             return ProviderResponse(
                 role=request.role,
                 task_id=request.task_id,
                 ok=False,
                 content=content,
-                error="; ".join(errors) or "provider returned no text",
+                error="; ".join(errors) or semantic_error or "provider returned no text",
                 provider_name=self.name,
             )
         return ProviderResponse(

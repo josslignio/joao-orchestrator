@@ -1,14 +1,8 @@
-#!/usr/bin/env python3
-"""M10 supervised read-only provider smoke.
-
-Tries available read-only reviewer providers in a bounded order.  It never
-requests workspace.write, never approves/promotes and verifies that the target
-Git worktree remains byte-for-byte status-clean.
-"""
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,11 +11,18 @@ from joao_orchestrator.providers.bridge_factory import build_default_bridge
 from joao_orchestrator.supervisor import SupervisorCore, SupervisorRequest
 
 
+MARKER = "JOAO_M10_OK"
+
+
+def is_exact_marker(text: str) -> bool:
+    return str(text).strip() == MARKER
+
+
 def git_status(path: Path) -> str:
     if not (path / ".git").exists():
         return "NOT_A_GIT_WORKTREE"
     return subprocess.check_output(
-        ["git", "-C", str(path), "status", "--porcelain=v1"],
+        ["git", "-C", str(path), "status", "--porcelain=v1", "--untracked-files=all"],
         text=True,
     )
 
@@ -30,23 +31,28 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--state-root", required=True)
     parser.add_argument("--evidence", required=True)
-    parser.add_argument("--worktree", default="")
-    parser.add_argument("--preferred", default="")
+    parser.add_argument("--worktree", required=True)
+    parser.add_argument("--preferred", default="codex-review")
     args = parser.parse_args()
 
     evidence_path = Path(args.evidence).expanduser().resolve()
     evidence_path.parent.mkdir(parents=True, exist_ok=True)
-    worktree = Path(args.worktree).expanduser().resolve() if args.worktree else None
-    before = git_status(worktree) if worktree else "NO_WORKTREE"
+    worktree = Path(args.worktree).expanduser().resolve()
+    before = git_status(worktree)
 
-    bridge = build_default_bridge(timeout_seconds=180)
-    core = SupervisorCore(bridge, Path(args.state_root))
+    state_root = Path(args.state_root).expanduser().resolve()
+    provider_root = state_root / "m10-provider-sandbox"
+    provider_root.mkdir(parents=True, exist_ok=True)
+    os.chdir(provider_root)
+
+    bridge = build_default_bridge(timeout_seconds=240)
+    core = SupervisorCore(bridge, state_root)
     candidates = [
         desc.name for desc in bridge.candidates(role="reviewer")
-        if desc.name in {"glm-chat", "claude-chat", "zai-coding-plan"}
+        if desc.name in {"codex-review", "glm-chat", "claude-chat"}
     ]
     if args.preferred:
-        candidates.sort(key=lambda name: name != args.preferred)
+        candidates.sort(key=lambda name: (name != args.preferred, name))
 
     attempts = []
     success = None
@@ -55,7 +61,7 @@ def main() -> int:
         "Reply with exactly JOAO_M10_OK and nothing else."
     )
     for index, provider in enumerate(candidates[:3], 1):
-        request = SupervisorRequest(
+        result = core.execute(SupervisorRequest(
             task_id=f"m10-{index}",
             project_id="joao",
             prompt=prompt,
@@ -63,29 +69,32 @@ def main() -> int:
             role="reviewer",
             preferred_provider=provider,
             max_provider_calls=1,
-        )
-        result = core.execute(request)
+            worktree_path=str(provider_root),
+        ))
         record = result.to_dict()
+        record["marker_match"] = is_exact_marker(result.final_content)
         attempts.append(record)
-        if result.status == "completed" and "JOAO_M10_OK" in result.final_content:
+        if result.status == "completed" and is_exact_marker(result.final_content):
             success = result
             break
 
-    after = git_status(worktree) if worktree else "NO_WORKTREE"
-    clean = before == after and before in {"", "NO_WORKTREE", "NOT_A_GIT_WORKTREE"}
+    after = git_status(worktree)
+    worktree_unchanged = before == after
+    clean = worktree_unchanged and before == ""
     verdict = {
-        "schema_version": 1,
+        "schema_version": 2,
         "at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "inventory": bridge.inventory(),
         "attempts": attempts,
         "selected_provider": success.selected_provider if success else None,
-        "exact_marker": bool(success),
+        "exact_marker": bool(success) and is_exact_marker(success.final_content),
         "worktree_status_before": before,
         "worktree_status_after": after,
-        "worktree_unchanged": before == after,
+        "worktree_unchanged": worktree_unchanged,
         "pass": bool(success) and clean,
         "limitations": [
-            "One live read-only provider response is proved; this does not enable write-tier.",
+            "Only an exact JOAO_M10_OK response counts as live provider success.",
+            "Rate-limit, quota, empty or unrelated responses are failures.",
             "No merge, promotion, deployment or autonomous night run is performed.",
         ],
     }
