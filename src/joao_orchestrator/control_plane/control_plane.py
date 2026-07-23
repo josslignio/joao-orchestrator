@@ -3,6 +3,7 @@ import json,secrets,threading
 from dataclasses import dataclass,field
 from pathlib import Path
 from .checkpoint import Budget,BudgetConstraints,BudgetUsage,PathPolicy,CheckpointContract,CheckpointStore
+from ..storage.persistence_errors import CheckpointCorruptionError
 from .events import EventStore,RunEvent,EventType
 from .project import ProjectRecord,ProjectRegistry
 from .task_graph import TaskGraph,TaskNode,TaskStatus
@@ -72,7 +73,9 @@ class ControlPlane:
     def load_checkpoint_contract(self,cid): return CheckpointStore(self.storage_root,cid).load_contract()
     def save_state(self,state=None): self.checkpoint_store.save_state(state or self.compute_projection())
     def load_state(self):
-        d=self.checkpoint_store.load_state(); s=ProjectState.from_dict(d) if d else self.compute_projection(); self.task_graph=TaskGraph(); [self.task_graph.add_task(t) for t in s.tasks.values()]; return s
+        try: d=self.checkpoint_store.load_state()
+        except CheckpointCorruptionError: d=None
+        s=ProjectState.from_dict(d) if d else self.compute_projection(); self.task_graph=TaskGraph(); [self.task_graph.add_task(t) for t in s.tasks.values()]; return s
     def recover_from_crash(self): d=self.checkpoint_store.load_last_valid_state(); return ProjectState.from_dict(d) if d else self.compute_projection()
     def get_last_valid_state(self): d=self.checkpoint_store.load_last_valid_state(); return ProjectState.from_dict(d) if d else None
     def register_project(self,repository_path,metadata=None,starting_sha=""):
@@ -131,7 +134,9 @@ class CP1CheckpointEngine(ControlPlane):
         s=super().compute_projection(); return s
     # save_state above keeps the first valid snapshot for crash recovery
     def load_state(self):
-        d=self.checkpoint_store.load_state(); s=ProjectState.from_dict(d) if d else self.compute_projection(); self.task_graph=TaskGraph(); [self.task_graph.add_task(t) for t in s.tasks.values()]; return s
+        try: d=self.checkpoint_store.load_state()
+        except CheckpointCorruptionError: d=None
+        s=ProjectState.from_dict(d) if d else self.compute_projection(); self.task_graph=TaskGraph(); [self.task_graph.add_task(t) for t in s.tasks.values()]; return s
     def recover_from_crash(self): return super().recover_from_crash()
     def register_project(self,repository_path,metadata=None,starting_sha=""):
         return self.registry.register(ProjectRecord(self.project_id,repository_path,starting_sha=starting_sha,metadata=metadata or {}))

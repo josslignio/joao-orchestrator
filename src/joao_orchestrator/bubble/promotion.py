@@ -44,13 +44,15 @@ import hashlib
 import json
 import shutil
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ..policy.paths import detect_sensitive_ignored_files
 from ..storage.atomic import append_line, atomic_write_json
-from .candidate import recompute_candidate_tree
+from .candidate import recompute_candidate_tree, verify_candidate_identity
+from ..integrity.records import ApprovalRecord, CandidateIdentityV2, ReviewerRecordV2
 from .change_capture import ignored_files_inventory
 
 
@@ -60,12 +62,16 @@ class PromotionError(RuntimeError):
 
 def create_approval_record(run: dict[str, Any], candidate: dict[str, Any], *,
                            review_proof_sha256: str, approved_by: str = "human",
-                           approved_at: str | None = None) -> dict[str, Any]:
-    """A0.2 §15: the immutable approval object `promote()` requires — separate
-    from the mutable `run.json`. Binds the human decision to the exact
-    run/candidate/review triple; `promote()` independently re-verifies every
-    field against the run's own on-disk evidence before it ever touches git."""
-    return {
+                           approved_at: str | None = None,
+                           hmac_key: bytes | None = None) -> dict[str, Any]:
+    """Create an approval bound to the signed candidate and signed review.
+
+    Legacy candidates remain serializable for pre-M5/non-authorizing tests, but
+    a candidate carrying ``identity_v2`` can only produce an authorizing record
+    when the controller supplies the dedicated HMAC key and the final review
+    contains a valid signed ReviewerRecordV2.
+    """
+    legacy = {
         "run_id": run["run_id"],
         "candidate_commit": candidate["candidate_commit"],
         "candidate_tree": candidate["candidate_tree"],
@@ -74,6 +80,46 @@ def create_approval_record(run: dict[str, Any], candidate: dict[str, Any], *,
         "approved_at": approved_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "previous_status": "needs_approval",
     }
+    if "identity_v2" not in candidate:
+        return legacy
+    if hmac_key is None:
+        raise PromotionError("M5: signed candidate approval requires the integrity key")
+    identity = CandidateIdentityV2.from_mapping(candidate["identity_v2"])
+    identity.validate()
+    identity_signature = candidate.get("identity_signature") or identity.controller_signature
+    if not identity_signature or not identity.verify_signature(identity_signature, hmac_key):
+        raise PromotionError("M5: candidate identity signature is invalid at approval")
+    proof = run.get("final_review_proof")
+    if not isinstance(proof, dict):
+        raise PromotionError("M5: run is missing controller-bound final review proof")
+    review_signature = proof.get("review_signature")
+    review_data = proof.get("reviewer_record_v2")
+    if not isinstance(review_data, dict) or not isinstance(review_signature, str):
+        raise PromotionError("M5: final review is missing ReviewerRecordV2/signature")
+    review_record = ReviewerRecordV2.from_mapping(review_data)
+    review_record.validate()
+    if not review_record.verify_signature(review_signature, hmac_key):
+        raise PromotionError("M5: final review signature is invalid at approval")
+    if review_record.identity_digest != identity.digest() or review_record.verdict != "ACCEPT" or review_record.reviewer_return_code != 0:
+        raise PromotionError("M5: final review is not an ACCEPT bound to this candidate")
+    record = ApprovalRecord(
+        identity_digest=identity.digest(),
+        identity_signature=identity_signature,
+        review_signature=review_signature,
+        approver_run_id=run["run_id"],
+        approval_timestamp=time.time(),
+        approved_by=approved_by,
+    )
+    record.validate()
+    record.signature = record.compute_signature(hmac_key)
+    legacy.update({
+        "approval_record_v2": dict(record.__dict__),
+        "approval_signature": record.signature,
+        "identity_digest": identity.digest(),
+        "identity_signature": identity_signature,
+        "review_signature": review_signature,
+    })
+    return legacy
 
 
 def write_approval_record(run_dir: Path, ledger_path: Path, record: dict[str, Any]) -> Path:
@@ -168,9 +214,59 @@ def _verify_acceptance_for_promotion(run: dict[str, Any], candidate: dict[str, A
         )
 
 
+
+def _verify_m5_chain(workspace: Path, run_dir: Path, run: dict[str, Any],
+                     candidate: dict[str, Any], approval_record: dict[str, Any],
+                     hmac_key: bytes | None) -> CandidateIdentityV2 | None:
+    if "identity_v2" not in candidate:
+        return None
+    if hmac_key is None:
+        raise PromotionError("M5: promotion of a V2 candidate requires the integrity key")
+    try:
+        identity = verify_candidate_identity(candidate, workspace, hmac_key)
+    except Exception as exc:
+        raise PromotionError(f"M5: candidate identity revalidation failed: {exc}") from exc
+
+    review_path = Path(run_dir) / "review-evidence.json"
+    try:
+        review = json.loads(review_path.read_text(encoding="utf-8"))
+        proof = review["proof"]
+        review_data = proof["reviewer_record_v2"]
+        review_signature = proof["review_signature"]
+        reviewer = ReviewerRecordV2.from_mapping(review_data)
+        reviewer.validate()
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise PromotionError(f"M5: invalid final review evidence: {exc}") from exc
+    if not reviewer.verify_signature(review_signature, hmac_key):
+        raise PromotionError("M5: reviewer signature verification failed")
+    if reviewer.identity_digest != identity.digest():
+        raise PromotionError("M5: reviewer is bound to a different candidate identity")
+    if reviewer.identity_signature != candidate.get("identity_signature"):
+        raise PromotionError("M5: reviewer carries a different candidate signature")
+    if reviewer.verdict != "ACCEPT" or reviewer.reviewer_return_code != 0:
+        raise PromotionError("M5: reviewer did not produce a successful ACCEPT")
+
+    approval_data = approval_record.get("approval_record_v2")
+    approval_signature = approval_record.get("approval_signature")
+    if not isinstance(approval_data, dict) or not isinstance(approval_signature, str):
+        raise PromotionError("M5: signed approval record is missing")
+    try:
+        approval = ApprovalRecord.from_mapping(approval_data)
+        approval.validate()
+    except (TypeError, ValueError) as exc:
+        raise PromotionError(f"M5: invalid approval record: {exc}") from exc
+    if not approval.verify_signature(approval_signature, hmac_key):
+        raise PromotionError("M5: approval signature verification failed")
+    if approval.identity_digest != identity.digest() or approval.identity_signature != candidate.get("identity_signature"):
+        raise PromotionError("M5: approval is bound to a different candidate")
+    if approval.review_signature != review_signature or approval.approver_run_id != run.get("run_id"):
+        raise PromotionError("M5: approval is bound to a different review/run")
+    return identity
+
 def promote(workspace: Path, run_dir: Path, candidate: dict[str, Any], run_id: str,
            branch: str | None = None, *, run: dict[str, Any] | None = None,
-           approval_record: dict[str, Any] | None = None) -> dict[str, Any]:
+           approval_record: dict[str, Any] | None = None,
+           hmac_key: bytes | None = None) -> dict[str, Any]:
     """Atomically fast-forward `branch` (default: current branch) to the
     frozen candidate commit, then materialize and independently verify that
     promotion in a brand-new sterile worktree — never in the live,
@@ -191,6 +287,7 @@ def promote(workspace: Path, run_dir: Path, candidate: dict[str, Any], run_id: s
         )
     _verify_acceptance_for_promotion(run, candidate, approval_record, run_dir)
     workspace = Path(workspace)
+    _verify_m5_chain(workspace, Path(run_dir), run, candidate, approval_record, hmac_key)
     branch = branch or _current_branch(workspace)
     current_tip = _git(["rev-parse", branch], workspace).stdout.strip()
     if current_tip != candidate["parent_commit"]:
@@ -202,6 +299,9 @@ def promote(workspace: Path, run_dir: Path, candidate: dict[str, Any], run_id: s
     tag = f"joao-promoted-{run_id}"
     _git(["tag", "-a", tag, "-m", f"JOAO promotion of {run_id} ({candidate['candidate_tree']})",
          candidate["candidate_commit"]], workspace)
+    # Recompute and verify the complete candidate/review/approval chain in the
+    # last possible instruction window before the branch compare-and-swap.
+    _verify_m5_chain(workspace, Path(run_dir), run, candidate, approval_record, hmac_key)
     try:
         _git(["update-ref", f"refs/heads/{branch}", candidate["candidate_commit"], current_tip], workspace)
     except subprocess.CalledProcessError as exc:

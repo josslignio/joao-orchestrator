@@ -18,9 +18,16 @@ from typing import Any
 from ..domain.models import ProjectProfile
 from ..policy.paths import detect_path_violations, detect_sensitive_ignored_files
 from ..storage.atomic import FileLock, LockAcquireError, append_line, atomic_write_json, atomic_write_text
+from ..integrity.records import (
+    CandidateIdentityV2, IntegrityKeyManager, ReviewerRecordV2,
+    signed_checkpoint_for_payload,
+)
 from .sandbox import run_sandboxed
 from .execution_backend import ExecutionBackend, LocalUntrustedBackend, preflight_backend
-from .candidate import CandidateError, freeze_baseline, freeze_candidate, recompute_candidate_tree, release_candidate
+from .candidate import (
+    CandidateError, freeze_baseline, freeze_candidate, recompute_candidate_tree,
+    release_candidate, verify_candidate_identity,
+)
 from . import project_registry as project_registry_mod
 from .change_capture import EMPTY_DIFF_SHA256, capture_full_diff, ignored_files_inventory
 from .reviewer_contract import parse_reviewer_response, validate_reviewer_verdict
@@ -1234,6 +1241,8 @@ class RunRuntime:
             state_root=self.root, projects_root=projects_root, profiles_root=profiles_root)
         self.projects_root = self.project_registry.resolve_projects_root().path
         self.profiles_root = self.project_registry.resolve_profiles_root().path
+        self.integrity_keys = IntegrityKeyManager(self.root / "integrity")
+        self.integrity_key = self.integrity_keys.get_key()
     def _dir(self, run_id: str) -> Path: return self.root / "runs" / run_id
     def _inject(self, run: dict[str, Any], role: str, *, files_touched: list[str] | None = None, stage: str | None = None):
         """Compose the role's RÈGLES ACTIVES block, persist it as evidence, log the ids.
@@ -1266,9 +1275,19 @@ class RunRuntime:
     def _event(self, run: dict[str, Any], kind: str, **data) -> None:
         self._events(run).append({"event_id": secrets.token_hex(12), "at": now(), "kind": kind, "run_id": run["run_id"], "status": run["status"], **data})
     def _checkpoint(self, run: dict[str, Any]) -> None:
-        folder = self._dir(run["run_id"]) / "checkpoints"; folder.mkdir(parents=True, exist_ok=True)
-        path = folder / f"{len(list(folder.glob('*.json'))):04d}-{run['status']}.json"; atomic_write_json(path, run)
-        run["last_checkpoint"] = str(path); self._write(run)
+        folder = self._dir(run["run_id"]) / "checkpoints"
+        folder.mkdir(parents=True, exist_ok=True)
+        sequence = len([p for p in folder.glob("*.json") if not p.name.endswith(".integrity.json")])
+        path = folder / f"{sequence:04d}-{run['status']}.json"
+        atomic_write_json(path, run)
+        envelope, _ = signed_checkpoint_for_payload(
+            run, purpose="runtime-state",
+            key=self.integrity_key,
+            metadata={"run_id": run["run_id"], "status": run["status"], "sequence": sequence},
+        )
+        atomic_write_json(path.with_suffix(".integrity.json"), envelope)
+        run["last_checkpoint"] = str(path)
+        self._write(run)
     def _transition(self, run: dict[str, Any], target: RunStatus, reason: str) -> None:
         old = RunStatus(run["status"])
         if target not in NEXT[old]:
@@ -1380,7 +1399,7 @@ class RunRuntime:
         baseline_record: dict[str, Any] | None = None
         if declared_baseline and baseline_paths:
             try:
-                baseline_record = freeze_baseline(workspace, run_id)
+                baseline_record = freeze_baseline(workspace, run_id, run_dir=folder, hmac_key=self.integrity_key)
             except CandidateError as exc:
                 raise RuntimeStateError(f"A0-3: could not freeze declared baseline: {exc}") from exc
             drift_patch = _git_diff(workspace, baseline_record["true_head"], baseline_record["baseline_commit"])
@@ -1422,6 +1441,7 @@ class RunRuntime:
             # and review ran, so this closes the gap a mid-flight tamper check
             # right after testing cannot cover on its own.
             try:
+                verify_candidate_identity(candidate, Path(run["workspace"]), self.integrity_key)
                 recomputed = recompute_candidate_tree(Path(candidate["readonly_copy"]))
             except Exception as exc:
                 self._event(run, "candidate_recompute_failed", stage="approve", error=f"{type(exc).__name__}: {exc}")
@@ -1440,7 +1460,8 @@ class RunRuntime:
             review_path = folder / "review-evidence.json"
             review_sha256 = digest(review_path) if review_path.is_file() else ""
             record = promotion_mod.create_approval_record(
-                run, candidate, review_proof_sha256=review_sha256, approved_by="human", approved_at=now())
+                run, candidate, review_proof_sha256=review_sha256,
+                approved_by="human", approved_at=now(), hmac_key=self.integrity_key)
             promotion_mod.write_approval_record(folder, self.root / "approvals.jsonl", record)
             self._event(run, "approval_record_written", candidate_tree=candidate["candidate_tree"],
                         review_proof_sha256=review_sha256)
@@ -1463,8 +1484,11 @@ class RunRuntime:
         if not approval_path.is_file():
             raise RuntimeStateError("cannot promote — no approval-record.json (run was never approve()'d)")
         approval_record = json.loads(approval_path.read_text())
-        manifest = promotion_mod.promote(Path(run["workspace"]), folder, candidate, run_id,
-                                         branch=branch, run=run, approval_record=approval_record)
+        manifest = promotion_mod.promote(
+            Path(run["workspace"]), folder, candidate, run_id,
+            branch=branch, run=run, approval_record=approval_record,
+            hmac_key=self.integrity_key,
+        )
         self._event(run, "promoted", promoted_commit=manifest["promoted_commit"],
                     candidate_tree=manifest["candidate_tree"], promoted_worktree=manifest["promoted_worktree"])
         return manifest
@@ -1545,6 +1569,48 @@ class RunRuntime:
                     "received_candidate_tree": proof.get("candidate_tree") if isinstance(proof, dict) else None,
                     "adapter_claimed_ok": bool(review.get("ok")),
                 }
+        if stage != "plan" and run.get("candidate") and not review.get("skipped"):
+            candidate = run["candidate"]
+            try:
+                identity = verify_candidate_identity(candidate, Path(run["workspace"]), self.integrity_key)
+                proof = review.get("proof")
+                if not isinstance(proof, dict):
+                    raise RuntimeStateError("review proof is not an object")
+                verdict = proof.get("verdict")
+                findings = proof.get("findings", [])
+                if verdict not in {"ACCEPT", "P1", "BLOCK"} or not isinstance(findings, list):
+                    raise RuntimeStateError("review proof is missing a strict verdict/findings")
+                returncode = int(review.get("returncode", 0))
+                record = ReviewerRecordV2(
+                    identity_digest=identity.digest(),
+                    identity_signature=candidate["identity_signature"],
+                    base_commit=identity.base_commit,
+                    parent_commit=identity.parent_commit,
+                    candidate_commit=identity.candidate_commit,
+                    candidate_tree=identity.candidate_tree,
+                    canonical_diff_sha256=identity.canonical_diff_sha256,
+                    manifest_sha256=identity.manifest_sha256,
+                    reviewer_provider=str(self.reviewer.provider),
+                    reviewer_model=str(getattr(self.reviewer, "model", "unknown")),
+                    reviewer_return_code=returncode,
+                    verdict=str(verdict), findings=list(findings),
+                    timestamp=datetime.now(timezone.utc).timestamp(),
+                )
+                record.validate()
+                record.signature = record.compute_signature(self.integrity_key)
+                proof.update({
+                    "identity_digest": identity.digest(),
+                    "identity_signature": candidate["identity_signature"],
+                    "reviewer_record_v2": dict(record.__dict__),
+                    "review_signature": record.signature,
+                })
+                review["proof"] = proof
+                if returncode != 0:
+                    review.update({"ok": False, "decision": "block",
+                                   "reason": "reviewer process returned non-zero"})
+            except Exception as exc:
+                review = {"ok": False, "decision": "block", "stage": stage,
+                          "reason": f"M5 reviewer identity binding failed: {type(exc).__name__}: {exc}"}
         atomic_write_json(folder / f"{stage}-review-evidence.json", review)
         self._event(run, "review_completed", stage=stage, provider=self.reviewer.provider,
                     decision=review.get("decision", "block"))
@@ -1762,7 +1828,11 @@ class RunRuntime:
             except Exception:
                 pass
         try:
-            candidate = freeze_candidate(workspace, folder, run["run_id"], attempt)
+            candidate = freeze_candidate(
+                workspace, folder, run["run_id"], attempt,
+                base_commit=(run.get("baseline") or {}).get("baseline_commit"),
+                hmac_key=self.integrity_key,
+            )
         except Exception as exc:  # a freeze failure (incl. a raw git CalledProcessError) must
             # fail-closed, never strand the run in BUILDING (same principle as P1-A above).
             self._event(run, "candidate_freeze_failed", error=f"{type(exc).__name__}: {exc}")
@@ -1812,7 +1882,13 @@ class RunRuntime:
         run["tasks"][2]["status"] = "completed"; self._transition(run, RunStatus.REVIEWING, "independent review")
         review = self._review_gate(run, "final"); atomic_write_json(folder / "review-evidence.json", review)
         proof = review.get("proof", {})
-        run["review_verified"] = bool(review.get("ok") and proof.get("verdict") == "ACCEPT" and proof.get("candidate_tree") == candidate["candidate_tree"])
+        run["final_review_proof"] = proof if isinstance(proof, dict) else {}
+        run["review_verified"] = bool(
+            review.get("ok") and proof.get("verdict") == "ACCEPT"
+            and proof.get("candidate_tree") == candidate["candidate_tree"]
+            and proof.get("identity_digest") == candidate.get("identity_digest")
+            and proof.get("review_signature")
+        )
         self._write(run)
         if review.get("decision") == "p1" and run["corrections_used"] < run["max_corrections"]:
             # Same bounded-repair accounting fix as the build-review P1
