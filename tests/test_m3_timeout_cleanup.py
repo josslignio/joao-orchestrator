@@ -27,11 +27,11 @@ def test_signal_all_sends_signal():
     """Verify _signal_all sends the specified signal to all PIDs."""
     # We can't test this on real processes without killing things
     # But we can verify the function signature and behavior
-    
+
     import inspect
     sig = inspect.signature(_signal_all)
     params = list(sig.parameters.keys())
-    
+
     assert "pids" in params, "Must have pids parameter"
     assert "sig" in params, "Must have sig parameter"
 
@@ -59,14 +59,14 @@ def test_signal_all_handles_invalid_pids():
 def test_timeout_cleanup_uses_token_scan():
     """Verify timeout cleanup mechanism uses token-based scanning."""
     import inspect
-    
+
     # Check sandbox.py for timeout-kill sweep implementation
     sandbox_path = Path(__file__).parent.parent / "src" / "joao_orchestrator" / "bubble" / "sandbox.py"
     if not sandbox_path.exists():
         pytest.skip("sandbox.py not found")
-    
+
     content = sandbox_path.read_text(encoding="utf-8")
-    
+
     # Should contain timeout cleanup logic with token scan
     assert "_token_tagged_pids" in content, "Timeout cleanup must use token scan"
     assert "timeout" in content.lower(), "Must have timeout handling"
@@ -75,13 +75,13 @@ def test_timeout_cleanup_uses_token_scan():
 def test_timeout_cleanup_returns_evidence():
     """Verify timeout cleanup returns evidence about killed processes."""
     import inspect
-    
+
     sandbox_path = Path(__file__).parent.parent / "src" / "joao_orchestrator" / "bubble" / "sandbox.py"
     if not sandbox_path.exists():
         pytest.skip("sandbox.py not found")
-    
+
     content = sandbox_path.read_text(encoding="utf-8")
-    
+
     # Should have some mechanism to return evidence
     # This could be a RunResult object or similar
     assert "RunResult" in content or "evidence" in content.lower(), \
@@ -91,13 +91,13 @@ def test_timeout_cleanup_returns_evidence():
 def test_timeout_kills_process_group():
     """Verify timeout kills entire process group, not just parent."""
     import inspect
-    
+
     sandbox_path = Path(__file__).parent.parent / "src" / "joao_orchestrator" / "bubble" / "sandbox.py"
     if not sandbox_path.exists():
         pytest.skip("sandbox.py not found")
-    
+
     content = sandbox_path.read_text(encoding="utf-8")
-    
+
     # Should use process group kill (os.killpg or similar)
     assert "killpg" in content or "process group" in content.lower() or "getpgid" in content, \
         "Must kill entire process group"
@@ -106,18 +106,18 @@ def test_timeout_kills_process_group():
 def test_no_known_survivor_after_timeout():
     """Verify no process survives timeout cleanup."""
     # This is a design verification test
-    
+
     # Check that timeout mechanism uses multiple strategies:
     # 1. Process group kill
     # 2. Descendant PID walk
     # 3. Token-based scan
-    
+
     sandbox_path = Path(__file__).parent.parent / "src" / "joao_orchestrator" / "bubble" / "sandbox.py"
     if not sandbox_path.exists():
         pytest.skip("sandbox.py not found")
-    
+
     content = sandbox_path.read_text(encoding="utf-8")
-    
+
     # Should have multiple kill mechanisms
     assert "_signal_all" in content, "Must have signal broadcast function"
     assert "_token_tagged_pids" in content, "Must have token-based scan"
@@ -127,13 +127,13 @@ def test_no_known_survivor_after_timeout():
 def test_timeout_cleanup_returns_timing_evidence():
     """Verify timeout cleanup returns timing information."""
     import inspect
-    
+
     sandbox_path = Path(__file__).parent.parent / "src" / "joao_orchestrator" / "bubble" / "sandbox.py"
     if not sandbox_path.exists():
         pytest.skip("sandbox.py not found")
-    
+
     content = sandbox_path.read_text(encoding="utf-8")
-    
+
     # Should track timing for timeout events
     assert "time" in content.lower() or "timeout" in content.lower(), \
         "Must track timeout timing"
@@ -142,14 +142,14 @@ def test_timeout_cleanup_returns_timing_evidence():
 def test_double_fork_escapee_detection():
     """Verify that double-fork escapees are detected via token scan."""
     # This is a critical security test
-    
+
     # Create a token
     token = f"JOAO_TEST_ESCAPEE_{os.getpid()}_{time.time()}"
-    
+
     # Create environment with token
     env = os.environ.copy()
     env["JOAO_SANDBOX_TOKEN"] = token
-    
+
     # Verify token scan would find processes with this token
     try:
         # Start a process with the token
@@ -159,16 +159,16 @@ def test_double_fork_escapee_detection():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        
+
         time.sleep(0.2)
-        
+
         # Token scan should find it (if process is still running and token in ps output)
         found = _token_tagged_pids(token)
         # We verify the mechanism works, not that it always finds the process
         assert isinstance(found, list), "Should return list"
         # The process might have finished or token might not be visible in ps
         # We just verify the scanning mechanism exists and works
-        
+
     finally:
         if 'proc' in locals():
             try:
@@ -184,13 +184,13 @@ def test_double_fork_escapee_detection():
 def test_timeout_evidence_includes_killed_pids():
     """Verify timeout mechanism records which PIDs were killed."""
     import inspect
-    
+
     sandbox_path = Path(__file__).parent.parent / "src" / "joao_orchestrator" / "bubble" / "sandbox.py"
     if not sandbox_path.exists():
         pytest.skip("sandbox.py not found")
-    
+
     content = sandbox_path.read_text(encoding="utf-8")
-    
+
     # Should have mechanism to track killed PIDs
     # This could be in RunResult or similar
     # Check for evidence-related patterns
