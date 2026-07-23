@@ -26,9 +26,10 @@ def _now() -> str:
 
 
 class LocalAPIServer:
-    def __init__(self, runtime: RunRuntime, host="127.0.0.1", port=0):
+    def __init__(self, runtime: RunRuntime, host="127.0.0.1", port=0, *, supervisor=None):
         if host not in {"127.0.0.1", "localhost", "::1"}: raise ValueError("localhost only")
         self.runtime, self.workers = runtime, {}
+        self.supervisor = supervisor
         self.kickoff = Kickoff(runtime.projects_root)
         self.brain = ChatBrain()
         self.chat_root = runtime.root / "chat"
@@ -52,6 +53,7 @@ class LocalAPIServer:
                     if path == "/": return self.send(200, HTML.replace("__JOAO_TOKEN__", outer.token), "text/html; charset=utf-8")
                     if not self.authorized(): return self.send(401, {"error": "missing or invalid local session token"})
                     if path == "/capabilities": return self.send(200, outer.capabilities())
+                    if path == "/supervisor/providers": return self.send(200, outer.supervisor_health())
                     if path == "/chat/conversations": return self.send(200, outer.chat_conversations())
                     if len(bits) == 3 and bits[0] == "chat" and bits[1] == "history": return self.send(200, outer.chat_history(bits[2]))
                     if len(bits) == 2 and bits[0] == "runs": return self.send(200, outer.runtime.get(bits[1]))
@@ -64,6 +66,7 @@ class LocalAPIServer:
                 try:
                     if not self.authorized(): return self.send(401, {"error": "missing or invalid local session token"})
                     if path == "/chat/classify": return self.send(200, outer.chat_classify(self.payload()))
+                    if path == "/supervisor/run": return self.send(200, outer.supervisor_run(self.payload()))
                     if path == "/chat/mission-intent": return self.send(200, outer.chat_mission_intent(self.payload()))
                     if path == "/chat/mission-intent/confirm": return self.send(202, outer.chat_mission_intent_confirm(self.payload()))
                     if path == "/chat/attach": return self.send(200, outer.chat_attach(self.payload()))
@@ -117,7 +120,34 @@ class LocalAPIServer:
                 # ACTUAL resolved project-profile/project-authority roots and how each
                 # was resolved (explicit arg/env, this repo, or a declared state-root
                 # manifest) — never a silently-assumed HOME-wide search.
-                "project_registry": self.runtime.project_registry.diagnostics()}
+                "project_registry": self.runtime.project_registry.diagnostics(),
+                "supervisor": self.supervisor_health()}
+
+    def supervisor_health(self):
+        if self.supervisor is None:
+            return {"available": False, "reason": "supervisor not configured", "providers": []}
+        return {"available": True, **self.supervisor.health()}
+
+    def supervisor_run(self, data):
+        if self.supervisor is None:
+            raise ValueError("supervisor is not configured")
+        from ..supervisor.models import SupervisorRequest
+        request = SupervisorRequest(
+            task_id=str(data.get("task_id", "")).strip(),
+            project_id=str(data.get("project_id", "")).strip(),
+            prompt=str(data.get("prompt", "")).strip(),
+            mode=str(data.get("mode", "auto")).strip(),
+            role=str(data.get("role", "planner")).strip(),
+            worktree_path=(str(data.get("worktree_path")).strip()
+                           if data.get("worktree_path") else None),
+            preferred_provider=(str(data.get("preferred_provider")).strip()
+                                if data.get("preferred_provider") else None),
+            provider_names=tuple(str(x).strip() for x in data.get("provider_names", []) if str(x).strip()),
+            judge_provider=(str(data.get("judge_provider")).strip()
+                            if data.get("judge_provider") else None),
+            max_provider_calls=int(data.get("max_provider_calls", 4)),
+        )
+        return self.supervisor.execute(request).to_dict()
 
     @staticmethod
     def command(text):

@@ -73,11 +73,15 @@ def main(argv: list[str] | None = None) -> int:
         # than blindly defaulting onto an often-empty state-root subdirectory.
         projects_root = Path(args.projects_root).expanduser() if args.projects_root else None
         profiles_root = Path(args.profiles_root).expanduser() if args.profiles_root else None
-        server = LocalAPIServer(RunRuntime(state_root, builder=remote_glm_builder(),
-                                           reviewer=remote_claude_reviewer(),
-                                           enforce_phase0=True, projects_root=projects_root,
-                                           profiles_root=profiles_root,
-                                           ledger_sync=True))  # B-37: brain re-synced from the ledger at launch
+        runtime = RunRuntime(state_root, builder=remote_glm_builder(),
+                             reviewer=remote_claude_reviewer(),
+                             enforce_phase0=True, projects_root=projects_root,
+                             profiles_root=profiles_root,
+                             ledger_sync=True)
+        from joao_orchestrator.providers.bridge_factory import build_default_bridge
+        from joao_orchestrator.supervisor import SupervisorCore
+        supervisor = SupervisorCore(build_default_bridge(), state_root)
+        server = LocalAPIServer(runtime, supervisor=supervisor)  # B-37: brain re-synced from the ledger at launch
         print(server.url)
         if not args.no_open:
             webbrowser.open(server.url, new=2)
