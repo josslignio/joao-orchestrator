@@ -238,3 +238,50 @@ def test_runtime_real_freeze_review_approval_chain(monkeypatch, tmp_path):
     approval = json.loads((runtime._dir(run_id) / "approval-record.json").read_text())
     assert approval["identity_digest"] == candidate["identity_digest"]
     assert approval["approval_signature"]
+
+def test_real_promote_rejects_legacy_unsigned_candidate(tmp_path):
+    repo = _repo(tmp_path)
+    parent = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _git(repo, "add", "app.py")
+    tree = _git(repo, "write-tree").stdout.strip()
+    commit = _git(repo, "commit-tree", tree, "-p", parent, "-m", "legacy candidate").stdout.strip()
+    _git(repo, "reset", "--hard", parent)
+
+    run_dir = tmp_path / "legacy-run"
+    run_dir.mkdir()
+    review = {
+        "proof": {
+            "candidate_tree": tree,
+            "verdict": "ACCEPT",
+            "findings": [],
+        }
+    }
+    (run_dir / "review-evidence.json").write_text(
+        json.dumps(review, sort_keys=True), encoding="utf-8"
+    )
+    review_sha = __import__("hashlib").sha256(
+        (run_dir / "review-evidence.json").read_bytes()
+    ).hexdigest()
+    candidate = {
+        "candidate_commit": commit,
+        "candidate_tree": tree,
+        "parent_commit": parent,
+        "readonly_copy": str(tmp_path / "missing"),
+    }
+    run = {
+        "run_id": "legacy-run",
+        "status": "accepted",
+        "review_verified": True,
+        "candidate_tree": tree,
+    }
+    approval = create_approval_record(
+        run, candidate, review_proof_sha256=review_sha
+    )
+    assert approval["authorizing"] is False
+    with pytest.raises(PromotionError, match="legacy/unsigned candidates"):
+        promote(
+            repo, run_dir, candidate, run["run_id"],
+            run=run, approval_record=approval, hmac_key=None,
+        )
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == parent

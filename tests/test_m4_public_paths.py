@@ -4,11 +4,12 @@ import json
 import os
 import sqlite3
 import time
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 
-from joao_orchestrator.runtime.queue import QueueItem, QueueItemStatus, QueueStore
+from joao_orchestrator.runtime.queue import QueueItem, QueueItemStatus, QueueStore, SchedulerEngine
 from joao_orchestrator.storage.persistence_errors import SQLiteInitializationError, StaleLeaseError
 
 
@@ -107,3 +108,63 @@ def test_complete_claim_releases_both_authorities_atomically(tmp_path: Path):
     assert completed.status == QueueItemStatus.AWAITING_APPROVAL.value
     assert store.lease_authority.get_active_claims("q") == []
     assert store.lease_authority.get_active_project_leases() == []
+
+def test_active_claim_blocks_unscoped_queue_write(tmp_path: Path):
+    store = QueueStore(tmp_path / "state")
+    store.add_item(_item("q", "one", "project"))
+    claim = store.claim_item(
+        queue_id="q", item_id="one", project_id="project",
+        run_id="run-one", owner_pid=os.getpid(), ttl_seconds=30,
+    )
+    assert claim is not None
+    with pytest.raises(StaleLeaseError, match="ownership-bound update required"):
+        store.update_item("q", "one", status=QueueItemStatus.FAILED.value)
+    assert store.load_item("q", "one").status == QueueItemStatus.RUNNING.value
+
+
+def test_reconcile_active_claim_is_noop(tmp_path: Path):
+    root = tmp_path / "state"
+    store = QueueStore(root)
+    store.add_item(_item("q", "one", "project"))
+    claim = store.claim_item(
+        queue_id="q", item_id="one", project_id="project",
+        run_id="run-one", owner_pid=os.getpid(), ttl_seconds=30,
+    )
+    assert claim is not None
+    store.update_claimed_item(claim, task_id="task-one")
+    engine = SchedulerEngine(root)
+
+    class Tasks:
+        def load(self, project_id, task_id):
+            return SimpleNamespace(state="AWAITING_APPROVAL")
+
+    result = engine._reconcile_one("q", engine.store.load_item("q", "one"), Tasks())
+    assert result["action"] == "NOOP"
+    assert result["reason"] == "ACTIVE_LEASE"
+    assert engine.store.load_item("q", "one").status == QueueItemStatus.RUNNING.value
+    assert len(engine.store.lease_authority.get_active_claims("q")) == 1
+    assert len(engine.store.lease_authority.get_active_project_leases()) == 1
+
+
+def test_reconcile_expired_claim_is_atomic_and_releases_pair(tmp_path: Path):
+    root = tmp_path / "state"
+    store = QueueStore(root)
+    store.add_item(_item("q", "one", "project"))
+    claim = store.claim_item(
+        queue_id="q", item_id="one", project_id="project",
+        run_id="run-one", owner_pid=os.getpid(), ttl_seconds=0.05,
+    )
+    assert claim is not None
+    store.update_claimed_item(claim, task_id="task-one")
+    time.sleep(0.08)
+    engine = SchedulerEngine(root)
+
+    class Tasks:
+        def load(self, project_id, task_id):
+            return SimpleNamespace(state="AWAITING_APPROVAL")
+
+    result = engine._reconcile_one("q", engine.store.load_item("q", "one"), Tasks())
+    assert result["action"] == QueueItemStatus.AWAITING_APPROVAL.value
+    assert engine.store.load_item("q", "one").status == QueueItemStatus.AWAITING_APPROVAL.value
+    assert engine.store.lease_authority.get_active_claims("q") == []
+    assert engine.store.lease_authority.get_active_project_leases() == []

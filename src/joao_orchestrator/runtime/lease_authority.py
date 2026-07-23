@@ -320,7 +320,24 @@ class LeaseAuthority:
         return result
 
     def update_queue_item(self, queue_id: str, item_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+        """Update an unclaimed item.
+
+        Any active queue claim makes the item ownership-protected. Runtime
+        writers must then use ``update_claimed_queue_item()`` with the exact
+        claim tuple. This prevents cancel/retry/reconcile paths from mutating an
+        item owned by another scheduler process.
+        """
         with self._transaction(immediate=True) as cur:
+            active = cur.execute(
+                """SELECT claim_id,run_id FROM queue_claims
+                   WHERE queue_id=? AND item_id=? AND expires_at>?""",
+                (queue_id, item_id, time.time()),
+            ).fetchone()
+            if active is not None:
+                raise StaleLeaseError(
+                    f"queue item {queue_id}/{item_id} is actively owned by "
+                    f"run {active['run_id']}; ownership-bound update required"
+                )
             row = cur.execute(
                 "SELECT payload_json FROM queue_items WHERE queue_id=? AND item_id=?",
                 (queue_id, item_id),
@@ -571,6 +588,29 @@ class LeaseAuthority:
         if row is None:
             raise StaleLeaseError(f"claim {claim_id} no longer exists")
         return row
+
+    def get_claim_for_item(self, queue_id: str, item_id: str) -> Optional[QueueClaim]:
+        """Return the current claim for an item, including an expired claim.
+
+        Recovery needs the exact persisted ownership tuple. Absence means the
+        RUNNING row is orphaned/corrupt and must not be treated as actively
+        owned.
+        """
+        try:
+            row = self.conn.execute(
+                "SELECT * FROM queue_claims WHERE queue_id=? AND item_id=?",
+                (queue_id, item_id),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise self._map_sqlite_error("get_claim_for_item", exc) from exc
+        if row is None:
+            return None
+        return QueueClaim(
+            row["claim_id"], row["queue_id"], row["item_id"], row["run_id"],
+            int(row["owner_pid"]), row["lease_token"], int(row["generation"]),
+            float(row["claimed_at"]), float(row["expires_at"]),
+            float(row["heartbeat_at"]), row["project_id"],
+        )
 
     @staticmethod
     def _same_token(actual: str, supplied: str) -> bool:
@@ -845,6 +885,80 @@ class LeaseAuthority:
                 project_id=row["project_id"], run_id=new_run_id,
                 owner_pid=new_owner_pid, ttl_seconds=ttl_seconds, now=time.time(),
             )
+
+    def reconcile_expired_claim(
+        self, *, queue_id: str, item_id: str, claim_id: str,
+        lease_token: str, generation: int, run_id: str, owner_pid: int,
+        final_status: str, item_fields: Optional[dict[str, Any]] = None,
+        now: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """Recover exactly one expired claim and its paired project atomically.
+
+        The persisted queue claim is the recovery authority. Active claims are
+        never mutated, and a mismatched/missing paired project lease is treated
+        as corruption rather than silently released.
+        """
+        current_time = float(now if now is not None else time.time())
+        with self._transaction(immediate=True) as cur:
+            row = self._load_claim(cur, claim_id)
+            if row["queue_id"] != queue_id or row["item_id"] != item_id:
+                raise StaleLeaseError("recovery claim does not belong to requested item")
+            self._require_claim_owner(
+                row, lease_token=lease_token, generation=generation,
+                run_id=run_id, owner_pid=owner_pid, require_unexpired=False,
+            )
+            if float(row["expires_at"]) > current_time:
+                raise StaleLeaseError("cannot reconcile an active lease")
+            project = cur.execute(
+                "SELECT * FROM project_leases WHERE project_id=?",
+                (row["project_id"],),
+            ).fetchone()
+            if project is None:
+                raise SQLiteCorruptionError("expired claim is missing its paired project lease")
+            if (
+                project["queue_id"] != queue_id
+                or project["item_id"] != item_id
+                or project["owner_run_id"] != run_id
+                or int(project["owner_pid"]) != int(owner_pid)
+            ):
+                raise SQLiteCorruptionError("expired claim/project ownership tuple mismatch")
+            if float(project["expires_at"]) > current_time:
+                raise StaleLeaseError("paired project lease is still active")
+
+            item_row = cur.execute(
+                "SELECT payload_json FROM queue_items WHERE queue_id=? AND item_id=?",
+                (queue_id, item_id),
+            ).fetchone()
+            if item_row is None:
+                raise SQLiteCorruptionError("expired claim points to a missing queue item")
+            try:
+                payload = json.loads(item_row["payload_json"])
+            except json.JSONDecodeError as exc:
+                raise SQLiteCorruptionError("expired claim queue payload is corrupt") from exc
+            payload.update(item_fields or {})
+            payload["status"] = final_status
+            payload["updated_at"] = payload.get("updated_at") or time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(current_time)
+            )
+            cur.execute(
+                """UPDATE queue_items SET status=?,updated_at=?,payload_json=?
+                   WHERE queue_id=? AND item_id=?""",
+                (
+                    final_status, payload["updated_at"], self._canonical_json(payload),
+                    queue_id, item_id,
+                ),
+            )
+            cur.execute(
+                "DELETE FROM queue_claims WHERE claim_id=? AND generation=?",
+                (claim_id, int(generation)),
+            )
+            cur.execute(
+                """DELETE FROM project_leases
+                   WHERE project_id=? AND queue_id=? AND item_id=?
+                     AND owner_run_id=? AND owner_pid=?""",
+                (row["project_id"], queue_id, item_id, run_id, int(owner_pid)),
+            )
+            return payload
 
     def recover_expired(self, *, now: Optional[float] = None, status: str = "QUEUED") -> list[dict[str, Any]]:
         """Transactionally recover expired claims and release paired projects."""

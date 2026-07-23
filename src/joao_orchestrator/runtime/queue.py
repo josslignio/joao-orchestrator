@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import shlex
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -553,6 +554,25 @@ class QueueStore:
         })
         return item
 
+    def reconcile_expired_claim(
+        self, claim: Any, final_status: str, **item_fields: Any,
+    ) -> QueueItem:
+        raw = self.lease_authority.reconcile_expired_claim(
+            queue_id=claim.queue_id, item_id=claim.item_id,
+            claim_id=claim.claim_id, lease_token=claim.lease_token,
+            generation=claim.generation, run_id=claim.run_id,
+            owner_pid=claim.owner_pid, final_status=final_status,
+            item_fields=item_fields,
+        )
+        item = QueueItem.from_dict(raw)
+        self._write_snapshot(item.queue_id)
+        self._append_event(item.queue_id, {
+            "event": "expired_claim_reconciled", "item_id": item.item_id,
+            "project_id": item.project_id, "run_id": claim.run_id,
+            "claim_generation": claim.generation, "status": final_status,
+        })
+        return item
+
     def ack_queue_claim(self, *, claim_id: str, lease_token: str,
                         generation: int, final_status: str) -> bool:
         # Compatibility only for direct unpaired claims used by old tests.
@@ -953,90 +973,70 @@ class SchedulerEngine:
 
     def _reconcile_one(self, queue_id: str, item: QueueItem,
                        task_store: Any) -> dict:
-        """Reconcile a single RUNNING item."""
-        if not item.task_id:
-            # No task was created — ambiguous.
-            self.store.update_item(
-                queue_id, item.item_id,
-                status=QueueItemStatus.FAILED.value,
-                finished_at=self.now_fn(),
-                last_error=ReasonCode.AMBIGUOUS_RECOVERY_STATE.value,
-            )
-            return {"item_id": item.item_id,
-                    "action": "FAILED",
-                    "reason": ReasonCode.AMBIGUOUS_RECOVERY_STATE.value}
+        """Reconcile one RUNNING item without bypassing lease ownership.
 
-        try:
-            meta = task_store.load(item.project_id, item.task_id)
-        except KeyError:
-            self.store.update_item(
-                queue_id, item.item_id,
-                status=QueueItemStatus.FAILED.value,
-                finished_at=self.now_fn(),
-                last_error=ReasonCode.AMBIGUOUS_RECOVERY_STATE.value,
-            )
-            return {"item_id": item.item_id,
-                    "action": "FAILED",
-                    "reason": ReasonCode.AMBIGUOUS_RECOVERY_STATE.value}
-
-        # Check lease state.
-        lease = self._check_lease(item.project_id)
-
-        if meta.state == "AWAITING_APPROVAL":
-            self.store.update_item(
-                queue_id, item.item_id,
-                status=QueueItemStatus.AWAITING_APPROVAL.value,
-                finished_at=self.now_fn(),
-                last_error="reconciled: task reached AWAITING_APPROVAL",
-            )
-            if lease:
-                self._release_lease(item.project_id)
-            return {"item_id": item.item_id,
-                    "action": "AWAITING_APPROVAL",
-                    "reason": "task state reconciled"}
-
-        if meta.state == "FAILED":
-            self.store.update_item(
-                queue_id, item.item_id,
-                status=QueueItemStatus.FAILED.value,
-                finished_at=self.now_fn(),
-                last_error="reconciled: task reached FAILED",
-            )
-            if lease:
-                self._release_lease(item.project_id)
-            return {"item_id": item.item_id,
-                    "action": "FAILED",
-                    "reason": "task state reconciled"}
-
-        # Task in intermediate state + expired lease.
-        if lease and lease.is_expired(self.now_fn):
-            self.store.update_item(
-                queue_id, item.item_id,
-                status=QueueItemStatus.FAILED.value,
-                finished_at=self.now_fn(),
-                last_error=ReasonCode.STALE_LEASE_RECOVERED.value,
-            )
-            self._release_lease(item.project_id)
-            self.store._append_event(queue_id, {
-                "event": "reconcile_stale",
-                "item_id": item.item_id,
-                "task_state": meta.state,
-                "reason": ReasonCode.STALE_LEASE_RECOVERED.value,
-            })
-            return {"item_id": item.item_id,
-                    "action": "FAILED",
-                    "reason": ReasonCode.STALE_LEASE_RECOVERED.value}
-
-        # Active lease + task in intermediate state — ambiguous.
-        self.store.update_item(
+        An active lease means another scheduler still owns the item, so
+        reconciliation is a no-op. An expired claim is reconciled through the
+        SQLite authority in one transaction that verifies the persisted claim
+        tuple, updates the queue item, and releases the paired project lease.
+        """
+        claim = self.store.lease_authority.get_claim_for_item(
             queue_id, item.item_id,
-            status=QueueItemStatus.FAILED.value,
-            finished_at=self.now_fn(),
-            last_error=ReasonCode.AMBIGUOUS_RECOVERY_STATE.value,
         )
-        return {"item_id": item.item_id,
+        if claim is not None and claim.expires_at > time.time():
+            return {
+                "item_id": item.item_id,
+                "action": "NOOP",
+                "reason": "ACTIVE_LEASE",
+                "run_id": claim.run_id,
+                "generation": claim.generation,
+            }
+
+        if claim is None:
+            # A RUNNING row without any claim is an orphaned/corrupt state.
+            # There is no competing owner, so fail it explicitly via the
+            # unclaimed update path rather than leaving it stuck forever.
+            self.store.update_item(
+                queue_id, item.item_id,
+                status=QueueItemStatus.FAILED.value,
+                finished_at=self.now_fn(),
+                last_error=ReasonCode.AMBIGUOUS_RECOVERY_STATE.value,
+            )
+            return {
+                "item_id": item.item_id,
                 "action": "FAILED",
-                "reason": ReasonCode.AMBIGUOUS_RECOVERY_STATE.value}
+                "reason": ReasonCode.AMBIGUOUS_RECOVERY_STATE.value,
+            }
+
+        final_status = QueueItemStatus.FAILED.value
+        reason = ReasonCode.AMBIGUOUS_RECOVERY_STATE.value
+        if item.task_id:
+            try:
+                meta = task_store.load(item.project_id, item.task_id)
+            except KeyError:
+                meta = None
+            if meta is not None and meta.state == "AWAITING_APPROVAL":
+                final_status = QueueItemStatus.AWAITING_APPROVAL.value
+                reason = "reconciled: task reached AWAITING_APPROVAL"
+            elif meta is not None and meta.state == "FAILED":
+                final_status = QueueItemStatus.FAILED.value
+                reason = "reconciled: task reached FAILED"
+            elif meta is not None:
+                final_status = QueueItemStatus.FAILED.value
+                reason = ReasonCode.STALE_LEASE_RECOVERED.value
+
+        updated = self.store.reconcile_expired_claim(
+            claim, final_status,
+            finished_at=self.now_fn(),
+            last_error=reason,
+        )
+        return {
+            "item_id": item.item_id,
+            "action": updated.status,
+            "reason": reason,
+            "recovered_run_id": claim.run_id,
+            "recovered_generation": claim.generation,
+        }
 
     # -- Scheduler runs ---------------------------------------------------- #
 

@@ -81,6 +81,10 @@ def create_approval_record(run: dict[str, Any], candidate: dict[str, Any], *,
         "previous_status": "needs_approval",
     }
     if "identity_v2" not in candidate:
+        # Legacy records may still be serialized for historical/read-only
+        # evidence, but they are explicitly non-authorizing. ``promote()``
+        # rejects every candidate lacking a signed V2 identity.
+        legacy["authorizing"] = False
         return legacy
     if hmac_key is None:
         raise PromotionError("M5: signed candidate approval requires the integrity key")
@@ -217,9 +221,11 @@ def _verify_acceptance_for_promotion(run: dict[str, Any], candidate: dict[str, A
 
 def _verify_m5_chain(workspace: Path, run_dir: Path, run: dict[str, Any],
                      candidate: dict[str, Any], approval_record: dict[str, Any],
-                     hmac_key: bytes | None) -> CandidateIdentityV2 | None:
+                     hmac_key: bytes | None) -> CandidateIdentityV2:
     if "identity_v2" not in candidate:
-        return None
+        raise PromotionError(
+            "M5: legacy/unsigned candidates are non-authorizing and cannot be promoted"
+        )
     if hmac_key is None:
         raise PromotionError("M5: promotion of a V2 candidate requires the integrity key")
     try:
