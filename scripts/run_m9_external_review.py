@@ -67,10 +67,36 @@ def main() -> int:
         }, sort_keys=True, indent=2))
         return 1
 
+    # Recompute the diff directly from the verified worktree HEAD so that the
+    # review content is cryptographically bound to the candidate SHA.  The
+    # supplied --diff file is only used as a cross-check: if it does not match
+    # the recomputed diff, the review is rejected.
+    # The base is the Tranche 2 closed commit (parent of the M7 commit),
+    # which is the fixed authoritative starting point for this sequence.
+    TRANCHE2_BASE = "76de966a8a5cfae29c4093a9c5e822bda5191ce6"
+    recomputed_diff = subprocess.check_output(
+        ["git", "-C", str(worktree), "diff", "--binary", TRANCHE2_BASE, "HEAD"],
+        text=True,
+        errors="replace",
+    )
+    supplied_diff = Path(args.diff).read_text(encoding="utf-8", errors="replace")
+    if recomputed_diff != supplied_diff:
+        print(json.dumps({
+            "schema_version": 2,
+            "candidate_sha": args.candidate_sha,
+            "status": "DIFF_MISMATCH",
+            "pass": False,
+            "error": "supplied diff does not match diff recomputed from verified worktree HEAD",
+            "reviews": [],
+            "inventory": [],
+            "limitations": ["Diff integrity verification failed."],
+        }, sort_keys=True, indent=2))
+        return 1
+
     # The full diff is hashed and supplied WITHOUT truncation so that no
     # malicious change beyond a truncation boundary can evade review.
     # The SHA256 is computed over the complete untruncated content.
-    diff_raw = Path(args.diff).read_text(encoding="utf-8", errors="replace")
+    diff_raw = recomputed_diff
     diff_full_sha = hashlib.sha256(diff_raw.encode()).hexdigest()
     tests_raw = Path(args.tests).read_text(encoding="utf-8", errors="replace")
     prompt = (
