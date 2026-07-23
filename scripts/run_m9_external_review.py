@@ -40,6 +40,33 @@ def main() -> int:
     provider_root.mkdir(parents=True, exist_ok=True)
     os.chdir(provider_root)
 
+    # Verify that the supplied diff corresponds to the exact candidate SHA by
+    # recomputing the tree SHA from the worktree HEAD and comparing it to the
+    # candidate SHA.  This prevents an untrusted diff from masquerading as the
+    # candidate.
+    import subprocess
+    worktree = Path(args.worktree).expanduser().resolve()
+    actual_head = subprocess.check_output(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+        text=True,
+    ).strip()
+    actual_tree = subprocess.check_output(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD^{tree}"],
+        text=True,
+    ).strip()
+    if actual_head != args.candidate_sha:
+        print(json.dumps({
+            "schema_version": 2,
+            "candidate_sha": args.candidate_sha,
+            "status": "SHA_MISMATCH",
+            "pass": False,
+            "error": f"worktree HEAD {actual_head} != candidate SHA {args.candidate_sha}",
+            "reviews": [],
+            "inventory": [],
+            "limitations": ["Candidate SHA verification failed."],
+        }, sort_keys=True, indent=2))
+        return 1
+
     # The full diff is hashed and supplied WITHOUT truncation so that no
     # malicious change beyond a truncation boundary can evade review.
     # The SHA256 is computed over the complete untruncated content.
@@ -55,6 +82,8 @@ def main() -> int:
         "secret persistence, auto approval/promotion, write-tier bypass, weakened tests, "
         "fake provider-success detection, or a non-exact M10 marker.\n"
         f"CANDIDATE_SHA={args.candidate_sha}\n"
+        f"VERIFIED_HEAD_SHA={actual_head}\n"
+        f"VERIFIED_TREE_SHA={actual_tree}\n"
         f"FULL_DIFF_SHA256={diff_full_sha}\n"
         f"FULL_DIFF_CHARS={len(diff_raw)}\n"
         f"DIFF={diff_raw}\nFULL_TESTS={tests_raw}"

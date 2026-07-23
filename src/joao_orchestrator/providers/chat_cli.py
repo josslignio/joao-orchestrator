@@ -48,9 +48,14 @@ class ChatCLIProvider(ProviderAdapter):
                 errors.append(str(event.get("message", "provider error")))
             elif kind in {"model", "done"} and event.get("model"):
                 model_seen = str(event["model"])
-        content = "".join(chunks).strip()
-        semantic_error = classify_provider_failure(content) if content else ""
-        if errors or not content or semantic_error:
+        # Preserve exact provider output without stripping, so that byte-exact
+        # marker checks downstream are not bypassed by transport-layer
+        # whitespace normalization.  classify_provider_failure normalizes
+        # internally, so it works on unstripped text.
+        content = "".join(chunks)
+        content_stripped = content.strip()
+        semantic_error = classify_provider_failure(content_stripped) if content_stripped else ""
+        if errors or not content_stripped or semantic_error:
             return ProviderResponse(
                 role=request.role,
                 task_id=request.task_id,
