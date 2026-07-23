@@ -40,8 +40,12 @@ def main() -> int:
     provider_root.mkdir(parents=True, exist_ok=True)
     os.chdir(provider_root)
 
-    diff = Path(args.diff).read_text(encoding="utf-8", errors="replace")[:50000]
-    tests = Path(args.tests).read_text(encoding="utf-8", errors="replace")[-16000:]
+    # The full diff is hashed and supplied WITHOUT truncation so that no
+    # malicious change beyond a truncation boundary can evade review.
+    # The SHA256 is computed over the complete untruncated content.
+    diff_raw = Path(args.diff).read_text(encoding="utf-8", errors="replace")
+    diff_full_sha = hashlib.sha256(diff_raw.encode()).hexdigest()
+    tests_raw = Path(args.tests).read_text(encoding="utf-8", errors="replace")
     prompt = (
         "You are Codex performing the mandatory independent JOAO M9 exact-SHA review. "
         "Review M7 Supervisor Core, M8 Provider Bridge, the M9 red-team matrix and "
@@ -51,8 +55,9 @@ def main() -> int:
         "secret persistence, auto approval/promotion, write-tier bypass, weakened tests, "
         "fake provider-success detection, or a non-exact M10 marker.\n"
         f"CANDIDATE_SHA={args.candidate_sha}\n"
-        f"DIFF_SHA256={hashlib.sha256(diff.encode()).hexdigest()}\n"
-        f"DIFF={diff}\nTESTS={tests}"
+        f"FULL_DIFF_SHA256={diff_full_sha}\n"
+        f"FULL_DIFF_CHARS={len(diff_raw)}\n"
+        f"DIFF={diff_raw}\nFULL_TESTS={tests_raw}"
     )
 
     bridge = build_default_bridge(timeout_seconds=420)
