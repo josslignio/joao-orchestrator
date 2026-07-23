@@ -196,7 +196,7 @@ def test_dynamic_invocation_proof_claude_reviewer_review_stage_is_invoked(tmp_pa
         def execute(self, argv, *, cwd, timeout, network=False, environment_allowlist=None,
                    protected=False, preserve_host_environment=False, extra_read_paths=None,
                    extra_write_paths=None, auth_stage=None):
-            answer = json.dumps({"candidate_tree": None, "verdict": "ACCEPT", "findings": [],
+            answer = json.dumps({"candidate_tree": "a" * 40, "verdict": "ACCEPT", "findings": [],
                                  "reviewer": {"provider": "claude-cli", "model": ClaudeCLIReviewer.model}})
             return {"pid": 1, "returncode": 0, "stdout": _result_envelope(answer), "stderr": ""}
 
