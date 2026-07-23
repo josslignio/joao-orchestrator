@@ -72,8 +72,11 @@ def parse_codex_jsonl(raw: str) -> str:
                 continue
             item_type = str(item.get("type", ""))
             if item_type == "agent_message":
-                text = str(item.get("text", "")).strip()
-                if text:
+                # Preserve the exact provider text without stripping, so that
+                # byte-exact marker checks downstream are not bypassed by
+                # transport-layer whitespace normalization.
+                text = str(item.get("text", ""))
+                if text.strip():
                     messages.append(text)
             elif item_type == "error" and not messages:
                 fatal_errors.append(str(item.get("message", "Codex item error")))
@@ -85,7 +88,10 @@ def parse_codex_jsonl(raw: str) -> str:
         detail = "; ".join(fatal_errors[-3:])
         raise ValueError("Codex returned no final agent message" + (f": {detail}" if detail else ""))
 
-    final = messages[-1].strip()
+    # Do NOT strip the final message: callers performing byte-exact marker
+    # checks must see the verbatim provider response.  classify_provider_failure
+    # normalizes internally, so it works on unstripped text.
+    final = messages[-1]
     failure = classify_provider_failure(final)
     if failure:
         raise ValueError(failure)
