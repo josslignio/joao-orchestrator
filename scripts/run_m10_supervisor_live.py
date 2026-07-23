@@ -15,7 +15,10 @@ MARKER = "JOAO_M10_OK"
 
 
 def is_exact_marker(text: str) -> bool:
-    return str(text).strip() == MARKER
+    # Byte-exact comparison: no stripping, no trimming, no normalization.
+    # The provider response must be exactly "JOAO_M10_OK" with no surrounding
+    # whitespace, newlines, or any other characters.
+    return text == MARKER
 
 
 def git_status(path: Path) -> str:
