@@ -88,9 +88,10 @@ def validate_reviewer_verdict(
         return {"ok": False, "decision": "block", "schema_valid": False,
                 "reason": f"invalid verdict {verdict!r}"}
     candidate_tree = obj.get("candidate_tree")
-    if not isinstance(candidate_tree, str):
+    # Plan stages (before freeze) may have candidate_tree=None, post-freeze stages require string
+    if candidate_tree is not None and not isinstance(candidate_tree, str):
         return {"ok": False, "decision": "block", "schema_valid": False,
-                "reason": "candidate_tree must be a string"}
+                "reason": "candidate_tree must be a string or None"}
     findings = obj.get("findings")
     if not isinstance(findings, list) or not all(isinstance(item, str) for item in findings):
         return {"ok": False, "decision": "block", "schema_valid": False,

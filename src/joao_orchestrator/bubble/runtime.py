@@ -1062,6 +1062,7 @@ class ClaudeCLIReviewer(ReviewerAdapter):
         # bind to the frozen read-only candidate copy for build/final,
         # recompute the tree immediately before AND after dispatch, refuse the
         # verdict outright on any mismatch (a tamper just before or during review).
+        run_dir = Path(run_dir)  # Ensure run_dir is a Path object
         candidate = run.get("candidate") if stage != "plan" else None
         candidate_tree = candidate.get("candidate_tree") if candidate else None
 
