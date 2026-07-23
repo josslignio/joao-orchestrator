@@ -406,6 +406,21 @@ class OpenCodeProvider(ProviderAdapter):
 
     def invoke(self, request: ProviderRequest) -> ProviderResponse:
         from ..bubble.write_tier_policy import assert_write_tier_enabled
+        # Pure preflight: reject a malformed execution policy as a structured
+        # provider response before the write-tier kill switch. This creates no
+        # files, performs no provider probe, and starts no subprocess.
+        config = _safe_opencode_config(getattr(self, "model", ""))
+        try:
+            _validate_opencode_execution_policy(config)
+        except PermissionError as exc:
+            return ProviderResponse(
+                role=request.role,
+                task_id=request.task_id,
+                ok=False,
+                error=f"OpenCode execution policy rejected: {exc}",
+                provider_name=self.name,
+            )
+
         assert_write_tier_enabled("OpenCodeProvider.invoke")
         require_capability(request, "workspace.write")
         if request.role not in self.supported_roles:
@@ -435,7 +450,8 @@ class OpenCodeProvider(ProviderAdapter):
                 provider_name=self.name,
             )
 
-        config = _safe_opencode_config(self.model)
+        # Revalidate the same local config at the real execution boundary.
+        # This guards future edits between preflight and engine dispatch.
         try:
             _validate_opencode_execution_policy(config)
         except PermissionError as exc:
