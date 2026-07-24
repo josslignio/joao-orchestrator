@@ -153,12 +153,14 @@ def main() -> int:
             accepted = 1
         elif verdict == "BLOCK":
             blocked = 1
-        # Redact all raw reasons: provider error messages and review text may
-        # contain secrets if a provider echoes them.  Only the verdict (ACCEPT
-        # or BLOCK) and a SHA256 hash of the reason are persisted.  The full
-        # reason is available only in the non-persisted result object for
-        # immediate debugging.
-        reason_safe = f"REDACTED:{hashlib.sha256(reason.encode('utf-8')).hexdigest()[:16]}"
+        # Redact provider transport errors (may contain secrets), but preserve
+        # validated Codex JSON verdicts (ACCEPT/BLOCK reasons are security
+        # findings needed for repair and GPT audit).  Only the INVALID/transport
+        # error reasons are hashed.
+        if verdict in {"ACCEPT", "BLOCK"} and result.status == "completed":
+            reason_safe = reason  # validated Codex JSON security finding
+        else:
+            reason_safe = f"REDACTED:{hashlib.sha256(reason.encode('utf-8')).hexdigest()[:16]}"
         records.append({
             "provider": codex.name,
             "family": codex.family,
