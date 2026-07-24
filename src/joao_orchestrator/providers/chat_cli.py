@@ -17,6 +17,14 @@ class ChatCLIProvider(ProviderAdapter):
     supported_roles = ("planner", "reviewer", "researcher", "tester")
     network_required = True
 
+    # Expected model prefixes for each backend family.  A backend-reported
+    # model that does not match its family indicates a silent fallback or
+    # misrouted response, which must be rejected to prevent identity confusion.
+    _FAMILY_MODELS = {
+        "claude": ("claude",),
+        "glm": ("glm", "zai", "opencode"),
+    }
+
     def __init__(self, backend: str, *, brain: Optional[ChatBrain] = None):
         backend = str(backend).strip().lower()
         if backend not in {"claude", "glm"}:
@@ -48,6 +56,22 @@ class ChatCLIProvider(ProviderAdapter):
                 errors.append(str(event.get("message", "provider error")))
             elif kind in {"model", "done"} and event.get("model"):
                 model_seen = str(event["model"])
+        # Validate that the backend-reported model belongs to the expected
+        # family.  A mismatch indicates a silent fallback or misrouted response,
+        # which would break identity separation in independent-review modes.
+        expected_prefixes = self._FAMILY_MODELS.get(self.backend, ())
+        model_lower = model_seen.lower()
+        if expected_prefixes and not any(
+            prefix in model_lower for prefix in expected_prefixes
+        ):
+            return ProviderResponse(
+                role=request.role,
+                task_id=request.task_id,
+                ok=False,
+                error=f"identity confusion: backend={self.backend} but model={model_seen!r} "
+                      f"does not match expected family prefixes {expected_prefixes}",
+                provider_name=self.name,
+            )
         # Preserve exact provider output without stripping, so that byte-exact
         # marker checks downstream are not bypassed by transport-layer
         # whitespace normalization.  classify_provider_failure normalizes
