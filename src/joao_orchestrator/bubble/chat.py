@@ -414,8 +414,10 @@ class ChatBrain:
             # Force plan mode — Claude cannot execute tools, only plan.
             argv.extend(["--permission-mode", "plan",
                          "--disallowedTools", "Bash,Edit,Write,NotebookEdit"])
-        model_seen = f"claude-cli:{self.claude_model}"
-        announced = False
+        # P1-2: Do NOT default to local config.  The model must come from an
+        # authoritative message_start event.  If none is received, identity is
+        # not proven and the adapter rejects the response.
+        model_seen = None
         full: list[str] = []
         any_delta = False
 
@@ -430,9 +432,9 @@ class ChatBrain:
                     ev = obj.get("event", {})
                     et = ev.get("type")
                     if et == "message_start":
-                        model_seen = ev.get("message", {}).get("model", model_seen)
-                        if not announced:
-                            announced = True
+                        event_model = ev.get("message", {}).get("model")
+                        if event_model:
+                            model_seen = str(event_model)
                             yield {"event": "model", "model": model_seen, "provider": "claude-cli"}
                     elif et == "content_block_delta":
                         delta = ev.get("delta", {})
@@ -462,10 +464,15 @@ class ChatBrain:
             yield {"event": "error", "message": "Le provider Claude n'a retourné aucun texte (stream vide)"}
             return
 
+        # P1-2: If no authoritative model was received from message_start,
+        # identity is not proven — emit an error instead of trusting local config.
+        if model_seen is None:
+            yield {"event": "error",
+                   "message": "Claude identity not proven: no model in message_start event"}
+            return
+
         # D defect fix: only emit done if we have content (no error, not empty)
         if any_delta or full:
-            if not announced:
-                yield {"event": "model", "model": model_seen, "provider": "claude-cli"}
             yield {"event": "done", "text": "".join(full), "model": model_seen,
                    "provider": "claude-cli", "cost": None}
 
