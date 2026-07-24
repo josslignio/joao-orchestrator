@@ -198,7 +198,9 @@ def test_secret_like_error_is_redacted_in_persisted_evidence(tmp_path):
     ))
     saved = (tmp_path / "supervisor" / "runs" / f"{result.run_id}.json").read_text()
     assert secret not in saved
-    assert "[REDACTED]" in saved
+    # The error/reason is hashed (HASH: prefix) to ensure no raw provider text
+    # crosses the persistence boundary, even if it doesn't match secret patterns.
+    assert "HASH:" in saved
 
 
 def test_prompt_injection_cannot_replace_structured_judge_contract(tmp_path):

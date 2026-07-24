@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 from ..storage.atomic import atomic_write_json, append_line
-from ..observability.redaction import redact
 from .models import SupervisorResult
 
 
@@ -19,18 +18,16 @@ class SupervisorStore:
         runs.mkdir(parents=True, exist_ok=True)
         path = runs / f"{result.run_id}.json"
         # Raw prompts and provider answer text are intentionally not persisted.
-        # Errors/reasons are HASHED (not just secret-pattern-redacted) because
-        # a provider can echo raw prompts or other non-secret content into
-        # error fields.  Hashing ensures no raw provider text crosses the
-        # persistence boundary.
+        # Errors/reasons are REPLACED with their SHA256 hash (not just
+        # secret-pattern-redacted) because a provider can echo raw prompts or
+        # other non-secret content into error fields.  The original text never
+        # crosses the persistence boundary — only the hash is stored.
         data = result.to_dict(include_content=False)
         reason_text = str(data.get("reason", ""))
-        data["reason"] = redact(reason_text)
-        data["reason_sha256"] = hashlib.sha256(reason_text.encode("utf-8")).hexdigest()[:16]
+        data["reason"] = "HASH:" + hashlib.sha256(reason_text.encode("utf-8")).hexdigest()[:16]
         for call in data.get("calls", []):
             error_text = str(call.get("error", ""))
-            call["error"] = redact(error_text)
-            call["error_sha256"] = hashlib.sha256(error_text.encode("utf-8")).hexdigest()[:16]
+            call["error"] = "HASH:" + hashlib.sha256(error_text.encode("utf-8")).hexdigest()[:16]
         atomic_write_json(path, data)
         self.root.mkdir(parents=True, exist_ok=True)
         append_line(
