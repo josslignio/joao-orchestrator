@@ -1,0 +1,47 @@
+{
+  "base_commit": "29bc6ccc698b1d8af16aaba4c47a6939de209bf9",
+  "branch_tip_after_promotion": "fb57ad8b08687aed92a1667cbd2e87f7e24682c3",
+  "branch_tip_after_rollback": "29bc6ccc698b1d8af16aaba4c47a6939de209bf9",
+  "build_review_candidate_tree": "6ccea4acad51d8c7726c9efd424183207f8d9c60",
+  "candidate_commit": "fb57ad8b08687aed92a1667cbd2e87f7e24682c3",
+  "candidate_tree": "6ccea4acad51d8c7726c9efd424183207f8d9c60",
+  "final_review_candidate_tree": "6ccea4acad51d8c7726c9efd424183207f8d9c60",
+  "greeting_after_promotion": "def greet():\n    return 'hello, world'\n",
+  "greeting_at_base_workspace_untouched_throughout": "def greet():\n    return 'hello, world'\n",
+  "promoted_commit_tree": "6ccea4acad51d8c7726c9efd424183207f8d9c60",
+  "promoted_worktree": "/var/folders/3n/cp7h29p55gzds1ttv9rkjdgw0000gn/T/joao-a0-toy-dk8k0vdm/state/runs/run-20260719T114618Z-1b896f53/promoted-worktree-run-20260719T114618Z-1b896f53",
+  "promotion_manifest": {
+    "branch": "main",
+    "candidate_tree": "6ccea4acad51d8c7726c9efd424183207f8d9c60",
+    "previous_tip": "29bc6ccc698b1d8af16aaba4c47a6939de209bf9",
+    "promoted_commit": "fb57ad8b08687aed92a1667cbd2e87f7e24682c3",
+    "promoted_worktree": "/var/folders/3n/cp7h29p55gzds1ttv9rkjdgw0000gn/T/joao-a0-toy-dk8k0vdm/state/runs/run-20260719T114618Z-1b896f53/promoted-worktree-run-20260719T114618Z-1b896f53",
+    "rollback_command": [
+      "git",
+      "-C",
+      "/var/folders/3n/cp7h29p55gzds1ttv9rkjdgw0000gn/T/joao-a0-toy-dk8k0vdm/workspace",
+      "update-ref",
+      "refs/heads/main",
+      "29bc6ccc698b1d8af16aaba4c47a6939de209bf9",
+      "fb57ad8b08687aed92a1667cbd2e87f7e24682c3"
+    ],
+    "run_id": "run-20260719T114618Z-1b896f53",
+    "tag": "joao-promoted-run-20260719T114618Z-1b896f53",
+    "verified": true,
+    "verified_tree": "6ccea4acad51d8c7726c9efd424183207f8d9c60"
+  },
+  "rollback_restored_base": true,
+  "rollback_result": {
+    "branch": "main",
+    "from_commit": "fb57ad8b08687aed92a1667cbd2e87f7e24682c3",
+    "restored_to": "29bc6ccc698b1d8af16aaba4c47a6939de209bf9",
+    "rolled_back": true,
+    "verified": true
+  },
+  "run_id": "run-20260719T114618Z-1b896f53",
+  "same_hash_end_to_end": true,
+  "same_hash_through_promotion": true,
+  "same_hash_through_review": true,
+  "status_after_approve": "accepted",
+  "status_after_run_once": "needs_approval"
+}

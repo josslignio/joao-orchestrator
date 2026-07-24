@@ -1,0 +1,76 @@
+spec: phase0
+version: "4.0.0"
+risk_boundary: memory_governance
+roadmap_milestone_primary: M2
+source: "RAPPORT_OPTIMISATION_V4_GPT.md §11 (verbatim) — run card ~/Claude-HQ/JOAO_RUN_CARD_A2_MEMOIRE_PHASE0.md"
+description: >
+  Le Kickoff obligatoire de tout projet : project ID fermé, réponses typées, autorités
+  complètes, spec canonique JSON signée (le Markdown est une vue), invalidation en
+  cascade sur modification post-signature, pre-mortem exécutable.
+requirements:
+  - id: P0-1
+    statement: >
+      Project ID fermé `^[a-z0-9][a-z0-9-]{1,62}$`, chemin confiné sous `projects_root`
+      (aucun `../`, symlink, chemin absolu).
+    severity: 3
+    verification_gate: "A2 ATTACK_TEST 4 (project_id `../evil` → refusé)"
+    roadmap_milestone: M2
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: "verbatim (§4.5 « path traversal » observé par l'audit, sans D-ID ledger)"
+  - id: P0-2
+    statement: >
+      Réponses obligatoires typées : {type, validation, cas limites, statut, exemples} —
+      aucune réponse vide acceptée par l'interview.
+    severity: 2
+    verification_gate: "réinterview complète A-G sous le nouveau mécanisme de signature (deliverable A2 #8)"
+    roadmap_milestone: M2
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: P0-3
+    statement: >
+      Autorités complètes : fichier, hash, rendu, version, décision Boss verbatim, date,
+      statut actif/retired.
+    severity: 3
+    verification_gate: "A2 deliverable 8 (3 PROJECT_SPEC régénérées avec autorités complètes, signées via le nouveau mécanisme)"
+    roadmap_milestone: M2
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-007, D-031]
+    derivation: verbatim
+  - id: P0-4
+    statement: >
+      Spec canonique : la signature porte sur un JSON normalisé — le Markdown est
+      une VUE, jamais l'autorité machine.
+    severity: 3
+    verification_gate: "A2 ATTACK_TESTS 2 (fausse ligne GO Boss) + 3 (modification après signature)"
+    roadmap_milestone: M2
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: P0-5
+    statement: >
+      Modification après signature : invalide la signature, crée une nouvelle version,
+      une entrée de décision, une analyse d'impact, et invalide les candidats affectés.
+    severity: 3
+    verification_gate: "A2 ATTACK_TEST 3 (modification de spec APRÈS signature → signature cassée, candidats invalidés)"
+    roadmap_milestone: M2
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: P0-6
+    statement: >
+      Pre-mortem exécutable : chaque défaut sélectionné pointe exigence + test + gate +
+      milestone + owner (pas un simple avertissement en prose).
+    severity: 2
+    verification_gate: "vérifié conjointement avec le sélecteur mémoire (MEM-5) sur les 3 PROJECT_SPEC régénérées"
+    roadmap_milestone: M2
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim

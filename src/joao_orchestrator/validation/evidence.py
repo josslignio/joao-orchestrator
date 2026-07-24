@@ -27,7 +27,8 @@ def build_review_packet(task: TaskMeta,
                         validation: ValidationRun,
                         changed_paths: Iterable[str],
                         git_diff_stat: str,
-                        diff_check_output: str = "") -> str:
+                        diff_check_output: str = "",
+                        reviewed_patch_sha256: str = "") -> str:
     changed = list(changed_paths)
     changed_block = "\n".join(f"- `{p}`" for p in changed) if changed else "_(none)_"
 
@@ -45,7 +46,16 @@ def build_review_packet(task: TaskMeta,
 
     violations_block = ("\n".join(f"- {v}" for v in validation.violations)
                         if validation.violations else "_(none)_")
-    verdict = "PASSED — ready for human review" if validation.ok else "FAILED — do not approve"
+    
+    # Fail-closed: validation.ok alone must never produce PASSED.
+    # Before verified independent reviewer evidence, status must be REVIEW_NOT_RUN.
+    if not reviewed_patch_sha256:
+        verdict = "REVIEW_NOT_RUN — awaiting independent reviewer evidence"
+    elif validation.ok:
+        verdict = "PASSED — ready for human review"
+    else:
+        verdict = "FAILED — do not approve"
+    
     diff_stat_block = _truncate(git_diff_stat or "", 800) or "_(unavailable)_"
     diff_check_block = _truncate(diff_check_output or "", 400)
 

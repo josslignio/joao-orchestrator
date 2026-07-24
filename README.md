@@ -1,51 +1,123 @@
-# JOÃO.AI — `joao-orchestrator`
+# JOÃO.AI
 
-**The canonical JOÃO.AI orchestration core.** Human-facing brand: **JOÃO.AI**. Technical identifier: `joao`.
+**A security-first multi-agent engineering control plane for building, reviewing and operating software with GPT, Codex, Claude and GLM/Z Code.**
 
-This repository is the **Option C** split (C7) of the generic orchestration core out of `josslignio/weekly-trading-radar`, created with **selected history import + full provenance** (no rewrite of accepted source history).
+JOÃO coordinates AI systems without letting a model silently validate its own work. It binds tasks to exact Git SHAs, enforces provider identity and permissions, runs deterministic gates, requires independent review and leaves promotion under human control.
 
-## Status
+> Current stage: **private alpha / audited candidate**. Tranche 3 is closed. Run Night Master is in final global hardening. Candidate Build, automatic merge and deployment are not enabled.
 
-| Field | Value |
-|---|---|
-| Visibility | PRIVATE (intended) |
-| Autonomy | L0-SHADOW |
-| Canonical package | `joao_orchestrator` |
-| Compat shim | `joss_orchestrator` (re-exports canonical, emits deprecation) |
-| Canonical CLI | `joao` |
-| Legacy CLI aliases | `joss`, `joss_v2` (call canonical + emit deprecation) |
-| Source repo | `josslignio/weekly-trading-radar` (NOT rewritten, NOT deleted) |
+## What JOÃO does
 
-## Provenance
+- routes work by provider capability, identity, permissions and measured performance;
+- supports Direct, Auto, Challenge, Council and Builder/Reviewer workflows;
+- separates builder, reviewer, GPT counter-audit and Boss approval;
+- controls subprocesses, working directories, network/capability boundaries and timeouts;
+- detects working-tree and Git control-plane mutations;
+- creates exact-SHA evidence packages with raw gate outputs;
+- runs authenticated, bounded, read-only overnight analysis;
+- preserves structured artifacts without raw provider transcripts or credentials;
+- maintains compatibility with the legacy `joss_orchestrator` package while `joao_orchestrator` is canonical.
 
-Four manifests record the exact, hash-verified import:
+## Current verified milestones
 
-- `PROVENANCE.json` — origin, source commit, canonical/shim/CLI identities, import policy.
-- `SOURCE_MANIFEST.json` — every source file: path, commit, content hash, classification.
-- `IMPORT_MANIFEST.json` — every file: source path, import path, source hash, import hash, rename flag.
-- `PROTECTED_REFS.json` — protected refs + immutable history.
+| Milestone | State | Canonical evidence |
+|---|---|---|
+| Tranche 1 — interaction foundation | closed | repository history |
+| Tranche 2 — execution/security closure | closed | SHA `76de966a8a5cfae29c4093a9c5e822bda5191ce6` |
+| M7 — Supervisor Core | closed | exact-SHA review chain |
+| M8 — Provider Bridge/read-only enforcement | closed | mutation and identity tests |
+| M9 — Codex exact-SHA red-team | closed | `ACCEPT` |
+| M10 — supervised live smoke | closed | exact `JOAO_M10_OK` |
+| Tranche 3 | closed | SHA `1bfa76bb53d3b158f53b54c5b1a18fcf47091fb2` |
+| Run Night Master | final global hardening | candidate `01866310a50658626a7352c6f8e5bd9ba87fa601` |
 
-## Packages
+## Architecture
 
-- **`joao_orchestrator`** (canonical) — the real implementation, renamed from `joss_orchestrator`.
-- **`joss_orchestrator`** (compat shim) — contains **no business logic**; re-exports the canonical package and emits a structured deprecation event on import. Covered by parity tests.
-
-## CLI
-
-```bash
-python3 src/joao_orchestrator/cli/joao.py version     # canonical
-python3 src/joao_orchestrator/cli/joss.py version      # legacy alias (deprecation)
-python3 src/joao_orchestrator/cli/joss_v2.py version   # legacy alias (deprecation)
+```text
+Boss authority
+    ↓
+JOÃO Supervisor Core
+    ├── GPT / Claude strategy and challenge
+    ├── GLM / Claude Code construction
+    └── Codex exact-SHA independent review
+    ↓
+Deterministic tests, security gates and evidence
+    ↓
+Human approval queue
 ```
 
-## Tests
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the trust boundaries and execution planes.
+
+## Run Night
+
+The current Run Night design is read-only and fail-closed:
+
+- HMAC-signed, expiring, one-use activation;
+- exact SHA/evidence/closure/SEC-BOOT binding;
+- bounded tasks, calls, context, artifacts and duration;
+- repository-bounded execution roots;
+- watchdog and manual stop;
+- independent reviewer requirement;
+- outputs remain `AWAITING_APPROVAL`;
+- no merge, push, deployment, publication or write-tier activation.
+
+The future Candidate Build mode is a separate signed milestone and will write only inside isolated worktrees.
+
+## Local verification
 
 ```bash
-python3 scripts/test_parity.py    # canonical-vs-shim parity + manifest integrity
+python -m pip install PyYAML==6.0.3 pytest==9.0.2
+
+# Prove the complete suite can be collected.
+python -m pytest --collect-only -q tests
+
+# SEC-BOOT and Run Night security matrix.
+python -m pytest -q \
+  tests/sec_boot \
+  tests/test_run_night_master.py \
+  tests/test_run_night_watchdog.py \
+  tests/test_m7_supervisor_core.py \
+  tests/test_m8_provider_bridge.py \
+  tests/test_m8_readonly_enforcement.py \
+  tests/test_m8_final_security_closure.py \
+  tests/test_m9_supervisor_redteam.py \
+  tests/test_m9_m10_strict_live_gates.py
+
+# Full repository gate.
+python -m pytest -q tests
 ```
 
-## Honest constraints
+Build a reproducible audit package from a clean exact-SHA worktree:
 
-- This repository was created **locally** (the GitHub repo `josslignio/joao-orchestrator` does not yet exist because `gh` CLI is unauthenticated). It is a real git repository with real provenance, pushable to GitHub when authentication is available.
-- The source repository is **not deleted or rewritten**. Source-repo generic files remain until parity is accepted and the pinned consumer path works (§10.5).
-- No merge to `main` of either repo during this run.
+```bash
+python scripts/build_full_global_audit.py \
+  --output "$HOME/JOAO_EVIDENCE/FULL_GLOBAL_AUDIT.zip"
+```
+
+The builder includes the complete tracked source, Git history bundle, commit chain, raw gate outputs and hash manifest. It cannot report PASS when the full suite was skipped or failed.
+
+## Governance
+
+The signed V4 bundle remains runtime authority. [`JOAO_MASTER_SPEC_V5.md`](JOAO_MASTER_SPEC_V5.md), [`ROADMAP_V5.md`](ROADMAP_V5.md) and [`JOAO_PRODUCT_BACKLOG_V5.md`](JOAO_PRODUCT_BACKLOG_V5.md) are candidates describing the actual implementation state and next sequence; they become authoritative only through a new explicit activation record.
+
+## Next sequence
+
+1. close global audit hardening with Codex and GPT on the exact SHA;
+2. merge and push the approved private canonical repository;
+3. install Provider Mesh + Control Room V1;
+4. certify GPT, Codex, Claude, Claude Code, GLM/Z Code and Chrome Pilot;
+5. run Benchmark Lab and the whole-codebase multi-AI audit;
+6. activate Candidate Build in isolated worktrees;
+7. implement Tranche 4 through bounded overnight milestones.
+
+## Honest limitations
+
+- Provider Mesh and the complete Control Room are not on the canonical branch yet.
+- Candidate Build and write-tier are OFF.
+- No automatic merge, push or deployment is authorized.
+- Public release is blocked until [`PUBLIC_RELEASE_GATE.md`](PUBLIC_RELEASE_GATE.md) is complete, including a deliberate license decision and history-wide privacy scan.
+- Test counts alone never establish production readiness.
+
+## Why this project matters
+
+JOÃO explores a practical question in AI-assisted engineering: **how do we obtain the speed of multiple AI builders without losing provenance, security, independent judgment and human control?** The project combines product architecture, developer tooling, security engineering, evaluation design and operational automation.

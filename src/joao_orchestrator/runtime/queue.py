@@ -15,6 +15,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -268,35 +270,29 @@ class SelectionResult:
 # ---------------------------------------------------------------------------
 
 class QueueStore:
-    """Durable queue storage. All state outside managed repositories.
+    """Durable queue store with SQLite as the sole runtime authority.
 
-    JSON snapshot (queue.json) remains the canonical source of truth; JSONL
-    (queue_events.jsonl) remains the append-only audit log; a SQLite index
-    (queue_index.db) provides atomic claim/lease/ack/nack and fast recovery.
+    Queue JSON snapshots and JSONL events are derived display/audit artifacts.
+    They are never read after their one-time locked migration to decide runtime
+    state, claims, ownership, or recovery.
     """
 
     def __init__(self, state_root: Path, sqlite_index: Any = None):
+        del sqlite_index  # legacy index is intentionally no longer an authority
         self.state_root = Path(state_root).expanduser().resolve()
         self.state_root.mkdir(parents=True, exist_ok=True)
         self.queues_dir = self.state_root / "queues"
         self.queues_dir.mkdir(parents=True, exist_ok=True)
         self.leases_dir = self.state_root / "leases"
         self.leases_dir.mkdir(parents=True, exist_ok=True)
-        self._lock = __import__("threading").Lock()
-        # Optional SQLite index for atomic claim/lease/ack/nack. Lazily created
-        # so legacy callers (no SQLite) keep working.
-        if sqlite_index is not None:
-            self.index = sqlite_index
-        else:
-            try:
-                from ..storage.sqlite_store import SqliteQueueIndex
-                self.index = SqliteQueueIndex(
-                    self.state_root / "queue_index.db")
-            except Exception:
-                self.index = None
+        self._lock = __import__("threading").RLock()
+        from .lease_authority import LeaseAuthority
+        # Fail closed: an unavailable/corrupt/locked DB aborts construction.
+        self.lease_authority = LeaseAuthority(self.state_root / "lease_authority.db")
+        self.index = None  # compatibility attribute; never used as authority
+        self._migrate_legacy_snapshots_once()
 
-    # -- Path helpers ------------------------------------------------------ #
-
+    # -- Path helpers --------------------------------------------------
     def _queue_dir(self, queue_id: str) -> Path:
         validate_identifier(queue_id, "queue_id")
         d = self.queues_dir / queue_id
@@ -310,6 +306,7 @@ class QueueStore:
         return self._queue_dir(queue_id) / "queue_events.jsonl"
 
     def _lease_path(self, project_id: str) -> Path:
+        # Legacy derived path retained only for diagnostics/backward readers.
         validate_identifier(project_id, "project_id")
         return self.leases_dir / f"{project_id}.json"
 
@@ -324,329 +321,303 @@ class QueueStore:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    # -- Snapshot persistence ---------------------------------------------- #
+    # -- Migration / derived artifacts --------------------------------
+    def _migrate_legacy_snapshots_once(self) -> None:
+        if not self.queues_dir.exists():
+            return
+        for qdir in sorted(self.queues_dir.iterdir()):
+            if not qdir.is_dir():
+                continue
+            snapshot = qdir / "queue.json"
+            # The authority owns the marker and inter-process lock. Missing
+            # files are marked complete, not used as a fallback later.
+            self.lease_authority.migrate_from_json(snapshot)
 
-    def _write_snapshot(self, queue_id: str, items: List[QueueItem]) -> None:
+    def _write_snapshot(self, queue_id: str, items: List[QueueItem] | None = None) -> None:
+        if items is None:
+            items = [QueueItem.from_dict(d) for d in self.lease_authority.list_queue_items(queue_id)]
         atomic_write_json(
             self._snapshot_path(queue_id),
-            {"schema_version": 1, "queue_id": queue_id,
-             "items": [i.to_dict() for i in items]})
+            {"schema_version": 2, "authority": "sqlite", "queue_id": queue_id,
+             "items": [item.to_dict() for item in items]},
+        )
 
     def _append_event(self, queue_id: str, event: dict) -> None:
-        event["ts"] = now_iso()
-        append_line(self._events_path(queue_id), json.dumps(event, sort_keys=True))
+        # Process-safe append: serialize one full JSON record under flock and
+        # fsync it before releasing the lock.
+        import fcntl
+        payload = dict(event)
+        payload["ts"] = now_iso()
+        path = self._events_path(queue_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            handle.write(json.dumps(payload, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _mirror_item(self, item: QueueItem) -> None:
-        """Mirror an item into the SQLite index (best-effort)."""
-        if self.index is None:
-            return
-        try:
-            self.index.upsert_item(
-                queue_id=item.queue_id, item_id=item.item_id,
-                project_id=item.project_id, priority=item.priority,
-                status=item.status, not_before=item.not_before,
-                lease_owner=None, lease_expires=None,
-                attempt_count=item.attempt_count,
-                created_at=item.created_at or now_iso(),
-                updated_at=item.updated_at or now_iso())
-        except Exception:
-            pass  # Index is best-effort; JSON remains canonical.
+        # Historical method name retained; this is now the authoritative write.
+        self.lease_authority.upsert_queue_item(item.to_dict())
 
-    # -- CRUD -------------------------------------------------------------- #
-
+    # -- CRUD ----------------------------------------------------------
     def add_item(self, item: QueueItem) -> QueueItem:
-        """Add an item to the queue. Validates uniqueness and dependencies."""
         validate_identifier(item.queue_id, "queue_id")
         validate_identifier(item.item_id, "item_id")
         validate_identifier(item.project_id, "project_id")
         with self._lock:
             existing = self.load_queue(item.queue_id)
-            for ei in existing:
-                if ei.item_id == item.item_id:
-                    raise ValueError(
-                        f"duplicate item_id {item.item_id!r} in queue "
-                        f"{item.queue_id!r}")
-            # Validate dependencies exist (no unknown, no cycle).
+            if any(current.item_id == item.item_id for current in existing):
+                raise ValueError(
+                    f"duplicate item_id {item.item_id!r} in queue {item.queue_id!r}"
+                )
             self._validate_dependencies(item, existing)
             ts = now_iso()
-            if not item.created_at:
-                item.created_at = ts
+            item.created_at = item.created_at or ts
             item.updated_at = item.updated_at or ts
-            existing.append(item)
-            self._write_snapshot(item.queue_id, existing)
-            self._mirror_item(item)
+            self.lease_authority.upsert_queue_item(item.to_dict())
+            self._write_snapshot(item.queue_id)
             self._append_event(item.queue_id, {
-                "event": "item_added",
-                "item_id": item.item_id,
-                "status": item.status,
+                "event": "item_added", "item_id": item.item_id, "status": item.status,
             })
         return item
 
     def load_item(self, queue_id: str, item_id: str) -> QueueItem:
-        for item in self.load_queue(queue_id):
-            if item.item_id == item_id:
-                return item
-        raise KeyError(f"item {item_id!r} not found in queue {queue_id!r}")
+        raw = self.lease_authority.get_queue_item(queue_id, item_id)
+        if raw is None:
+            raise KeyError(f"item {item_id!r} not found in queue {queue_id!r}")
+        return QueueItem.from_dict(raw)
 
     def load_queue(self, queue_id: str) -> List[QueueItem]:
-        path = self._snapshot_path(queue_id)
-        if not path.is_file():
-            return []
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return []
-        return [QueueItem.from_dict(d) for d in data.get("items", [])]
+        validate_identifier(queue_id, "queue_id")
+        return [QueueItem.from_dict(d) for d in self.lease_authority.list_queue_items(queue_id)]
 
-    def update_item(self, queue_id: str, item_id: str,
-                     **fields) -> QueueItem:
+    def update_item(self, queue_id: str, item_id: str, **fields) -> QueueItem:
         with self._lock:
-            items = self.load_queue(queue_id)
-            found = None
-            for i, item in enumerate(items):
-                if item.item_id == item_id:
-                    found = i
-                    break
-            if found is None:
-                raise KeyError(
-                    f"item {item_id!r} not found in queue {queue_id!r}")
-            item = items[found]
-            old_status = item.status
-            for k, v in fields.items():
-                setattr(item, k, v)
-            item.updated_at = now_iso()
-            items[found] = item
-            self._write_snapshot(queue_id, items)
-            self._mirror_item(item)
-            if "status" in fields and fields["status"] != old_status:
+            current = self.load_item(queue_id, item_id)
+            old_status = current.status
+            fields = dict(fields)
+            fields["updated_at"] = now_iso()
+            raw = self.lease_authority.update_queue_item(queue_id, item_id, fields)
+            item = QueueItem.from_dict(raw)
+            self._write_snapshot(queue_id)
+            if item.status != old_status:
                 self._append_event(queue_id, {
-                    "event": "status_changed",
-                    "item_id": item_id,
-                    "from": old_status,
-                    "to": fields["status"],
+                    "event": "status_changed", "item_id": item_id,
+                    "from": old_status, "to": item.status,
                     "reason": fields.get("last_error", ""),
                 })
-        return item
+            return item
 
-    def cancel_item(self, queue_id: str, item_id: str,
-                    reason: str = "") -> QueueItem:
+    def cancel_item(self, queue_id: str, item_id: str, reason: str = "") -> QueueItem:
         item = self.load_item(queue_id, item_id)
         if item.is_terminal():
-            raise ValueError(
-                f"item {item_id!r} is terminal ({item.status}); cannot cancel")
+            raise ValueError(f"item {item_id!r} is terminal ({item.status}); cannot cancel")
         return self.update_item(
-            queue_id, item_id,
-            status=QueueItemStatus.CANCELLED.value,
+            queue_id, item_id, status=QueueItemStatus.CANCELLED.value,
             last_error=reason or ReasonCode.CANCELLED_BY_USER.value,
-            finished_at=now_iso())
-
-    def retry_item(self, queue_id: str, item_id: str) -> QueueItem:
-        """Retry a failed item. Preserves history in event log."""
-        item = self.load_item(queue_id, item_id)
-        if item.status != QueueItemStatus.FAILED.value:
-            raise ValueError(
-                f"item {item_id!r} is {item.status}; only FAILED items can be retried")
-        if item.attempt_count >= item.max_attempts:
-            raise ValueError(
-                f"item {item_id!r} already at max attempts "
-                f"({item.attempt_count}/{item.max_attempts})")
-        ts = now_iso()
-        return self.update_item(
-            queue_id, item_id,
-            status=QueueItemStatus.QUEUED.value,
-            attempt_count=item.attempt_count + 1,
-            started_at=None,
-            finished_at=None,
-            last_error=None,
+            finished_at=now_iso(),
         )
 
-    # -- SQLite-index-backed atomic operations (Phase A) ------------------- #
-    # These mirror the JSON state but use SQLite for atomicity under
-    # contention. JSON + JSONL remain the canonical audit trail.
+    def retry_item(self, queue_id: str, item_id: str) -> QueueItem:
+        item = self.load_item(queue_id, item_id)
+        if item.status != QueueItemStatus.FAILED.value:
+            raise ValueError(f"item {item_id!r} is {item.status}; only FAILED items can be retried")
+        if item.attempt_count >= item.max_attempts:
+            raise ValueError(
+                f"item {item_id!r} already at max attempts ({item.attempt_count}/{item.max_attempts})"
+            )
+        return self.update_item(
+            queue_id, item_id, status=QueueItemStatus.QUEUED.value,
+            attempt_count=item.attempt_count + 1, started_at=None,
+            finished_at=None, last_error=None,
+        )
 
-    def claim(self, queue_id: str, item_id: str, lease_owner: str,
-              lease_expires: str, now: Optional[str] = None) -> bool:
-        """Atomically claim an item. Returns True on success."""
-        if self.index is None:
-            # Fallback: JSON-only optimistic claim.
-            return self._json_claim(queue_id, item_id, lease_owner,
-                                    lease_expires)
-        now = now or now_iso()
-        # Mirror the lease into the index atomically; do this AFTER
-        # update_item so the lease is not overwritten by _mirror_item.
-        ok = self.index.claim(queue_id, item_id, lease_owner,
-                              lease_expires, expected_status="QUEUED",
-                              now=now)
-        if not ok:
-            return False
-        # Update JSON (best-effort; index is the authority for the lease).
-        self.update_item(queue_id, item_id,
-                         status=QueueItemStatus.RUNNING.value,
-                         started_at=now)
-        # Re-apply the lease in the index (update_item overwrote it).
-        self.index.update_status(queue_id, item_id, "RUNNING",
-                                 updated_at=now,
-                                 lease_owner=lease_owner,
-                                 lease_expires=lease_expires)
+    # -- Fail-closed legacy APIs --------------------------------------
+    def claim(self, *args, **kwargs) -> bool:
+        raise RuntimeError("legacy QueueStore.claim() is disabled; use claim_item() ownership tuple")
+
+    def ack(self, *args, **kwargs) -> bool:
+        raise RuntimeError("legacy QueueStore.ack() is disabled; use complete_claim()")
+
+    def nack(self, *args, **kwargs) -> bool:
+        raise RuntimeError("legacy QueueStore.nack() is disabled; use complete_claim()")
+
+    def _json_claim(self, *args, **kwargs) -> bool:
+        raise RuntimeError("JSON claim fallback is forbidden")
+
+    # -- Atomic ownership APIs ---------------------------------------
+    def claim_item(self, *, queue_id: str, item_id: str, project_id: str,
+                   run_id: str, owner_pid: int, ttl_seconds: float) -> Optional[dict]:
+        from ..storage.persistence_errors import SQLiteConstraintError
+        try:
+            combined = self.lease_authority.claim_item_and_project(
+                queue_id=queue_id, item_id=item_id, project_id=project_id,
+                run_id=run_id, owner_pid=owner_pid, ttl_seconds=ttl_seconds,
+            )
+        except SQLiteConstraintError:
+            return None
+        claim, project = combined.queue_claim, combined.project_lease
+        self._write_snapshot(queue_id)
         self._append_event(queue_id, {
-            "event": "item_claimed",
-            "item_id": item_id,
-            "lease_owner": lease_owner,
-            "lease_expires": lease_expires,
+            "event": "item_and_project_claimed", "item_id": item_id,
+            "project_id": project_id, "run_id": run_id,
+            "claim_generation": claim.generation,
+            "project_generation": project.generation,
         })
-        return True
+        return {
+            "claim_id": claim.claim_id, "queue_id": claim.queue_id,
+            "item_id": claim.item_id, "project_id": claim.project_id,
+            "run_id": claim.run_id, "owner_pid": claim.owner_pid,
+            "lease_token": claim.lease_token, "generation": claim.generation,
+            "expires_at": claim.expires_at,
+            "project_lease_token": project.lease_token,
+            "project_generation": project.generation,
+            "project_expires_at": project.expires_at,
+        }
 
-    def ack(self, queue_id: str, item_id: str,
-            final_status: str = QueueItemStatus.AWAITING_APPROVAL.value,
-            now: Optional[str] = None) -> bool:
-        """Acknowledge successful execution. Clears the lease."""
-        now = now or now_iso()
-        if self.index is not None:
-            self.index.ack(queue_id, item_id, final_status=final_status,
-                           updated_at=now)
-        self.update_item(queue_id, item_id,
-                         status=final_status, finished_at=now)
-        self._append_event(queue_id, {
-            "event": "item_acked",
-            "item_id": item_id,
-            "final_status": final_status,
+    def claim_project_lease(self, *args, **kwargs) -> Optional[dict]:
+        raise RuntimeError(
+            "independent project lease acquisition is forbidden; claim_item() acquires both atomically"
+        )
+
+    def require_claim_valid(self, claim: dict) -> None:
+        valid = self.lease_authority.check_lease_valid(
+            claim["claim_id"], claim["lease_token"], claim["generation"],
+            run_id=claim["run_id"], owner_pid=claim["owner_pid"],
+        )
+        if not valid:
+            from ..storage.persistence_errors import StaleLeaseError
+            raise StaleLeaseError("ownership lost; subsequent write blocked")
+
+    def renew_queue_claim(self, *, claim_id: str, lease_token: str,
+                          generation: int, ttl_seconds: float,
+                          run_id: str | None = None,
+                          owner_pid: int | None = None) -> Optional[dict]:
+        try:
+            renewed = self.lease_authority.renew_lease(
+                claim_id, lease_token, generation, ttl_seconds,
+                run_id=run_id, owner_pid=owner_pid,
+            )
+        except Exception:
+            return None
+        return {
+            "claim_id": renewed.claim_id, "queue_id": renewed.queue_id,
+            "item_id": renewed.item_id, "project_id": renewed.project_id,
+            "run_id": renewed.run_id, "owner_pid": renewed.owner_pid,
+            "lease_token": renewed.lease_token, "generation": renewed.generation,
+            "expires_at": renewed.expires_at,
+        }
+
+    def heartbeat_queue_claim(self, *, claim_id: str, lease_token: str,
+                              generation: int, ttl_seconds: float = 5.0,
+                              run_id: str | None = None,
+                              owner_pid: int | None = None) -> bool:
+        return self.lease_authority.heartbeat(
+            claim_id, lease_token, generation, ttl_seconds,
+            run_id=run_id, owner_pid=owner_pid,
+        )
+
+    def check_claim_valid(self, *, claim_id: str, lease_token: str,
+                          generation: int, run_id: str | None = None,
+                          owner_pid: int | None = None) -> bool:
+        return self.lease_authority.check_lease_valid(
+            claim_id, lease_token, generation, run_id=run_id, owner_pid=owner_pid,
+        )
+
+    def update_claimed_item(self, claim: dict, **fields) -> QueueItem:
+        raw = self.lease_authority.update_claimed_queue_item(
+            claim_id=claim["claim_id"], lease_token=claim["lease_token"],
+            generation=claim["generation"], run_id=claim["run_id"],
+            owner_pid=claim["owner_pid"], fields=fields,
+        )
+        item = QueueItem.from_dict(raw)
+        self._write_snapshot(item.queue_id)
+        return item
+
+    def complete_claim(self, claim: dict, final_status: str, **item_fields) -> QueueItem:
+        raw = self.lease_authority.complete_item_and_release(
+            claim_id=claim["claim_id"], lease_token=claim["lease_token"],
+            generation=claim["generation"],
+            project_lease_token=claim["project_lease_token"],
+            project_generation=claim["project_generation"],
+            run_id=claim["run_id"], owner_pid=claim["owner_pid"],
+            final_status=final_status, item_fields=item_fields,
+        )
+        item = QueueItem.from_dict(raw)
+        self._write_snapshot(item.queue_id)
+        self._append_event(item.queue_id, {
+            "event": "claim_completed", "item_id": item.item_id,
+            "project_id": item.project_id, "run_id": claim["run_id"],
+            "status": final_status,
         })
-        return True
+        return item
 
-    def nack(self, queue_id: str, item_id: str,
-             reason: str = "",
-             now: Optional[str] = None) -> bool:
-        """Negatively acknowledge: mark FAILED, clear lease."""
-        now = now or now_iso()
-        if self.index is not None:
-            self.index.nack(queue_id, item_id, updated_at=now)
-        self.update_item(queue_id, item_id,
-                         status=QueueItemStatus.FAILED.value,
-                         finished_at=now,
-                         last_error=reason or "nack")
-        self._append_event(queue_id, {
-            "event": "item_nacked",
-            "item_id": item_id,
-            "reason": reason,
+    def reconcile_expired_claim(
+        self, claim: Any, final_status: str, **item_fields: Any,
+    ) -> QueueItem:
+        raw = self.lease_authority.reconcile_expired_claim(
+            queue_id=claim.queue_id, item_id=claim.item_id,
+            claim_id=claim.claim_id, lease_token=claim.lease_token,
+            generation=claim.generation, run_id=claim.run_id,
+            owner_pid=claim.owner_pid, final_status=final_status,
+            item_fields=item_fields,
+        )
+        item = QueueItem.from_dict(raw)
+        self._write_snapshot(item.queue_id)
+        self._append_event(item.queue_id, {
+            "event": "expired_claim_reconciled", "item_id": item.item_id,
+            "project_id": item.project_id, "run_id": claim.run_id,
+            "claim_generation": claim.generation, "status": final_status,
         })
-        return True
+        return item
 
-    def _json_claim(self, queue_id: str, item_id: str,
-                    lease_owner: str, lease_expires: str) -> bool:
-        """Optimistic JSON-only claim fallback when SQLite is unavailable."""
-        with self._lock:
-            items = self.load_queue(queue_id)
-            for i, item in enumerate(items):
-                if item.item_id == item_id:
-                    if item.status != QueueItemStatus.QUEUED.value:
-                        return False
-                    item.status = QueueItemStatus.RUNNING.value
-                    item.started_at = now_iso()
-                    items[i] = item
-                    self._write_snapshot(queue_id, items)
-                    self._append_event(queue_id, {
-                        "event": "item_claimed",
-                        "item_id": item_id,
-                        "lease_owner": lease_owner,
-                        "lease_expires": lease_expires,
-                    })
-                    return True
-            return False
-
-    # -- Startup recovery -------------------------------------------------- #
+    def ack_queue_claim(self, *, claim_id: str, lease_token: str,
+                        generation: int, final_status: str) -> bool:
+        # Compatibility only for direct unpaired claims used by old tests.
+        return self.lease_authority.ack_lease(
+            claim_id, lease_token, generation, final_status,
+        )
 
     def sync_index_from_json(self) -> int:
-        """Rebuild the SQLite index from JSON snapshots. Returns item count.
-
-        Called on startup to ensure the index matches canonical JSON state.
-        """
-        if self.index is None:
-            return 0
-        count = 0
-        if not self.queues_dir.is_dir():
-            return 0
-        for qdir in self.queues_dir.iterdir():
-            if not qdir.is_dir():
-                continue
-            queue_id = qdir.name
-            items = self.load_queue(queue_id)
-            for item in items:
-                self._mirror_item(item)
-                count += 1
-        return count
+        # Compatibility name: migration is one-time, SQLite remains authority.
+        before = sum(len(self.load_queue(q.name)) for q in self.queues_dir.iterdir() if q.is_dir())
+        self._migrate_legacy_snapshots_once()
+        return before
 
     def recover_stale_leases(self, now: Optional[str] = None,
                              task_store: Any = None) -> List[dict]:
-        """Recover items whose leases have expired.
-
-        For each stale RUNNING item, inspect the task state if available:
-        - AWAITING_APPROVAL → ack the item
-        - FAILED → nack the item
-        - any other state → nack (fail closed)
-
-        Returns a list of recovery records.
-        """
-        now = now or now_iso()
-        records: List[dict] = []
-        if self.index is None:
-            return records
-        stale = self.index.stale_leases(now)
-        for row in stale:
-            queue_id = row["queue_id"]
-            item_id = row["item_id"]
-            project_id = row["project_id"]
-            action = "FAILED"
-            reason = "stale lease; ambiguous recovery"
-            if task_store is not None and row.get("item_id"):
-                # Look up the queue item to get the task_id.
-                try:
-                    item = self.load_item(queue_id, item_id)
-                    if item.task_id:
-                        meta = task_store.load(project_id, item.task_id)
-                        if meta.state == "AWAITING_APPROVAL":
-                            action = "AWAITING_APPROVAL"
-                            reason = "stale lease; task reached approval"
-                        elif meta.state == "FAILED":
-                            action = "FAILED"
-                            reason = "stale lease; task failed"
-                except Exception:
-                    pass
-            if action == "AWAITING_APPROVAL":
-                self.ack(queue_id, item_id, final_status=action, now=now)
-            else:
-                self.nack(queue_id, item_id, reason=reason, now=now)
+        del task_store
+        epoch = None
+        if now:
+            try:
+                epoch = datetime.fromisoformat(now.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                epoch = None
+        records = self.lease_authority.recover_expired(now=epoch)
+        touched = sorted({row["queue_id"] for row in records})
+        for queue_id in touched:
+            self._write_snapshot(queue_id)
             self._append_event(queue_id, {
-                "event": "lease_recovered",
-                "item_id": item_id,
-                "project_id": project_id,
-                "action": action,
-                "reason": reason,
-            })
-            records.append({
-                "queue_id": queue_id, "item_id": item_id,
-                "project_id": project_id, "action": action,
-                "reason": reason,
+                "event": "lease_recovery_batch",
+                "count": sum(1 for row in records if row["queue_id"] == queue_id),
+                "reason": ReasonCode.STALE_LEASE_RECOVERED.value,
             })
         return records
 
-    # -- Dependency validation --------------------------------------------- #
-
+    # -- Dependency validation ---------------------------------------
     def _validate_dependencies(self, item: QueueItem,
-                              existing: List[QueueItem]) -> None:
-        """Validate dependencies: no unknown IDs, no cycles, no failed deps."""
-        existing_ids = {ei.item_id for ei in existing}
+                               existing: List[QueueItem]) -> None:
+        existing_ids = {current.item_id for current in existing}
         for dep_id in item.dependencies:
             if dep_id not in existing_ids:
                 raise ValueError(
-                    f"unknown dependency {dep_id!r} for item {item.item_id!r}")
-
-        # Check for cycles with the new item included.
-        all_items = list(existing) + [item]
-        cycle = _detect_dependency_cycle(all_items)
+                    f"unknown dependency {dep_id!r} for item {item.item_id!r}"
+                )
+        cycle = _detect_dependency_cycle(list(existing) + [item])
         if cycle:
-            raise ValueError(
-                f"dependency cycle detected: {' -> '.join(cycle)}")
-
+            raise ValueError(f"dependency cycle detected: {' -> '.join(cycle)}")
 
 def _detect_dependency_cycle(items: List[QueueItem]) -> Optional[List[str]]:
     """Detect dependency cycle using Kahn's algorithm. Returns cycle path or None."""
@@ -718,57 +689,30 @@ class SchedulerEngine:
 
     # -- Lease management --------------------------------------------------- #
 
-    def _acquire_lease(self, queue_id: str, item_id: str,
-                       project_id: str,
-                       run_id: str) -> ProjectLease:
-        lease_path = self.store._lease_path(project_id)
-        recovered = False
-        with self.store._lock:
-            if lease_path.is_file():
-                existing = ProjectLease.from_dict(
-                    json.loads(lease_path.read_text(encoding="utf-8")))
-                if not existing.is_expired(self.now_fn):
-                    raise ValueError(
-                        f"project {project_id!r} is locked by "
-                        f"queue={existing.queue_id} item={existing.item_id}")
-                # Expired lease — recover it.
-                recovered = True
-                self.store._append_event(queue_id, {
-                    "event": "lease_recovered",
-                    "project_id": project_id,
-                    "previous_item_id": existing.item_id,
-                    "previous_run_id": existing.scheduler_run_id,
-                    "reason": ReasonCode.STALE_LEASE_RECOVERED.value,
-                })
+    def _acquire_lease(self, *args, **kwargs) -> ProjectLease:
+        raise RuntimeError(
+            "independent filesystem project leases are disabled; "
+            "QueueStore.claim_item() acquires queue+project ownership atomically"
+        )
 
-            now = self.now_fn()
-            expires = _add_seconds(now, self.LEASE_DURATION_SECONDS)
-            lease = ProjectLease(
-                project_id=project_id, queue_id=queue_id,
-                item_id=item_id, scheduler_run_id=run_id,
-                owner_pid=os.getpid(),
-                hostname=_hostname(),
-                acquired_at=now, heartbeat_at=now,
-                expires_at=expires,
-            )
-            atomic_write_json(lease_path, lease.to_dict())
-        return lease
-
-    def _release_lease(self, project_id: str) -> None:
-        lease_path = self.store._lease_path(project_id)
-        with self.store._lock:
-            if lease_path.is_file():
-                lease_path.unlink()
+    def _release_lease(self, *args, **kwargs) -> None:
+        raise RuntimeError("blind project lease release is disabled")
 
     def _check_lease(self, project_id: str) -> Optional[ProjectLease]:
-        lease_path = self.store._lease_path(project_id)
-        if not lease_path.is_file():
-            return None
-        try:
-            return ProjectLease.from_dict(
-                json.loads(lease_path.read_text(encoding="utf-8")))
-        except (json.JSONDecodeError, OSError):
-            return None
+        for lease in self.store.lease_authority.get_active_project_leases():
+            if lease.project_id == project_id:
+                def iso(epoch: float) -> str:
+                    return datetime.fromtimestamp(epoch, timezone.utc).replace(
+                        microsecond=0).isoformat().replace("+00:00", "Z")
+                return ProjectLease(
+                    project_id=lease.project_id, queue_id=lease.queue_id,
+                    item_id=lease.item_id, scheduler_run_id=lease.owner_run_id,
+                    owner_pid=lease.owner_pid, hostname="sqlite-authority",
+                    acquired_at=iso(lease.leased_at),
+                    heartbeat_at=iso(lease.heartbeat_at or lease.leased_at),
+                    expires_at=iso(lease.expires_at),
+                )
+        return None
 
     # -- Selection algorithm ----------------------------------------------- #
 
@@ -811,7 +755,7 @@ class SchedulerEngine:
 
             # Check project lease.
             lease = self._check_lease(item.project_id)
-            if lease and not lease.is_expired(self.now_fn):
+            if lease:
                 skipped[item.item_id] = ReasonCode.PROJECT_LOCKED.value
                 continue
 
@@ -863,151 +807,153 @@ class SchedulerEngine:
                      opencode_verified: bool = False,
                      run_id: str = "",
                      ) -> Tuple[QueueItem, Optional[dict]]:
-        """Execute a queue item. Returns (updated_item, execution_result).
+        """Execute an item under one atomic queue+project ownership tuple."""
+        import threading
 
-        Delegates to existing task-run and convergence primitives.
-        """
         run_id = run_id or uuid.uuid4().hex[:12]
         now = self.now_fn()
-
-        # Mark RUNNING.
-        item = self.store.update_item(
-            queue_id, item.item_id,
-            status=QueueItemStatus.RUNNING.value,
-            started_at=now,
-            last_error=None,
+        claim = self.store.claim_item(
+            queue_id=queue_id, item_id=item.item_id,
+            project_id=item.project_id, run_id=run_id,
+            owner_pid=os.getpid(), ttl_seconds=self.LEASE_DURATION_SECONDS,
         )
-
-        # Acquire project lease.
-        try:
-            lease = self._acquire_lease(
-                queue_id, item.item_id, item.project_id, run_id)
-        except ValueError as exc:
-            item = self.store.update_item(
-                queue_id, item.item_id,
-                status=QueueItemStatus.BLOCKED.value,
-                finished_at=self.now_fn(),
-                last_error=str(exc),
-            )
-            return item, {"error": str(exc)}
+        if claim is None:
+            # Do not mutate an item another process owns.
+            return item, {"error": "item or project already claimed", "run_id": run_id}
 
         execution = {
-            "queue_id": queue_id, "item_id": item.item_id,
-            "run_id": run_id, "started_at": now,
+            "queue_id": queue_id, "item_id": item.item_id, "run_id": run_id,
+            "started_at": now, "claim_id": claim["claim_id"],
+            "claim_generation": claim["generation"],
+            "project_generation": claim["project_generation"],
         }
+        stop_heartbeat = threading.Event()
+        ownership_lost = threading.Event()
 
+        def heartbeat_loop() -> None:
+            interval = max(0.1, min(30.0, self.LEASE_DURATION_SECONDS / 3.0))
+            while not stop_heartbeat.wait(interval):
+                ok = self.store.heartbeat_queue_claim(
+                    claim_id=claim["claim_id"],
+                    lease_token=claim["lease_token"],
+                    generation=claim["generation"],
+                    ttl_seconds=self.LEASE_DURATION_SECONDS,
+                    run_id=claim["run_id"], owner_pid=claim["owner_pid"],
+                )
+                if not ok:
+                    ownership_lost.set()
+                    return
+
+        heartbeat = threading.Thread(
+            target=heartbeat_loop, name=f"joao-lease-heartbeat-{run_id}", daemon=True
+        )
+        heartbeat.start()
+
+        def guard() -> None:
+            if ownership_lost.is_set():
+                from ..storage.persistence_errors import StaleLeaseError
+                raise StaleLeaseError("ownership heartbeat lost; write blocked")
+            self.store.require_claim_valid(claim)
+
+        final_status = QueueItemStatus.FAILED.value
+        final_fields: dict[str, Any] = {
+            "finished_at": self.now_fn(),
+            "last_error": "execution did not complete",
+        }
         try:
-            # Create the canonical JOSS task.
-            request_text = Path(item.request_file).read_text(
-                encoding="utf-8")
+            guard()
+            request_text = Path(item.request_file).read_text(encoding="utf-8")
             meta = task_store.create(
                 item.project_id, item.title, request_text,
                 done_criteria="\n".join(item.done_criteria),
                 size_class=item.size.upper(),
             )
+            item = self.store.update_claimed_item(claim, task_id=meta.task_id)
 
-            # Link task_id to queue item.
-            item = self.store.update_item(
-                queue_id, item.item_id, task_id=meta.task_id)
-
-            # Run worktree creation + provider dispatch + validation
-            # via the existing task run pipeline.
             exec_result = _run_task_pipeline(
-                meta=meta, profile=profile,
-                task_store=task_store,
-                budget_store=budget_store,
-                worktree_parent=worktree_parent,
+                meta=meta, profile=profile, task_store=task_store,
+                budget_store=budget_store, worktree_parent=worktree_parent,
                 source_revision=item.source_revision,
-                engine=item.implementation_engine,
-                item=item,
+                engine=item.implementation_engine, item=item,
             )
-
+            guard()
             if not exec_result.get("ok"):
-                # Task run failed.
                 task_store.transition(
-                    meta.project_id, meta.task_id,
-                    "FAILED", reason=exec_result.get("error", "task run failed"))
-                item = self.store.update_item(
-                    queue_id, item.item_id,
-                    status=QueueItemStatus.FAILED.value,
-                    finished_at=self.now_fn(),
-                    last_error=ReasonCode.TASK_RUN_FAILED.value,
+                    meta.project_id, meta.task_id, "FAILED",
+                    reason=exec_result.get("error", "task run failed"),
                 )
                 execution["result"] = "FAILED"
                 execution["error"] = exec_result.get("error", "")
-                return item, execution
-
-            # Reload meta — pipeline changed the task state in the store.
-            meta = task_store.load(meta.project_id, meta.task_id)
-
-            # Task reached AWAITING_APPROVAL. Run convergence.
-            from .convergence import (
-                ConvergenceConfig, run_convergence)
-            wt_path = Path(
-                task_store.artifact_path(
-                    meta.project_id, meta.task_id, "worktree.json")
-            ).parent  # worktree path from metadata
-            # Load actual worktree path.
-            wt_meta_path = task_store.artifact_path(
-                meta.project_id, meta.task_id, "worktree.json")
-            if wt_meta_path.is_file():
-                wt_meta = json.loads(
-                    wt_meta_path.read_text(encoding="utf-8"))
-                wt_path = Path(wt_meta["worktree_path"])
-
-            conv_config = ConvergenceConfig(
-                max_fixes=item.max_fixes,
-                review_engine=item.review_engine,
-                fix_engine=item.fix_engine,
-                review_executable=reviewer_executable,
-                fix_executable=fixer_executable,
-                now_fn=self.now_fn,
-            )
-
-            conv_result = run_convergence(
-                meta, profile, task_store, budget_store,
-                conv_config, wt_path,
-                codex_available=codex_available,
-                codex_verified=codex_verified,
-                opencode_available=opencode_available,
-                opencode_verified=opencode_verified,
-            )
-
-            execution["convergence"] = conv_result.to_dict()
-
-            if conv_result.ok:
-                item = self.store.update_item(
-                    queue_id, item.item_id,
-                    status=QueueItemStatus.AWAITING_APPROVAL.value,
-                    finished_at=self.now_fn(),
-                    last_error=ReasonCode.AWAITING_HUMAN_APPROVAL.value,
-                )
-                execution["result"] = "AWAITING_APPROVAL"
+                final_fields = {
+                    "finished_at": self.now_fn(),
+                    "last_error": ReasonCode.TASK_RUN_FAILED.value,
+                }
             else:
-                item = self.store.update_item(
-                    queue_id, item.item_id,
-                    status=QueueItemStatus.FAILED.value,
-                    finished_at=self.now_fn(),
-                    last_error=(ReasonCode.CONVERGENCE_FAILED.value
-                                + ": " + (conv_result.error or conv_result.reason_code)),
+                meta = task_store.load(meta.project_id, meta.task_id)
+                from .convergence import ConvergenceConfig, run_convergence
+                wt_path = Path(task_store.artifact_path(
+                    meta.project_id, meta.task_id, "worktree.json"
+                )).parent
+                wt_meta_path = task_store.artifact_path(
+                    meta.project_id, meta.task_id, "worktree.json"
                 )
-                execution["result"] = "FAILED"
-
+                if wt_meta_path.is_file():
+                    wt_meta = json.loads(wt_meta_path.read_text(encoding="utf-8"))
+                    wt_path = Path(wt_meta["worktree_path"])
+                conv_config = ConvergenceConfig(
+                    max_fixes=item.max_fixes,
+                    review_engine=item.review_engine,
+                    fix_engine=item.fix_engine,
+                    review_executable=reviewer_executable,
+                    fix_executable=fixer_executable,
+                    now_fn=self.now_fn,
+                )
+                conv_result = run_convergence(
+                    meta, profile, task_store, budget_store, conv_config, wt_path,
+                    codex_available=codex_available,
+                    codex_verified=codex_verified,
+                    opencode_available=opencode_available,
+                    opencode_verified=opencode_verified,
+                )
+                guard()
+                execution["convergence"] = conv_result.to_dict()
+                if conv_result.ok:
+                    execution["result"] = "AWAITING_APPROVAL"
+                    final_status = QueueItemStatus.AWAITING_APPROVAL.value
+                    final_fields = {
+                        "finished_at": self.now_fn(),
+                        "last_error": ReasonCode.AWAITING_HUMAN_APPROVAL.value,
+                    }
+                else:
+                    execution["result"] = "FAILED"
+                    final_fields = {
+                        "finished_at": self.now_fn(),
+                        "last_error": ReasonCode.CONVERGENCE_FAILED.value + ": " +
+                                      (conv_result.error or conv_result.reason_code),
+                    }
         except Exception as exc:
             execution["result"] = "FAILED"
-            execution["error"] = str(exc)
-            item = self.store.update_item(
-                queue_id, item.item_id,
-                status=QueueItemStatus.FAILED.value,
-                finished_at=self.now_fn(),
-                last_error=str(exc),
-            )
+            execution["error"] = f"{type(exc).__name__}: {exc}"
+            final_fields = {"finished_at": self.now_fn(), "last_error": str(exc)}
         finally:
-            self._release_lease(item.project_id)
-            # Persist execution artifact.
+            stop_heartbeat.set()
+            heartbeat.join(timeout=max(1.0, min(5.0, self.LEASE_DURATION_SECONDS)))
+            try:
+                guard()
+                item = self.store.complete_claim(
+                    claim, final_status, **final_fields,
+                )
+            except Exception as exc:
+                # Fail closed: after ownership loss no authoritative queue write
+                # is permitted. Recovery handles the expired RUNNING row.
+                execution["ownership_release_error"] = f"{type(exc).__name__}: {exc}"
+                execution["result"] = "FAILED"
+                try:
+                    item = self.store.load_item(queue_id, item.item_id)
+                except Exception:
+                    pass
             run_dir = self.store._run_dir(queue_id, run_id)
-            atomic_write_json(
-                run_dir / "execution.json", execution)
+            atomic_write_json(run_dir / "execution.json", execution)
 
         return item, execution
 
@@ -1027,90 +973,70 @@ class SchedulerEngine:
 
     def _reconcile_one(self, queue_id: str, item: QueueItem,
                        task_store: Any) -> dict:
-        """Reconcile a single RUNNING item."""
-        if not item.task_id:
-            # No task was created — ambiguous.
-            self.store.update_item(
-                queue_id, item.item_id,
-                status=QueueItemStatus.FAILED.value,
-                finished_at=self.now_fn(),
-                last_error=ReasonCode.AMBIGUOUS_RECOVERY_STATE.value,
-            )
-            return {"item_id": item.item_id,
-                    "action": "FAILED",
-                    "reason": ReasonCode.AMBIGUOUS_RECOVERY_STATE.value}
+        """Reconcile one RUNNING item without bypassing lease ownership.
 
-        try:
-            meta = task_store.load(item.project_id, item.task_id)
-        except KeyError:
-            self.store.update_item(
-                queue_id, item.item_id,
-                status=QueueItemStatus.FAILED.value,
-                finished_at=self.now_fn(),
-                last_error=ReasonCode.AMBIGUOUS_RECOVERY_STATE.value,
-            )
-            return {"item_id": item.item_id,
-                    "action": "FAILED",
-                    "reason": ReasonCode.AMBIGUOUS_RECOVERY_STATE.value}
-
-        # Check lease state.
-        lease = self._check_lease(item.project_id)
-
-        if meta.state == "AWAITING_APPROVAL":
-            self.store.update_item(
-                queue_id, item.item_id,
-                status=QueueItemStatus.AWAITING_APPROVAL.value,
-                finished_at=self.now_fn(),
-                last_error="reconciled: task reached AWAITING_APPROVAL",
-            )
-            if lease:
-                self._release_lease(item.project_id)
-            return {"item_id": item.item_id,
-                    "action": "AWAITING_APPROVAL",
-                    "reason": "task state reconciled"}
-
-        if meta.state == "FAILED":
-            self.store.update_item(
-                queue_id, item.item_id,
-                status=QueueItemStatus.FAILED.value,
-                finished_at=self.now_fn(),
-                last_error="reconciled: task reached FAILED",
-            )
-            if lease:
-                self._release_lease(item.project_id)
-            return {"item_id": item.item_id,
-                    "action": "FAILED",
-                    "reason": "task state reconciled"}
-
-        # Task in intermediate state + expired lease.
-        if lease and lease.is_expired(self.now_fn):
-            self.store.update_item(
-                queue_id, item.item_id,
-                status=QueueItemStatus.FAILED.value,
-                finished_at=self.now_fn(),
-                last_error=ReasonCode.STALE_LEASE_RECOVERED.value,
-            )
-            self._release_lease(item.project_id)
-            self.store._append_event(queue_id, {
-                "event": "reconcile_stale",
-                "item_id": item.item_id,
-                "task_state": meta.state,
-                "reason": ReasonCode.STALE_LEASE_RECOVERED.value,
-            })
-            return {"item_id": item.item_id,
-                    "action": "FAILED",
-                    "reason": ReasonCode.STALE_LEASE_RECOVERED.value}
-
-        # Active lease + task in intermediate state — ambiguous.
-        self.store.update_item(
+        An active lease means another scheduler still owns the item, so
+        reconciliation is a no-op. An expired claim is reconciled through the
+        SQLite authority in one transaction that verifies the persisted claim
+        tuple, updates the queue item, and releases the paired project lease.
+        """
+        claim = self.store.lease_authority.get_claim_for_item(
             queue_id, item.item_id,
-            status=QueueItemStatus.FAILED.value,
-            finished_at=self.now_fn(),
-            last_error=ReasonCode.AMBIGUOUS_RECOVERY_STATE.value,
         )
-        return {"item_id": item.item_id,
+        if claim is not None and claim.expires_at > time.time():
+            return {
+                "item_id": item.item_id,
+                "action": "NOOP",
+                "reason": "ACTIVE_LEASE",
+                "run_id": claim.run_id,
+                "generation": claim.generation,
+            }
+
+        if claim is None:
+            # A RUNNING row without any claim is an orphaned/corrupt state.
+            # There is no competing owner, so fail it explicitly via the
+            # unclaimed update path rather than leaving it stuck forever.
+            self.store.update_item(
+                queue_id, item.item_id,
+                status=QueueItemStatus.FAILED.value,
+                finished_at=self.now_fn(),
+                last_error=ReasonCode.AMBIGUOUS_RECOVERY_STATE.value,
+            )
+            return {
+                "item_id": item.item_id,
                 "action": "FAILED",
-                "reason": ReasonCode.AMBIGUOUS_RECOVERY_STATE.value}
+                "reason": ReasonCode.AMBIGUOUS_RECOVERY_STATE.value,
+            }
+
+        final_status = QueueItemStatus.FAILED.value
+        reason = ReasonCode.AMBIGUOUS_RECOVERY_STATE.value
+        if item.task_id:
+            try:
+                meta = task_store.load(item.project_id, item.task_id)
+            except KeyError:
+                meta = None
+            if meta is not None and meta.state == "AWAITING_APPROVAL":
+                final_status = QueueItemStatus.AWAITING_APPROVAL.value
+                reason = "reconciled: task reached AWAITING_APPROVAL"
+            elif meta is not None and meta.state == "FAILED":
+                final_status = QueueItemStatus.FAILED.value
+                reason = "reconciled: task reached FAILED"
+            elif meta is not None:
+                final_status = QueueItemStatus.FAILED.value
+                reason = ReasonCode.STALE_LEASE_RECOVERED.value
+
+        updated = self.store.reconcile_expired_claim(
+            claim, final_status,
+            finished_at=self.now_fn(),
+            last_error=reason,
+        )
+        return {
+            "item_id": item.item_id,
+            "action": updated.status,
+            "reason": reason,
+            "recovered_run_id": claim.run_id,
+            "recovered_generation": claim.generation,
+        }
 
     # -- Scheduler runs ---------------------------------------------------- #
 
@@ -1346,6 +1272,7 @@ def _run_task_pipeline(meta: Any, profile: Any, task_store: Any,
             "RUNNING", reason="scheduler: provider running")
 
         # Provider dispatch.
+        # Fail-closed: non-fake engine without concrete adapter fails closed.
         if engine == "fake":
             from ..providers.fake_provider import FakeProvider
             from ..providers.base import ProviderRequest
@@ -1364,15 +1291,16 @@ def _run_task_pipeline(meta: Any, profile: Any, task_store: Any,
             )
             result = provider.invoke(req)
         else:
-            # Manual or other engine — no actual dispatch, just mark OK.
-            result = type("R", (), {"ok": True, "error": ""})()
+            # Manual or other engine — no concrete adapter available.
+            # Fail-closed: never create a synthetic result with ok=True.
+            return {"ok": False, "error": f"no concrete adapter for engine: {engine}"}
 
         if not result.ok:
-            return {"ok": False, "error": getattr(result, "error", "dispatch failed")}
+            return {"ok": False, "error": getattr(result, "error", "provider dispatch failed")}
 
         # Capture worktree state.
         capture = capture_worktree_state(
-            wt_path, provider_ok=True, provider_result={"engine": engine})
+            wt_path, provider_ok=result.ok, provider_result={"engine": engine})
         task_store.write_artifact_json(
             meta.project_id, meta.task_id,
             "changed_files.json", {"changed_files": capture.changed_files,
@@ -1415,12 +1343,27 @@ def _run_task_pipeline(meta: Any, profile: Any, task_store: Any,
                 all_ok = False
 
         # Write validation.json artifact (required by convergence).
+        # Evidence is an exact, inspectable record of the declared command,
+        # including its resolved executable and every permitted extra argument.
+        # The executor may add safety-only Git process options, but they are not
+        # part of the validation profile command being attested here.
         from ..domain.models import ValidationRun
         vrun = ValidationRun(
             task_id=meta.task_id,
             ok=all_ok,
-            commands=[{"command": " ".join(c.args or []), "ok": True}
-                      for c in selected],
+            commands=[
+                {
+                    "argv": [c.executable, *list(c.args or []),
+                             *list(c.args_extra or [])],
+                    "command": shlex.join(
+                        [c.executable, *list(c.args or []),
+                         *list(c.args_extra or [])]
+                    ),
+                    "ok": r.returncode == 0,
+                    "returncode": r.returncode,
+                }
+                for c, r in zip(selected, cmd_results)
+            ],
             violations=[str(r) for r in cmd_results if r.returncode != 0],
             started_at=now_iso(),
             finished_at=now_iso(),
@@ -1440,6 +1383,7 @@ def _run_task_pipeline(meta: Any, profile: Any, task_store: Any,
             "VALIDATED", reason="scheduler: validated")
 
         # Write review_packet.md (required by convergence).
+        # Use REVIEW_NOT_RUN until real independent evidence exists.
         changed_block = "\n".join(
             f"- `{p}`" for p in capture.changed_files
         ) if capture.changed_files else "_(no tracked changes)_"
@@ -1449,7 +1393,7 @@ def _run_task_pipeline(meta: Any, profile: Any, task_store: Any,
             f"- **Project:** `{meta.project_id}`\n"
             f"- **Generated:** {now_iso()}\n\n"
             f"## Changed Files\n{changed_block}\n\n"
-            f"## Verdict\nPASSED\n\n"
+            f"## Verdict\nREVIEW_NOT_RUN\n\n"
             "---\nEvidence only. No automatic commit, push, or merge.\n"
         )
         task_store.write_artifact_text(

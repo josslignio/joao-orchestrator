@@ -1,0 +1,142 @@
+spec: product_ui
+version: "4.0.0"
+risk_boundary: product_interface
+roadmap_milestone_primary: M7
+included_in_bundle: true
+approval_status: pending_boss
+runtime_enforceable: false
+source: >
+  DÉRIVÉ (pas de section itemizée dédiée dans RAPPORT_OPTIMISATION_V4_GPT.md) — construit
+  depuis : roadmap §14 (description M6 « Chat core minimal » + M7 « contrat design et UI »),
+  Constitution C-6 (le Boss valide, ne debugge pas), §16 matrice de couverture bucket
+  « CV métier/UX », et les défauts DEFECTS_LEDGER.md D-002/D-004/D-010/D-011/D-015/D-032/
+  D-034/D-039/D-041.
+description: >
+  Toute interface exposée au Boss ou à l'utilisateur : actions réellement câblées,
+  verdicts réels affichés, statuts machine-lisibles honnêtes, référence visuelle
+  d'autorité pour tout rendu, routage d'intention avant tout pipeline, reprise de
+  session sans perte, fallback sans TTY, statut ALPHA tant que la checklist GA (§15)
+  n'est pas complète.
+notes: >
+  CETTE SPEC EST UNE INTERPRÉTATION, PAS UNE TRANSCRIPTION — le rapport V4 ne contient
+  aucune section « SPEC PRODUIT/UI » itemizée comme il le fait pour RI/SEC/MEM/P0/CV/CAS.
+  Chaque exigence ci-dessous est dérivée d'un besoin exprimé ailleurs dans le rapport
+  (roadmap, constitution, matrice de couverture) ou d'une leçon verbatim du ledger.
+  À ARBITRER PAR LE BOSS : cette spec entière (portée et découpage des 9 exigences)
+  n'a pas de validation explicite du panel V4 — seul son contenu SOURCE (les leçons/
+  décisions citées) est validé.
+boss_validation_requested: true
+boss_summary: |-
+  Résumé Boss (patch M0.1 D5) — cette spec reste DANS le bundle : le GO portera sur ce contenu COMPLET (C-2).
+  UI-1 : toute UI livrée a ses actions réellement câblées, prouvées par un clic E2E.
+  UI-2 : le vrai verdict du reviewer s'affiche toujours, jamais une carte générique.
+  UI-3 : un run n'est « DELIVERED » qu'avec un artefact promu, jamais avant.
+  UI-4 : tout rendu visuel est comparé à une référence Boss-validée dans l'évidence.
+  UI-5/6/7 : le chat (M6) route l'intention avant tout run, refuse une mission sans spec signée, reprend une session sans perte.
+  UI-8 : jamais de fermeture silencieuse faute de TTY.
+  UI-9 : label ALPHA tant que la checklist GA (12 critères) n'est pas complète — déjà SATISFIED.
+  Découpage entièrement interprété par la tour de contrôle, aucune section dédiée dans le rapport V4 source.
+  À valider ou amender explicitement — silence = pas de GO (C-2).
+requirements:
+  - id: UI-1
+    statement: >
+      Toute UI livrée = actions réellement câblées + test E2E de clic obligatoire dans
+      la gate. L'UI expose UNIQUEMENT ce que l'humain utilise réellement.
+    severity: 2
+    verification_gate: "test E2E de clic dans la gate du run qui livre l'UI (pattern D-010/D-011 déjà appliqué en V1.4)"
+    roadmap_milestone: M7
+    owner: builder
+    status: PLANNED
+    source_defects: [D-010, D-011, D-032]
+    derivation: interpreted
+  - id: UI-2
+    statement: >
+      Le verdict RÉEL du reviewer est toujours affiché — jamais une carte générique
+      « review blocked » qui cache un verdict intelligent disponible dans l'évidence.
+    severity: 2
+    verification_gate: "non-régression D-002 (test A6 existant)"
+    roadmap_milestone: M1-A
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-002]
+    derivation: interpreted
+  - id: UI-3
+    statement: >
+      Un statut de run est autoportant pour un lecteur MACHINE — `DELIVERED` n'existe
+      jamais sans artefact promu (Constitution §3).
+    severity: 3
+    verification_gate: "vérifié par le vocabulaire de statuts de la Constitution, appliqué dans les évidences A0→M4"
+    roadmap_milestone: M1-A
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-015]
+    derivation: interpreted
+  - id: UI-4
+    statement: >
+      Tout livrable VISUEL a une référence approuvée (mockup pixel, ou hash de master
+      Boss-validé) commitée comme contrat. La gate joint le rendu À CÔTÉ de la référence
+      dans l'évidence — aucun ✅ sans cette comparaison, y compris pour les productions
+      visuelles de la tour de contrôle elle-même.
+    severity: 3
+    verification_gate: "règle permanente D-042 (side-by-side mockup↔render dans l'évidence, vérifié en CVSEC-V4/M1-B et pour tout artefact de tour de contrôle)"
+    roadmap_milestone: M1-B
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-034, D-041]
+    derivation: interpreted
+  - id: UI-5
+    statement: >
+      Un message de type salutation/question (« Bonjour », « ça va ? ») ne lance JAMAIS
+      un run de code — routage d'intention déterministe avant tout pipeline.
+    severity: 2
+    verification_gate: "M6 attack test (à écrire) : « Bonjour » → aucune carte de run créée, réponse chat directe"
+    roadmap_milestone: M6
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-004]
+    derivation: interpreted
+  - id: UI-6
+    statement: >
+      Une mission (chat ou autre point d'entrée) sans PROJECT_SPEC signé est REFUSÉE —
+      hard gate, jamais contournable depuis le chat.
+    severity: 3
+    verification_gate: "M6 attack test (à écrire) : mission chat sur projet non signé → refusée avec message explicite"
+    roadmap_milestone: M6
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: interpreted
+  - id: UI-7
+    statement: >
+      Reprise de session après reload : sans perte d'état, sans run orphelin laissé
+      attaché à la mauvaise conversation.
+    severity: 2
+    verification_gate: "M6 attack test (à écrire) : reload pendant un run actif → état retrouvé correctement"
+    roadmap_milestone: M6
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-018]
+    derivation: interpreted
+  - id: UI-8
+    statement: >
+      Toute attente interactive a un fallback sans TTY — jamais de fermeture silencieuse
+      d'une fenêtre/processus faute d'entrée utilisateur possible.
+    severity: 2
+    verification_gate: "non-régression D-039 (test 60s dashboard existant + CVSEC-V4 ATTACK_TEST 10)"
+    roadmap_milestone: M1-B
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-039]
+    derivation: interpreted
+  - id: UI-9
+    statement: >
+      Le statut de l'app affiché (README, CLI, UI) est `ALPHA` tant que la checklist GA
+      (rapport §15, 12 critères) n'est pas complète. Aucun label GA/stable/production-ready
+      sur la seule base d'un rapport de run.
+    severity: 3
+    verification_gate: "G3 de ce run M0 (grep repo = zéro claim exact-SHA/inattaquable non qualifiée) + présence du label ALPHA"
+    roadmap_milestone: M0
+    owner: contrôleur
+    status: SATISFIED
+    source_defects: [D-043]
+    derivation: interpreted

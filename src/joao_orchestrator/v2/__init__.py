@@ -16,7 +16,7 @@ Design invariants (unchanged from the existing engine):
 
 * Standard library only (no package install required).
 * State lives OUTSIDE the repo under ``~/.local/share/joss-orchestrator/``.
-* Generic core never contains project literals (trading KOLs, job boards, CVs).
+* Generic core never contains concrete product literals or presets.
 * Fail-closed integrity; no secrets in state/telemetry/logs.
 
 Public submodules:
@@ -25,7 +25,7 @@ Public submodules:
 * :mod:`joao_orchestrator.v2.gate_ledger` — immutable gate ledger.
 * :mod:`joao_orchestrator.v2.objective` — objective contract + backward planner.
 * :mod:`joao_orchestrator.v2.preflight` — evidence-first preflight + known-good.
-* :mod:`joao_orchestrator.v2.profiles` — trading/job profile presets.
+* :mod:`joao_orchestrator.v2.profiles` — generic profile schema and loader.
 * :mod:`joao_orchestrator.v2.review` — independent review gate.
 * :mod:`joao_orchestrator.v2.genesis` — Product Genesis Engine (V2.4 PR-A):
   gates production coding behind a human-accepted Product Blueprint.

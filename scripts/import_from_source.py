@@ -22,9 +22,9 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-SRC = Path("/Users/jocelyngrosjean/twitter-scrape-test")
+SRC = Path.home() / "twitter-scrape-test"
 SRC_REF = "autopilot/joao/corrective-foundation"
-DST = Path("/Users/jocelyngrosjean/joao-orchestrator")
+DST = Path.home() / "joao-orchestrator"
 
 
 def utcnow() -> str:

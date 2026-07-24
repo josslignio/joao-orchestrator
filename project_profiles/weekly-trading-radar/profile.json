@@ -1,0 +1,16 @@
+{
+  "project_id": "weekly-trading-radar",
+  "aliases": ["Twitter Bot", "Twitter Radar", "Trading Radar", "Weekly Trading Radar", "weekly-trading-radar"],
+  "repository_path": "~/twitter-scrape-test",
+  "runtime_root": "~/.local/share/joss-orchestrator",
+  "known_good_command": ".venv/bin/python scripts/weekly_v1_delivery.py",
+  "public_urls": ["https://josslignio.github.io/weekly-trading-radar-dashboard/latest/report.html"],
+  "scheduler_identifier": "com.joss.tradingradar.weekly-v1",
+  "mode": "SHADOW_ONLY",
+  "frozen": true,
+  "acceptance_checks": ["fail-closed validation gate", "exactly one active scheduler"],
+  "forbidden_patterns": [
+    {"pattern": "\\btwscrape\\b", "label": "project scraper rule"},
+    {"pattern": "weekly-trading-radar-dashboard", "label": "project dashboard literal"}
+  ]
+}

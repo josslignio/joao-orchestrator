@@ -1,0 +1,24 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0 -- /Library/Frameworks/Python.framework/Versions/3.12/bin/python3
+cachedir: .pytest_cache
+rootdir: <SANITIZED>
+configfile: setup.cfg
+collecting ... collected 5 items
+
+tests/test_project_isolation.py::test_no_product_repository_files ✓ No product repository files in JOÃO (specs/ exception retired, M0.1 D4)
+PASSED
+tests/test_project_isolation.py::test_git_ignores_product_repos ⚠ Warning: Product pattern 'weekly-trading-radar' not in .gitignore
+⚠ Warning: Product pattern 'job-cv-auto' not in .gitignore
+⚠ Warning: Product pattern 'trading-radar' not in .gitignore
+⚠ Warning: Product pattern 'cv-bot' not in .gitignore
+✓ .gitignore configured for project isolation
+PASSED
+tests/test_project_isolation.py::test_no_cross_product_git_modules ✓ No cross-product git modules
+PASSED
+tests/test_project_isolation.py::test_documentation_mentions_isolation ⚠ Warning: README.md does not mention project isolation
+PASSED
+tests/test_project_isolation.py::test_runtime_configuration_isolation ✓ Runtime configuration has governance policies: ['context', 'quota', 'governor', 'limit', 'policy']
+PASSED
+
+============================== 5 passed in 0.12s ===============================
+exit=0

@@ -16,6 +16,48 @@ UNIVERSAL_FORBIDDEN_PREFIXES = (
     ".venv", "venv", ".git", "node_modules",
 )
 
+# A0-4: gitignored files are, by construction, invisible to every git-based
+# capture in this runtime (`git add -A`, `git status`, `git diff`) — that is
+# exactly why `.gitignore` exists. A gitignored file whose NAME matches one
+# of these patterns is treated as landing in a "sensitive runtime path" and
+# is refused outright wherever it is found during a run, rather than being
+# silently allowed to ride along untracked. This is a deliberately narrow,
+# name-pattern policy (documented here, not inferred): credential/keypair/
+# secret-shaped filenames. It does not attempt to inspect file CONTENT for
+# secrets — only the name.
+SENSITIVE_IGNORED_PATTERNS = (
+    "*.secret", "*.pem", "*.key", "*.p12", "*.pfx", "*.keystore", "*.jks",
+    "*.env", ".env", ".env.*", "id_rsa", "id_rsa.*", "id_ed25519", "id_ed25519.*",
+    "credentials", "credentials.*", "*_credentials.*", "secrets.json", "secrets.yaml", "secrets.yml",
+)
+
+
+def _matches_sensitive_pattern(name: str) -> str:
+    for pattern in SENSITIVE_IGNORED_PATTERNS:
+        if pattern.startswith("*."):
+            if name.endswith(pattern[1:]):
+                return pattern
+        elif pattern.endswith(".*"):
+            if name == pattern[:-2] or name.startswith(pattern[:-1]):
+                return pattern
+        elif name == pattern:
+            return pattern
+    return ""
+
+
+def detect_sensitive_ignored_files(ignored_paths: Iterable[str]) -> List[str]:
+    """A0-4: of the paths git reports as ignored-and-present-on-disk (see
+    `change_capture.ignored_files_inventory`), return the ones whose
+    filename matches `SENSITIVE_IGNORED_PATTERNS` — these are refused
+    outright rather than silently tolerated as "just build noise"."""
+    violations = []
+    for path in ignored_paths:
+        name = _norm(path).rsplit("/", 1)[-1]
+        pattern = _matches_sensitive_pattern(name)
+        if pattern:
+            violations.append(f"{path}  (gitignored, matches sensitive pattern {pattern})")
+    return violations
+
 
 def _norm(path_str: str) -> str:
     norm = str(path_str).replace("\\", "/")

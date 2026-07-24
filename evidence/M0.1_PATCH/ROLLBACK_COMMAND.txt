@@ -1,0 +1,14 @@
+ROLLBACK — M0.1 patch (never executed live — see M0.1_PATCH_REPORT.md NON VÉRIFIÉ point 3/5)
+
+joao-orchestrator (this repo), branch docs/m0-authority-v4:
+  git reset --hard 45e8986
+  # 45e8986 = "docs(M0): end-of-run report — gates G1-G4 executed, safe-stop applied, NON VÉRIFIÉ"
+  # (the pre-M0.1 checkpoint; HEAD was already at this commit when M0.1 started, nothing
+  # else committed on top before this patch)
+
+~/job-opportunity-radar, branch feat/jc-m6-pilote (has unrelated in-progress work — see
+NON VÉRIFIÉ point 5 — NEVER use reset --hard here, it would destroy that work):
+  git revert 81026ec
+  # 81026ec = "governance(M0.1): add PROJECT_SPEC_V4.yaml + cv_bot_business_rules.yaml"
+  # reverts ONLY governance/PROJECT_SPEC_V4.yaml + governance/cv_bot_business_rules.yaml,
+  # leaves every other pending change in the branch untouched

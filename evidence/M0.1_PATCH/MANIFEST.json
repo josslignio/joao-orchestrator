@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "patch_id": "M0.1",
+  "note": "Computed AFTER all evidence artifacts were created (deliverable 8) — hashes real files, never hand-typed.",
+  "bundle_sha256": "9560d7400d1a5ccaec881e089725e9f85d3fde62ebd6e477fbbe5505b06a71db",
+  "constitution_sha256": "138280b6352b04314cc2a31494d1a3fe4a333b9ce2388b66f65424f162a1543e",
+  "roadmap_sha256": "e6c659de4fdeb65e45d8c4994b0ba5821c864a303303c1a4999a304ca9bf3cb4",
+  "traceability_sha256": "6b44db4a1a98c2c1a90c4e685b745719face518dd01fcc41dfb048d3a24040bc",
+  "external_cv_bot_spec_sha256": "c99669d3cbd1ef19252876cb747a9f7c3f7cc7a4b4189b92947efbaecc8cec6b",
+  "activation_record": {
+    "bundle_sha256_at_generation": "9560d7400d1a5ccaec881e089725e9f85d3fde62ebd6e477fbbe5505b06a71db",
+    "boss_go_given": false,
+    "runtime_authority": false
+  },
+  "interpreted_specs_status": {
+    "product_ui.yaml": "IN_BUNDLE — boss_validation_requested: true, boss_summary present",
+    "operations.yaml": "IN_BUNDLE — boss_validation_requested: true, boss_summary present"
+  },
+  "traceability_unmapped_count": 0,
+  "evidence_artifacts": {
+    "FULL_DIFF.patch": "3bfb75eda4ee7df27f5397f26e2dc82661f2464e3bb8ea689aef70456c2faf50",
+    "PYTEST_FULL_OUTPUT.txt": "a2b2b0aea2753ae0b0cf3106c248aa6118c47d6ec2ce888ac9ff15dfaa06342f",
+    "PYTEST_ISOLATION_OUTPUT.txt": "da53c0af93ffc99e3715266bff4170f350f61e41ac14cd0e72212fc3a11f743f",
+    "ROLLBACK_COMMAND.txt": "b1e1fdc9c3d12d70d7b31c835968988a6410f58d1ee4cadd17da24462886f3b1",
+    "SUPERSEDED_LIST.txt": "89f03d902b72c2f1c8955b210f006ff7d673f8acb2f3765905d3fa0cb4cdd398"
+  },
+  "non_verifie_limites": "Voir M0.1_PATCH_REPORT.md section NON VÉRIFIÉ / LIMITES (8 points) — non répété ici pour éviter une double source de vérité."
+}

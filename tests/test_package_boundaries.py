@@ -49,6 +49,30 @@ def test_no_cross_package_imports_from_joao():
     
     print("✓ No cross-package imports from joao_orchestrator")
 
+def test_no_concrete_product_identifiers_in_canonical_package():
+    """Concrete product presets and datasets must remain outside ``src``."""
+    joao_src = Path(__file__).parent.parent / "src" / "joao_orchestrator"
+    forbidden_identifiers = [
+        "weekly-trading-radar",
+        "job-opportunity-radar",
+        "job_cv_auto",
+        "weekly_trading_radar",
+        "twitter-scrape-test",
+        "twscrape",
+        "joss.tradingradar",
+        "weekly_v1_delivery.py",
+    ]
+    violations = []
+    for py_file in joao_src.rglob("*.py"):
+        content = py_file.read_text().lower()
+        for identifier in forbidden_identifiers:
+            if identifier in content:
+                violations.append(f"{py_file}: {identifier}")
+    assert not violations, (
+        "Concrete product identifiers belong under project_profiles/, not "
+        f"src/joao_orchestrator: {violations}"
+    )
+
 def test_joao_core_modules_boundaries():
     """Verify core JOÃO modules maintain proper boundaries"""
     core_modules = [

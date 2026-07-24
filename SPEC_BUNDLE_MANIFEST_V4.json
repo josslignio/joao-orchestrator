@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "bundle_version": "4.0.0",
+  "generated_at": "2026-07-18T16:06:08Z",
+  "immutable": true,
+  "immutability_note": "Ce manifest ne change JAMAIS après signature (ACTIVATION_RECORD_V4.json). DECISION_LOG.jsonl est un journal vivant HORS bundle (voir docstring) — il peut recevoir de nouvelles entrées sans jamais invalider bundle_sha256.",
+  "bundle_documents": [
+    {
+      "path": "SYSTEM_CONSTITUTION_V4.md",
+      "type": "constitution",
+      "version": "4.0.0",
+      "sha256": "ccd1a655e2669d45c0302905bb0a236ccd956e8eaffd55afcb6ac7ddcf7293ea",
+      "bytes": 13636
+    },
+    {
+      "path": "specs/runtime_integrity.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "c3392ba7de20d245b3f9acb08900c4ba67153ee1b5c53187a5fce725901edd5f",
+      "bytes": 4490
+    },
+    {
+      "path": "specs/security.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "b8f86b83168ca3d4fe153787d0568d5eeb9c781413b43f8897a91a95ee84e21c",
+      "bytes": 3528
+    },
+    {
+      "path": "specs/memory.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "6a626feb7dadb15d5cce5d346ec6b3f2679d58b4eb53c1912b104445c0a7ef8d",
+      "bytes": 4270
+    },
+    {
+      "path": "specs/phase0.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "53c8ab2223c00d8fdb315c0111e60ff79fe82bcdb049c2f48c11a10c8adfee67",
+      "bytes": 3085
+    },
+    {
+      "path": "specs/provider_cascade.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "c1278941ba7265fbfc5d2b24659a929e4e31bf814774f6ea57caf8b4d7b4cd68",
+      "bytes": 4598
+    },
+    {
+      "path": "specs/product_ui.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "b05548332dec1becc8ceb70dbc5937c608f730a077fd2526780baf2836f8c782",
+      "bytes": 6837
+    },
+    {
+      "path": "specs/operations.yaml",
+      "type": "spec",
+      "version": "4.0.0",
+      "sha256": "612a1a9a757e9f11dbb251a4019eb6d1d06a5a47f368e9b2bd080a040b69def8",
+      "bytes": 6996
+    },
+    {
+      "path": "ROADMAP_V4.md",
+      "type": "roadmap",
+      "version": "4.0.0",
+      "sha256": "c99e4fa2a27a1ddd57ca178ed2d4ea4039afb46f3349caadceed5d3f5bdf105e",
+      "bytes": 9845
+    },
+    {
+      "path": "TRACEABILITY_V4.jsonl",
+      "type": "traceability",
+      "version": "4.0.0",
+      "sha256": "6b44db4a1a98c2c1a90c4e685b745719face518dd01fcc41dfb048d3a24040bc",
+      "bytes": 18696
+    }
+  ],
+  "external_spec_references": [
+    {
+      "project_id": "cv-bot",
+      "repository": "~/job-opportunity-radar",
+      "spec_path": "governance/PROJECT_SPEC_V4.yaml",
+      "version": "4.0.0",
+      "sha256": "c99669d3cbd1ef19252876cb747a9f7c3f7cc7a4b4189b92947efbaecc8cec6b"
+    }
+  ],
+  "bundle_sha256": "63371b75377edd40a5f54e256cc83f9039025fcfc889f676ac7219241dbfe3fb"
+}

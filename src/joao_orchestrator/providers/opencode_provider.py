@@ -1,80 +1,37 @@
-"""OpenCode verified local adapter (opencode-zai provider).
+"""Verified OpenCode + Z.AI Coding Plan provider.
 
-Implements a generic verified external-agent adapter pattern:
-  1. Resolve executable via shutil.which or explicit absolute path.
-  2. Probe --help and --version through bounded local subprocess calls.
-  3. Parse only explicitly supported capabilities from help output.
-  4. If OpenCode is absent or its non-interactive interface cannot be proven
-     from local help output: provider remains unavailable; produce a structured
-     reason; do not guess commands; do not install OpenCode.
-
-Adapted from upstream patterns in anomalyco/opencode (MIT) and
-SWE-agent/mini-swe-agent (MIT). See docs/THIRD_PARTY_NOTICES.md.
-
-Safety invariants:
-  - Never copies or persists Z.AI Coding Plan keys.
-  - Never falls back to paid API.
-  - Redacts ZAI/ZHIPU/OPENAI/ANTHROPIC/CLAUDE/GitHub token variables
-    from probe and run environments.
-  - Probe results are persisted as provider_probe.json.
-  - Discovered capabilities are persisted as provider_capabilities.json.
-  - Run results are persisted as provider_result.json.
+The adapter uses OpenCode's supported non-interactive ``run`` command.  It is
+fail-closed: availability is established from local CLI probes, the configured
+auth store, and the requested model listing before a coding request may run.
+No legacy MCP bridge, GUI automation, paid API fallback, shell invocation, or
+credential copying is used.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import List, Mapping, Optional
 
-from .base import (
-    ProviderAdapter,
-    ProviderRequest,
-    ProviderResponse,
-    require_capability,
-)
-from .subprocess_cli import (
-    CLIEngineConfig,
-    CLIProbeResult,
-    SubprocessCLIEngine,
-    SubprocessCLIError,
-)
+from .base import ProviderAdapter, ProviderRequest, ProviderResponse, require_capability
+from .subprocess_cli import CLIEngineConfig, SubprocessCLIEngine
 
-# Patterns that indicate non-interactive / headless capability in --help output.
-# These are parsed from the raw help text — no guessing, no defaults.
-_HEADLESS_FLAGS = [
-    re.compile(r"--headless\b"),
-    re.compile(r"--non-interactive\b"),
-    re.compile(r"--no-tty\b"),
-    re.compile(r"--batch\b"),
-    re.compile(r"--json\b"),
-]
-
-# Patterns that indicate the provider supports workspace-write operations.
-_WORKSPACE_WRITE_PATTERNS = [
-    re.compile(r"sandbox\b"),
-    re.compile(r"workspace.write\b"),
-    re.compile(r"write\b.*workspace"),
-]
-
-# Patterns indicating the provider can accept a prompt via stdin or --prompt.
-_PROMPT_INPUT_PATTERNS = [
-    re.compile(r"--prompt\b"),
-    re.compile(r"stdin"),
-    re.compile(r"<prompt>"),
-]
+DEFAULT_MODEL = "zai-coding-plan/glm-4.5-air"
+DEFAULT_PROVIDER = "zai-coding-plan"
+DEFAULT_AUTH_PATH = "~/.local/share/opencode/auth.json"
+_REQUIRED_RUN_FLAGS = ("--model", "--agent", "--format", "--dir", "--auto")
 
 
 @dataclass(frozen=True)
 class ProviderCapabilities:
-    """Immutable set of discovered capabilities from probe output."""
     headless: bool = False
     json_output: bool = False
     workspace_write: bool = False
-    prompt_via_stdin: bool = False
+    positional_prompt: bool = False
+    provider_visible: bool = False
+    model_visible: bool = False
     raw_help_text: str = ""
     raw_version_text: str = ""
     version_string: str = ""
@@ -84,116 +41,269 @@ class ProviderCapabilities:
             "headless": self.headless,
             "json_output": self.json_output,
             "workspace_write": self.workspace_write,
-            "prompt_via_stdin": self.prompt_via_stdin,
+            "positional_prompt": self.positional_prompt,
+            "provider_visible": self.provider_visible,
+            "model_visible": self.model_visible,
             "version_string": self.version_string,
         }
 
     @property
     def sufficient(self) -> bool:
-        """True if the provider has enough capabilities for coding tasks."""
-        return self.headless and self.prompt_via_stdin
+        return (
+            self.headless
+            and self.json_output
+            and self.workspace_write
+            and self.positional_prompt
+            and self.provider_visible
+        )
 
 
 @dataclass
 class ProviderProbeReport:
-    """Structured report from a provider probe attempt."""
     provider_name: str
     executable_found: bool = False
     executable_path: Optional[str] = None
+    auth_found: bool = False
     help_ok: bool = False
     version_ok: bool = False
+    auth_list_ok: bool = False
+    models_ok: bool = False
     help_returncode: int = -1
     version_returncode: int = -1
+    auth_list_returncode: int = -1
+    models_returncode: int = -1
     capabilities: Optional[ProviderCapabilities] = None
     unavailable_reason: str = ""
     duration_seconds: float = 0.0
 
     @property
     def available(self) -> bool:
-        return (self.executable_found
-                and self.help_ok
-                and self.capabilities is not None
-                and self.capabilities.sufficient)
+        return (
+            self.executable_found
+            and self.auth_found
+            and self.help_ok
+            and self.version_ok
+            and self.auth_list_ok
+            and self.capabilities is not None
+            and self.capabilities.sufficient
+        )
 
     def to_dict(self) -> dict:
-        d = {
+        payload = {
             "provider_name": self.provider_name,
             "executable_found": self.executable_found,
             "executable_path": self.executable_path,
+            "auth_found": self.auth_found,
             "help_ok": self.help_ok,
             "version_ok": self.version_ok,
+            "auth_list_ok": self.auth_list_ok,
+            "models_ok": self.models_ok,
             "help_returncode": self.help_returncode,
             "version_returncode": self.version_returncode,
+            "auth_list_returncode": self.auth_list_returncode,
+            "models_returncode": self.models_returncode,
             "unavailable_reason": self.unavailable_reason,
             "duration_seconds": self.duration_seconds,
             "available": self.available,
         }
         if self.capabilities is not None:
-            d["capabilities"] = self.capabilities.to_dict()
-        return d
+            payload["capabilities"] = self.capabilities.to_dict()
+        return payload
 
 
-def _parse_capabilities(help_text: str, version_text: str) -> ProviderCapabilities:
-    """Parse capabilities from probe output text.
+def _validate_opencode_execution_policy(config: Mapping[str, object]) -> None:
+    """Validate OpenCode execution policy is deny-by-default for dangerous commands.
 
-    Conservative: only marks capabilities as True when explicitly found
-    in the output. Never guesses.
+    Fail-closed validator that rejects the config unless all required security conditions hold.
+    Raises PermissionError if validation fails.
+
+    This function is called in OpenCodeProvider.invoke() before engine.run_argv().
     """
-    combined = f"{help_text}\n{version_text}"
-    headless = False
-    json_output = False
-    workspace_write = False
-    prompt_stdin = False
+    if not isinstance(config, dict):
+        raise PermissionError("OpenCode config must be a dictionary")
 
-    for pat in _HEADLESS_FLAGS:
-        if pat.search(combined):
-            headless = True
-            break
-    if re.compile(r"--json\b").search(combined):
-        json_output = True
-    for pat in _WORKSPACE_WRITE_PATTERNS:
-        if pat.search(combined):
-            workspace_write = True
-            break
-    for pat in _PROMPT_INPUT_PATTERNS:
-        if pat.search(combined):
-            prompt_stdin = True
-            break
+    # Check permission section exists
+    if "permission" not in config:
+        raise PermissionError("OpenCode config missing required 'permission' section")
 
-    version_string = version_text.strip().splitlines()[0] if version_text.strip() else ""
+    permission = config["permission"]
+    if not isinstance(permission, dict):
+        raise PermissionError("OpenCode 'permission' section must be a dictionary")
 
-    return ProviderCapabilities(
-        headless=headless,
-        json_output=json_output,
-        workspace_write=workspace_write,
-        prompt_via_stdin=prompt_stdin,
-        raw_help_text=help_text,
-        raw_version_text=version_text,
-        version_string=version_string,
-    )
+    # Check wildcard deny
+    if permission.get("*") != "deny":
+        raise PermissionError("OpenCode permission['*'] must be 'deny'")
+
+    # Check external_directory deny
+    if permission.get("external_directory") != "deny":
+        raise PermissionError("OpenCode permission['external_directory'] must be 'deny'")
+
+    # Check web access deny
+    if permission.get("webfetch") != "deny":
+        raise PermissionError("OpenCode permission['webfetch'] must be 'deny'")
+
+    if permission.get("websearch") != "deny":
+        raise PermissionError("OpenCode permission['websearch'] must be 'deny'")
+
+    # Check bash section exists
+    if "bash" not in permission:
+        raise PermissionError("OpenCode config missing required 'bash' section")
+
+    bash = permission["bash"]
+    if not isinstance(bash, dict):
+        raise PermissionError("OpenCode 'bash' section must be a dictionary")
+
+    # Check bash wildcard deny
+    if bash.get("*") != "deny":
+        raise PermissionError("OpenCode bash['*'] must be 'deny'")
+
+    # Required find/sed deny patterns
+    required_denies = [
+        "find *",
+        "gfind *",
+        "/bin/find *",
+        "/usr/bin/find *",
+        "/usr/local/bin/find *",
+        "command find *",
+        "command gfind *",
+        "env * find *",
+        "env * gfind *",
+        "sed *",
+        "gsed *",
+        "/bin/sed *",
+        "/usr/bin/sed *",
+        "/usr/local/bin/sed *",
+        "command sed *",
+        "command gsed *",
+        "env * sed *",
+        "env * gsed *",
+    ]
+
+    for pattern in required_denies:
+        if bash.get(pattern) != "deny":
+            raise PermissionError(f"OpenCode bash['{pattern}'] must be 'deny'")
+
+    # Check secret file deny rules exist in read section
+    read = permission.get("read", {})
+    if not isinstance(read, dict):
+        raise PermissionError("OpenCode 'read' section must be a dictionary")
+
+    secret_patterns = ["*.env", "*.env.*", "*.pem", "*.key"]
+    for pattern in secret_patterns:
+        if read.get(pattern) != "deny":
+            raise PermissionError(f"OpenCode read['{pattern}'] must be 'deny'")
+
+
+def _safe_opencode_config(model: str) -> dict:
+    """Return a deny-by-default coding policy for a bounded worktree.
+
+    Repository commit/push operations remain controller responsibilities.  The
+    builder may edit workspace files and run read-only inspection/tests only.
+    """
+    return {
+        "$schema": "https://opencode.ai/config.json",
+        "model": model,
+        "enabled_providers": [DEFAULT_PROVIDER],
+        "share": "disabled",
+        "autoupdate": False,
+        "snapshot": False,
+        "mcp": {},
+        "permission": {
+            "*": "deny",
+            "read": {
+                "*": "allow",
+                "*.env": "deny",
+                "*.env.*": "deny",
+                "*.pem": "deny",
+                "*.key": "deny",
+            },
+            "glob": "allow",
+            "grep": "allow",
+            "lsp": "allow",
+            "edit": "deny",
+            "task": "deny",
+            "question": "deny",
+            "webfetch": "deny",
+            "websearch": "deny",
+            "external_directory": "deny",
+            "bash": {
+                "*": "deny",
+                "pwd": "allow",
+                "ls*": "allow",
+                "find *": "deny",
+                "gfind *": "deny",
+                "/bin/find *": "deny",
+                "/usr/bin/find *": "deny",
+                "/usr/local/bin/find *": "deny",
+                "command find *": "deny",
+                "command gfind *": "deny",
+                "env * find *": "deny",
+                "env * gfind *": "deny",
+                "grep *": "deny",
+                "sed *": "deny",
+                "gsed *": "deny",
+                "/bin/sed *": "deny",
+                "/usr/bin/sed *": "deny",
+                "/usr/local/bin/sed *": "deny",
+                "command sed *": "deny",
+                "command gsed *": "deny",
+                "env * sed *": "deny",
+                "env * gsed *": "deny",
+                "cat *": "deny",
+                "head *": "deny",
+                "tail *": "deny",
+                "wc *": "deny",
+                "git status*": "allow",
+                "git diff*": "deny",
+                "git ls-files*": "allow",
+                "git rev-parse*": "allow",
+                "git show*": "deny",
+                "python -m pytest*": "deny",
+                "python3 -m pytest*": "deny",
+                "pytest*": "deny",
+                "python -m compileall*": "allow",
+                "python3 -m compileall*": "allow",
+                "python -m pip *": "deny",
+                "python3 -m pip *": "deny",
+                "pip *": "deny",
+                "pip3 *": "deny",
+                "npm *": "deny",
+                "pnpm *": "deny",
+                "yarn *": "deny",
+                "bun *": "deny",
+                "brew *": "deny",
+                "curl *": "deny",
+                "wget *": "deny",
+                "rm *": "deny",
+                "sudo *": "deny",
+                "git add*": "deny",
+                "git commit*": "deny",
+                "git push*": "deny",
+                "git merge*": "deny",
+                "git rebase*": "deny",
+                "git reset*": "deny",
+                "git clean*": "deny",
+                "git checkout*": "deny",
+                "git switch*": "deny",
+            },
+        },
+    }
 
 
 class OpenCodeProvider(ProviderAdapter):
-    """Verified local adapter for OpenCode (opencode-zai).
-
-    Probes OpenCode's --help and --version to discover capabilities before
-    enabling. If the provider cannot be verified locally, it remains disabled
-    with a structured reason.
-
-    This provider never:
-    - Calls a paid API
-    - Copies or persists Z.AI Coding Plan keys
-    - Installs OpenCode
-    - Guesses commands not proven by probe output
-    """
-
     name = "opencode-zai"
     supported_roles = ("coder",)
-    network_required = False  # Uses local CLI only
+    network_required = True
 
-    def __init__(self, engine: SubprocessCLIEngine,
-                 base_args: Optional[List[str]] = None):
+    def __init__(
+        self,
+        engine: SubprocessCLIEngine,
+        *,
+        model: str = DEFAULT_MODEL,
+        base_args: Optional[List[str]] = None,
+    ):
         self.engine = engine
+        self.model = model
         self.base_args = list(base_args or [])
         self.last_result = None
         self._probe_report: Optional[ProviderProbeReport] = None
@@ -202,99 +312,116 @@ class OpenCodeProvider(ProviderAdapter):
     def default(
         cls,
         environment_allowlist: Optional[List[str]] = None,
-        timeout_seconds: int = 600,
+        timeout_seconds: int = 900,
         executable: str = "opencode",
         base_args: Optional[List[str]] = None,
+        model: str = DEFAULT_MODEL,
+        auth_path: str = DEFAULT_AUTH_PATH,
     ) -> "OpenCodeProvider":
-        """Create a provider with default configuration.
-
-        Auth detection uses OpenCode's existing auth.json (same location
-        as the upstream opencode project: ~/.opencode/auth.json).
-        """
-        opencode_home = Path(
-            os.environ.get("OPENCODE_HOME", "~/.opencode")
-        ).expanduser()
         config = CLIEngineConfig(
             name=cls.name,
             executable=executable,
             base_args=list(base_args or []),
             timeout_seconds=timeout_seconds,
-            environment_allowlist=list(environment_allowlist or []),
-            required_auth_paths=[
-                str(opencode_home / "auth.json"),
-            ],
+            environment_allowlist=list(environment_allowlist or ["HOME", "PATH", "TMPDIR", "LANG", "LC_ALL"]),
+            required_auth_paths=[str(Path(auth_path).expanduser())],
         )
-        return cls(SubprocessCLIEngine(config), base_args=base_args)
+        return cls(SubprocessCLIEngine(config), model=model)
 
     def probe(self) -> ProviderProbeReport:
-        """Probe the provider executable for capabilities.
+        import time
 
-        Runs --help and --version via bounded subprocess calls. Returns a
-        structured report. Tokens are stripped from the probe environment.
-        """
-        import time as _time
-
-        started = _time.monotonic()
+        started = time.monotonic()
         report = ProviderProbeReport(provider_name=self.name)
-
-        # Check executable.
-        exe_path = self.engine.resolve_executable()
-        if not exe_path:
-            report.unavailable_reason = (
-                f"executable not found: {self.engine.config.executable}"
-            )
-            report.duration_seconds = _time.monotonic() - started
+        executable = self.engine.resolve_executable()
+        if not executable:
+            report.unavailable_reason = f"executable not found: {self.engine.config.executable}"
+            report.duration_seconds = time.monotonic() - started
             self._probe_report = report
             return report
 
         report.executable_found = True
-        report.executable_path = exe_path
+        report.executable_path = executable
+        report.auth_found = self.engine.has_required_auth()
 
-        # Probe --help.
-        help_result = self.engine.probe(["--help"], timeout_seconds=10)
+        help_result = self.engine.probe(["run", "--help"], timeout_seconds=15)
+        version_result = self.engine.probe(["--version"], timeout_seconds=15)
+        auth_result = self.engine.probe(["auth", "list"], timeout_seconds=20)
+        models_result = self.engine.probe(["models", DEFAULT_PROVIDER], timeout_seconds=30)
+
         report.help_returncode = help_result.returncode
-        report.help_ok = help_result.ok
-
-        # Probe --version.
-        version_result = self.engine.probe(["--version"], timeout_seconds=10)
         report.version_returncode = version_result.returncode
+        report.auth_list_returncode = auth_result.returncode
+        report.models_returncode = models_result.returncode
+        report.help_ok = help_result.ok
         report.version_ok = version_result.ok
+        report.auth_list_ok = auth_result.ok
+        report.models_ok = models_result.ok
 
-        # Parse capabilities only if --help succeeded.
-        if help_result.ok:
-            caps = _parse_capabilities(
-                help_result.stdout, version_result.stdout
-            )
-            report.capabilities = caps
+        help_text = f"{help_result.stdout}\n{help_result.stderr}"
+        auth_text = f"{auth_result.stdout}\n{auth_result.stderr}"
+        models_text = f"{models_result.stdout}\n{models_result.stderr}"
+        missing_flags = [flag for flag in _REQUIRED_RUN_FLAGS if flag not in help_text]
+        provider_visible = DEFAULT_PROVIDER in f"{auth_text}\n{models_text}"
+        model_visible = self.model in models_text
+        caps = ProviderCapabilities(
+            headless=help_result.ok and not missing_flags,
+            json_output="--format" in help_text,
+            workspace_write="--agent" in help_text and "--auto" in help_text,
+            positional_prompt="run [message" in help_text.lower() or "message" in help_text.lower(),
+            provider_visible=provider_visible,
+            model_visible=model_visible,
+            raw_help_text=help_text,
+            raw_version_text=version_result.stdout,
+            version_string=(version_result.stdout or version_result.stderr).strip().splitlines()[0] if (version_result.stdout or version_result.stderr).strip() else "",
+        )
+        report.capabilities = caps
 
-            if not caps.sufficient:
-                report.unavailable_reason = (
-                    "probe succeeded but provider lacks sufficient "
-                    "capabilities: need headless + prompt_via_stdin"
-                )
-        else:
-            report.unavailable_reason = (
-                f"--help probe failed (exit {help_result.returncode})"
-            )
-
-        report.duration_seconds = _time.monotonic() - started
+        reasons = []
+        if not report.auth_found:
+            reasons.append("OpenCode auth store unavailable")
+        if not help_result.ok:
+            reasons.append(f"opencode run --help failed ({help_result.returncode})")
+        if missing_flags:
+            reasons.append(f"required run flags missing: {missing_flags}")
+        if not auth_result.ok:
+            reasons.append(f"opencode auth list failed ({auth_result.returncode})")
+        if not provider_visible:
+            reasons.append(f"provider not visible: {DEFAULT_PROVIDER}")
+        if not model_visible:
+            # Model listing can be unavailable while the authenticated provider
+            # still accepts an exact model identifier, so record but do not make
+            # this the sole hard gate.
+            reasons.append(f"model not listed: {self.model}")
+        hard_reasons = [r for r in reasons if not r.startswith("model not listed")]
+        report.unavailable_reason = "; ".join(hard_reasons)
+        report.duration_seconds = time.monotonic() - started
         self._probe_report = report
         return report
 
     def is_enabled(self) -> bool:
-        """Provider is enabled only when probe confirms sufficient capabilities.
-
-        Performs the probe on first call, then caches the result.
-        """
         if self._probe_report is None:
             self.probe()
-        return self._probe_report.available
+        return bool(self._probe_report and self._probe_report.available)
 
     def invoke(self, request: ProviderRequest) -> ProviderResponse:
-        """Execute a coding request via the OpenCode CLI.
+        from ..bubble.write_tier_policy import assert_write_tier_enabled
+        # Pure preflight: reject a malformed execution policy as a structured
+        # provider response before the write-tier kill switch. This creates no
+        # files, performs no provider probe, and starts no subprocess.
+        config = _safe_opencode_config(getattr(self, "model", ""))
+        try:
+            _validate_opencode_execution_policy(config)
+        except PermissionError as exc:
+            return ProviderResponse(
+                role=request.role,
+                task_id=request.task_id,
+                ok=False,
+                error=f"OpenCode execution policy rejected: {exc}",
+                provider_name=self.name,
+            )
 
-        Requires workspace.write capability grant and verified capabilities.
-        """
+        assert_write_tier_enabled("OpenCodeProvider.invoke")
         require_capability(request, "workspace.write")
         if request.role not in self.supported_roles:
             return ProviderResponse(
@@ -312,22 +439,56 @@ class OpenCodeProvider(ProviderAdapter):
                 error="worktree_path is required",
                 provider_name=self.name,
             )
-
-        # Require verified probe before invocation.
         if self._probe_report is None:
             self.probe()
-        if not self._probe_report.available:
+        if not self._probe_report or not self._probe_report.available:
             return ProviderResponse(
                 role=request.role,
                 task_id=request.task_id,
                 ok=False,
-                error=self._probe_report.unavailable_reason,
+                error=(self._probe_report.unavailable_reason if self._probe_report else "provider probe unavailable"),
                 provider_name=self.name,
             )
 
-        result = self.engine.run(
-            Path(request.worktree_path), request.prompt,
-            extra_args=self.base_args,
+        # Revalidate the same local config at the real execution boundary.
+        # This guards future edits between preflight and engine dispatch.
+        try:
+            _validate_opencode_execution_policy(config)
+        except PermissionError as exc:
+            return ProviderResponse(
+                role=request.role,
+                task_id=request.task_id,
+                ok=False,
+                error=f"OpenCode execution policy rejected: {exc}",
+                provider_name=self.name,
+            )
+        env = {
+            "OPENCODE_CONFIG_CONTENT": json.dumps(config, sort_keys=True, separators=(",", ":")),
+            "OPENCODE_DISABLE_AUTOUPDATE": "1",
+            "OPENCODE_DISABLE_DEFAULT_PLUGINS": "1",
+            "OPENCODE_DISABLE_CLAUDE_CODE": "1",
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_OPTIONAL_LOCKS": "0",
+        }
+        prompt = (
+            "Execute this bounded JOÃO coding task exactly. Do not expand scope, "
+            "install dependencies, commit, push, access external paths, use web "
+            "tools, or expose secrets. Finish the task and report concise evidence.\n\n"
+            + request.prompt
+        )
+        result = self.engine.run_argv(
+            Path(request.worktree_path),
+            [
+                "run",
+                "--format", "json",
+                "--agent", "build",
+                "--auto",
+                "--model", self.model,
+                "--dir", str(Path(request.worktree_path).expanduser().resolve()),
+                *self.base_args,
+                prompt,
+            ],
+            env_overrides=env,
         )
         self.last_result = result
         return ProviderResponse(
@@ -340,7 +501,6 @@ class OpenCodeProvider(ProviderAdapter):
         )
 
     def describe(self) -> dict:
-        """Structured description of this provider's status."""
         if self._probe_report is None:
             self.probe()
-        return self._probe_report.to_dict()
+        return self._probe_report.to_dict() if self._probe_report else {"available": False}

@@ -1,0 +1,102 @@
+spec: runtime_integrity
+version: "4.0.0"
+risk_boundary: runtime_integrity
+roadmap_milestone_primary: M1-A
+source: "RAPPORT_OPTIMISATION_V4_GPT.md §8 (verbatim) — run card ~/Claude-HQ/JOAO_RUN_CARD_A0_INTEGRITE.md"
+description: >
+  Le socle exact-hash : baseline propre, capture complète des changements, candidat
+  immuable, reviewer lié au hash, évidence calculée par le contrôleur (jamais par le
+  builder), sandbox subprocess, scopes d'écriture, diff vide = FAILED.
+requirements:
+  - id: RI-1
+    statement: >
+      Baseline propre obligatoire : refus de démarrer un run sur un worktree sale ;
+      la seule exception est une baseline temporaire explicitement gelée et déclarée.
+    severity: 3
+    verification_gate: "A0 deliverable 1 (pas d'attack test numéroté dédié — condition de démarrage)"
+    roadmap_milestone: M1-A
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: RI-2
+    statement: >
+      Capture complète des changements : tracked + staged + untracked + supprimés +
+      renommés + permissions + symlinks. `git diff` seul est interdit comme preuve.
+    severity: 3
+    verification_gate: "A0 ATTACK_TESTS 1 (untracked hors preuve) + 2 (staged modifié)"
+    roadmap_milestone: M1-A
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: RI-3
+    statement: >
+      Candidat immuable : après build, le tree/commit candidat est gelé, hash calculé
+      par le contrôleur, copie lecture-seule pour tests/review/présentation. Toute
+      correction produit un NOUVEAU candidat ; les preuves précédentes sont invalidées.
+    severity: 3
+    verification_gate: "A0 ATTACK_TEST 3 (candidat modifié après tests → preuves invalidées)"
+    roadmap_milestone: M1-A
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: RI-4
+    statement: >
+      Reviewer lié au candidat : verdict JSON strict {candidate_tree, verdict:
+      ACCEPT|P1|BLOCK, findings, reviewer{provider,model}}. Un hash absent, différent,
+      ou un texte libre est rejeté par le contrôleur.
+    severity: 3
+    verification_gate: "A0 ATTACK_TESTS 4 (reviewer répond pour un autre SHA) + 5 (builder fabrique son SHA256SUMS)"
+    roadmap_milestone: M1-A
+    owner: reviewer
+    status: PLANNED
+    source_defects: [D-020, D-024]
+    derivation: verbatim
+  - id: RI-5
+    statement: >
+      Évidence calculée par le contrôleur : le pack (baseline, candidat, diff complet,
+      tests, review, mémoire injectée, prompts versionnés, limites) n'est JAMAIS produit
+      par le builder — celui-ci ne produit jamais sa preuve finale.
+    severity: 3
+    verification_gate: "A0 EVIDENCE_REQUIRED (cycle complet build→candidat→tests→review→approbation→promotion→rollback, même hash de bout en bout)"
+    roadmap_milestone: M1-A
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-001, D-015]
+    derivation: verbatim
+  - id: RI-6
+    statement: >
+      Sandbox subprocess : HOME temporaire, environnement minimal, zéro secret hérité,
+      réseau bloqué par défaut, timeouts, limites, logs, PIDs suivis et nettoyés. Toute
+      capability réseau est une déclaration explicite dans la mission signée.
+    severity: 3
+    verification_gate: "A0 ATTACK_TESTS 6 (lecture secret planté bloquée) + 7 (réseau sans capability bloqué) + 8 (subprocess zombie détecté et tué)"
+    roadmap_milestone: M1-A
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-018, D-019]
+    derivation: verbatim
+  - id: RI-7
+    statement: >
+      Les scopes d'écriture sont résolus depuis la mission SIGNÉE — toute écriture hors
+      scope est bloquée par le contrôleur, jamais laissée passer par un profil statique périmé.
+    severity: 3
+    verification_gate: "non-régression D-003 (test A5b existant, scope dérivé de la mission)"
+    roadmap_milestone: M1-A
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-003]
+    derivation: verbatim
+  - id: RI-8
+    statement: >
+      Un diff vide est FAILED pour une mission de modification — acceptable seulement
+      si `read_only` est explicitement déclaré dans la mission.
+    severity: 3
+    verification_gate: "non-régression D-001 (test A1/A2 V1.4 existant — diff vide/0 fichier = FAILED)"
+    roadmap_milestone: M1-A
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-001]
+    derivation: verbatim

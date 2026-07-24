@@ -15,6 +15,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -217,9 +218,11 @@ def validate_review_json(
             return (f"finding[{i}] path outside allowed/changed files: "
                     f"{fpath!r}"), None
 
-    # Validate patch hash.
+    # Validate patch hash: mandatory field for fail-closed behavior.
     reviewed_hash = review.get("reviewed_patch_sha256", "")
-    if reviewed_hash and reviewed_hash != patch_sha256:
+    if not reviewed_hash:
+        return "missing required field: reviewed_patch_sha256", None
+    if reviewed_hash != patch_sha256:
         return "patch hash mismatch", None
 
     return None, ReviewResult.from_dict(review)
@@ -392,6 +395,7 @@ class ConvergenceConfig:
     fix_executable: Optional[str] = None
     review_timeout: int = 60
     fix_timeout: int = 120
+    glm_adapter: str = "~/.local/bin/joao-glm"
     now_fn: Any = None  # Injectable for tests.
 
     def now(self) -> str:
@@ -576,9 +580,6 @@ def run_convergence(
             error=f"review JSON invalid: {val_err}",
             final_state="FAILED",
             reviewer_calls=1)
-
-    # Now overwrite the hash with the canonical value for downstream use.
-    review_result.reviewed_patch_sha256 = patch_sha256
 
     # ---- Stage 7: Handle verdict ----
     if parsed.verdict == ReviewVerdict.PASS.value:
@@ -810,9 +811,6 @@ def run_convergence(
             reviewer_calls=2,
             fixer_calls=1)
 
-    # Overwrite hash after validation.
-    final_review_result.reviewed_patch_sha256 = new_patch_sha
-
     store.write_artifact_json(task.project_id, task.task_id,
                               "final_review_result.json",
                               final_review_result.to_dict())
@@ -934,7 +932,11 @@ def _invoke_reviewer(
     context: dict, worktree_path: Path,
     profile: ProjectProfile,
 ) -> ReviewResult:
-    """Invoke a reviewer. Uses fake executable for tests, real for production."""
+    """Invoke a reviewer. Uses fake executable for tests, real for production.
+    
+    Fail-closed behavior: an unavailable or unimplemented real reviewer returns
+    BLOCKED/ERROR, never PASS. Fake behavior remains available only when explicitly
+    configured for tests."""
     provider = routing.get("selected_provider", "")
     exe = config.review_executable
     if exe:
@@ -963,10 +965,11 @@ def _invoke_reviewer(
             finished_at=config.now(),
         )
     # Real provider (codex-subscription, opencode-zai) not implemented here.
+    # Fail-closed: unavailable real reviewer returns BLOCKED/ERROR, never PASS.
     return ReviewResult(
-        verdict="PASS",
-        reason_code="no_reviewer_available",
-        summary=f"No reviewer implementation for {provider}",
+        verdict="BLOCKED",
+        reason_code="no_reviewer_implementation",
+        summary=f"No reviewer implementation for {provider} — reviewer unavailable or unimplemented",
         started_at=config.now(),
         finished_at=config.now(),
     )
@@ -977,7 +980,12 @@ def _invoke_fixer(
     fix_request: dict, worktree_path: Path,
     profile: ProjectProfile,
 ) -> Tuple[str, int, str]:
-    """Invoke a fixer. Returns (stdout, returncode, stderr)."""
+    """Invoke a fixer. Returns (stdout, returncode, stderr).
+    
+    Fail-closed behavior: an unavailable or unimplemented real fixer returns
+    non-zero failure, never a synthetic success."""
+    from ..bubble.write_tier_policy import assert_write_tier_enabled
+    assert_write_tier_enabled("convergence._invoke_fixer")
     exe = config.fix_executable
     if exe:
         return _run_fake_fixer(
@@ -987,7 +995,45 @@ def _invoke_fixer(
     provider = routing.get("selected_provider", "")
     if provider == "fake":
         return ("", 0, "")
-    return ("", 0, "")
+    if provider == "opencode-zai":
+        adapter = Path(config.glm_adapter).expanduser().resolve()
+        if not adapter.is_file() or not os.access(adapter, os.X_OK):
+            return (f"Fixer unavailable or unimplemented: GLM adapter unavailable: {adapter}", 1, "")
+        try:
+            with tempfile.TemporaryDirectory(prefix="joao-fix-") as temp_raw:
+                temp = Path(temp_raw)
+                task_file = temp / "fix-task.json"
+                output_file = temp / "glm-output.jsonl"
+                task_file.write_text(
+                    json.dumps(fix_request, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="utf-8",
+                )
+                argv = [
+                    str(adapter),
+                    "--workspace", str(Path(worktree_path).resolve()),
+                    "--task-file", str(task_file),
+                    "--output", str(output_file),
+                    "--mode", "workspace-write",
+                    "--budget", "normal",
+                ]
+                for rule in profile.allowed_write_paths:
+                    argv.extend(["--allowed-path", str(rule)])
+                proc = subprocess.run(
+                    argv, capture_output=True, text=True, shell=False,
+                    timeout=config.fix_timeout, cwd=str(Path(worktree_path).resolve()),
+                    env=strip_provider_tokens(dict(os.environ)),
+                )
+                stdout = output_file.read_text(encoding="utf-8") if output_file.is_file() else proc.stdout
+                if proc.returncode and not stdout.strip():
+                    stdout = f"Fixer unavailable or unimplemented: {proc.stderr.strip()}"
+                return (stdout, proc.returncode, proc.stderr)
+        except subprocess.TimeoutExpired:
+            return ("", 124, "GLM adapter timed out")
+        except Exception as exc:
+            detail = f"GLM adapter failed closed: {exc}"
+            return (f"Fixer unavailable or unimplemented: {detail}", 1, detail)
+    # No supported real fixer for any other provider.
+    return (f"Fixer unavailable or unimplemented for {provider}", 1, "")
 
 
 def _capture_changed_files(worktree_path: Path) -> List[str]:

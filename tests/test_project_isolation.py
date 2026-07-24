@@ -8,9 +8,18 @@ import sys
 from pathlib import Path
 
 def test_no_product_repository_files():
-    """Verify no product repository files are present in JOÃO"""
+    """Verify no product repository CODE is present in JOÃO (RULE 29 — no embedded product code).
+
+    M0.1 patch (deliverable 4): the M0 exception for `specs/` is RETIRED. The contre-review
+    ruled it a restored-but-quiet isolation breach: `specs/cv_bot.yaml` named a product
+    (`cv_bot`) inside JOÃO's own tree, exactly what this test exists to catch. The CV bot
+    business/security spec now lives in its own product repo
+    (`~/job-opportunity-radar/governance/PROJECT_SPEC_V4.yaml`) and is referenced from JOÃO
+    only as a typed, hash-verified external reference in `SPEC_BUNDLE_MANIFEST_V4.json`
+    (see `governance/spec_loader.py::_verify_external_reference`) — never copied in.
+    """
     project_root = Path(__file__).parent.parent
-    
+
     # Check for product-specific files
     product_patterns = [
         "weekly_trading_radar",
@@ -20,13 +29,13 @@ def test_no_product_repository_files():
         ".trading-radar",
         ".cv-bot"
     ]
-    
+
     for pattern in product_patterns:
         matching_files = list(project_root.rglob(f"*{pattern}*"))
         if matching_files:
             raise AssertionError(f"Found product-specific files matching '{pattern}': {matching_files}")
-    
-    print("✓ No product repository files in JOÃO")
+
+    print("✓ No product repository files in JOÃO (specs/ exception retired, M0.1 D4)")
 
 def test_git_ignores_product_repos():
     """Verify .gitignore excludes product repositories"""

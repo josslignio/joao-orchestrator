@@ -369,7 +369,7 @@ Generated: {_utcnow()}
 ## Scope
 Review the JOSS V2 delivery-engine upgrade (additive `v2/` package). Verify:
 - scope adherence (additive only; no V1 logic duplicated)
-- product alignment (Trading Radar frozen; Job Radar no side effects)
+- project-profile alignment and declared side-effect constraints
 - hidden regressions
 - test quality
 - security (no secrets in state/telemetry/logs)

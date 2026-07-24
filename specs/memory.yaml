@@ -1,0 +1,92 @@
+spec: memory
+version: "4.0.0"
+risk_boundary: memory_governance
+roadmap_milestone_primary: M2
+source: "RAPPORT_OPTIMISATION_V4_GPT.md §10 (verbatim) — run card ~/Claude-HQ/JOAO_RUN_CARD_A2_MEMOIRE_PHASE0.md"
+description: >
+  Cycle de vie mémoire gouverné, règles structurées (jamais de prose libre en zone
+  d'instruction), journal hash-chaîné append-only, mémoire projet non destructive,
+  loader canonique unique, budget ferme, graduation vers le code.
+requirements:
+  - id: MEM-1
+    statement: >
+      Cycle : observed → candidate → quarantined → approved → active → codified →
+      superseded. Seules les leçons `active` sont injectables. L'import du ledger (B-37)
+      atterrit TOUJOURS en `quarantined`, jamais directement `active`.
+    severity: 3
+    verification_gate: "A2 ATTACK_TEST 1 (leçon empoisonnée dans le ledger → reste quarantined, jamais injectée)"
+    roadmap_milestone: M2
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-029]
+    derivation: verbatim
+  - id: MEM-2
+    statement: >
+      Aucune règle libre : une leçon injectable est un objet structuré {id, type, scope,
+      condition, requirement, severity, status, source_defects} ; le récit historique
+      reste consultable mais n'est jamais une instruction.
+    severity: 3
+    verification_gate: "A2 deliverable 2 (bloc injecté [APPROVED_STRUCTURED_RULES], distinct de [UNTRUSTED_EXTERNAL_DATA])"
+    roadmap_milestone: M2
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: MEM-3
+    statement: >
+      Journal hash-chaîné réellement append-only : event {event_id, ts, previous_hash,
+      payload_hash, event_hash}, écrit sous verrou + flush + fsync ; IDs sous verrou ou
+      UUID, jamais réécrits. Les Markdown deviennent des VUES reconstruites, pas des autorités.
+    severity: 3
+    verification_gate: "A2 ATTACK_TEST 5 (deux écritures concurrentes au journal → zéro collision, verrou)"
+    roadmap_milestone: M2
+    owner: contrôleur
+    status: PLANNED
+    source_defects: [D-029]
+    derivation: verbatim
+  - id: MEM-4
+    statement: >
+      Mémoire projet séparée : PROJECT_SPEC / PROJECT_DECISIONS / PROJECT_LESSONS /
+      PROJECT_RUNS / PROJECT_MEMORY_VIEW. La rétro n'écrase JAMAIS décisions ni autorités.
+    severity: 3
+    verification_gate: "A2 ATTACK_TEST 8 (rétro qui tente d'écraser PROJECT_DECISIONS → refusée)"
+    roadmap_milestone: M2
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: "verbatim (le rapport §4.5 note « mémoire écrasée » comme faiblesse observée par l'audit, sans D-ID correspondant dans le ledger — voir NON VÉRIFIÉ)"
+  - id: MEM-5
+    statement: >
+      Loader canonique unique : fusionne règles + récidives + supersessions + statuts +
+      alias de tags ; sélecteur, injection ET rapports passent TOUS par lui — le bonus
+      de récidive affecte réellement le scoring.
+    severity: 2
+    verification_gate: "A2 ATTACK_TEST 9 (récidive plantée → compteur fusionné ET visible dans le scoring du sélecteur)"
+    roadmap_milestone: M2
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: "verbatim (§4.5 note « récidives non fusionnées dans le scoring » comme faiblesse observée, sans D-ID)"
+  - id: MEM-6
+    statement: >
+      Budget ferme : limite dure (tokenizer réel si disponible), une règle trop longue
+      est rejetée à l'ingestion, marge réservée pour les délimiteurs de bloc.
+    severity: 2
+    verification_gate: "A2 ATTACK_TEST 7 (règle de 2000 tokens → rejetée à l'ingestion)"
+    roadmap_milestone: M2
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
+  - id: MEM-7
+    statement: >
+      Graduation vers le code : une règle couverte par une gate technique devient
+      `codified` — elle sort du prompt d'injection et reste seulement en traçabilité /
+      pre-mortem / non-régression.
+    severity: 1
+    verification_gate: "aucun attack test A2 dédié — deliverable process, vérifié conjointement avec M5 (cliquet déterministe)"
+    roadmap_milestone: M2
+    owner: contrôleur
+    status: PLANNED
+    source_defects: []
+    derivation: verbatim
