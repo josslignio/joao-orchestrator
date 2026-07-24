@@ -17,34 +17,97 @@ authoritative model record is found, the response is rejected.
 from __future__ import annotations
 
 import hashlib
+import os
+import subprocess
 import tempfile
+import re
 from pathlib import Path
 from typing import Optional
 
-from ..bubble.chat import ChatBrain, available_brains
+from ..bubble.chat import CHAT_CLAUDE_MODEL, GLM_MODEL, ChatBrain, available_brains
 from .base import ProviderAdapter, ProviderRequest, ProviderResponse
 from .codex_review import classify_provider_failure
 
 
-def _execution_fingerprint(root: Path) -> str:
-    """Return a deterministic mutation fingerprint for an execution root."""
-    root = Path(root)
-    digest = hashlib.sha256()
-    if (root / ".git").exists():
-        import subprocess
-        result = subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain=v1", "--untracked-files=all"],
-            capture_output=True, text=True, check=False,
-        )
-        return "git:" + result.stdout
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
+def _hash_path(digest: "hashlib._Hash", root: Path, path: Path) -> None:
+    """Hash one path without following symlinks outside the execution root."""
+    try:
         rel = path.relative_to(root).as_posix()
-        digest.update(rel.encode("utf-8"))
-        digest.update(b"\0")
+        stat = path.lstat()
+    except (FileNotFoundError, ValueError):
+        return
+    digest.update(rel.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(str(stat.st_mode).encode("ascii"))
+    digest.update(b"\0")
+    if path.is_symlink():
+        digest.update(os.readlink(path).encode("utf-8", errors="surrogateescape"))
+    elif path.is_file():
         digest.update(hashlib.sha256(path.read_bytes()).digest())
+    digest.update(b"\n")
+
+
+def _execution_fingerprint(root: Path) -> str:
+    """Return a deterministic mutation fingerprint for an execution root.
+
+    Git status alone does not cover .git/config, hooks, refs or HEAD.  For a
+    Git worktree we therefore bind both porcelain state and security-sensitive
+    Git control files.  Non-Git roots are hashed recursively.
+    """
+    root = Path(root).expanduser().resolve()
+    digest = hashlib.sha256()
+    git_marker = root / ".git"
+    if git_marker.exists():
+        result = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain=v1",
+             "--untracked-files=all"],
+            capture_output=True, text=True, check=False, timeout=30,
+        )
+        digest.update(b"git-status\0")
+        digest.update(result.stdout.encode("utf-8", errors="replace"))
+        digest.update(b"\0")
+        git_dir_raw = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--git-dir"],
+            capture_output=True, text=True, check=False, timeout=30,
+        )
+        if git_dir_raw.returncode != 0:
+            digest.update(b"git-dir-error")
+            return "git:" + digest.hexdigest()
+        git_dir = Path(git_dir_raw.stdout.strip())
+        if not git_dir.is_absolute():
+            git_dir = (root / git_dir).resolve()
+        control_paths = [
+            git_dir / "HEAD",
+            git_dir / "config",
+            git_dir / "packed-refs",
+            git_dir / "index",
+        ]
+        for directory in (git_dir / "refs", git_dir / "hooks"):
+            if directory.exists():
+                control_paths.extend(sorted(directory.rglob("*")))
+        for path in sorted(set(control_paths), key=lambda item: str(item)):
+            if path.is_file() or path.is_symlink():
+                _hash_path(digest, git_dir.parent if git_dir.parent else git_dir, path)
+        return "git:" + digest.hexdigest()
+
+    for path in sorted(root.rglob("*")):
+        if path.is_file() or path.is_symlink():
+            _hash_path(digest, root, path)
     return "tree:" + digest.hexdigest()
+
+
+def _reported_model_matches(backend: str, reported: str, brain: ChatBrain) -> bool:
+    """Bind backend identity to the configured model, not a loose substring."""
+    value = str(reported or "").strip().lower()
+    if not value:
+        return False
+    if backend == "glm":
+        expected = str(getattr(brain, "glm_model", GLM_MODEL) or "").strip().lower()
+        expected_leaf = expected.rsplit("/", 1)[-1]
+        return value in {expected, expected_leaf}
+    expected = str(getattr(brain, "claude_model", CHAT_CLAUDE_MODEL) or "").strip().lower()
+    tokens = tuple(token for token in re.split(r"[^a-z0-9]+", expected) if token)
+    return value.startswith("claude") and all(token in value for token in tokens)
 
 
 class ChatCLIProvider(ProviderAdapter):
@@ -142,17 +205,15 @@ class ChatCLIProvider(ProviderAdapter):
         # P1-2: Validate that the backend-reported model belongs to the expected
         # family.  A mismatch indicates a silent fallback or misrouted response,
         # which would break identity separation in independent-review modes.
-        expected_prefixes = self._FAMILY_MODELS.get(self.backend, ())
-        model_lower = model_seen.lower()
-        if expected_prefixes and not any(
-            prefix in model_lower for prefix in expected_prefixes
-        ):
+        if not _reported_model_matches(self.backend, model_seen, self.brain):
             return ProviderResponse(
                 role=request.role,
                 task_id=request.task_id,
                 ok=False,
-                error=f"identity confusion: backend={self.backend} but model={model_seen!r} "
-                      f"does not match expected family prefixes {expected_prefixes}",
+                error=(
+                    f"identity confusion: backend={self.backend} but authoritative "
+                    f"model={model_seen!r} does not match the configured backend model"
+                ),
                 provider_name=self.name,
             )
         # Preserve exact provider output without stripping, so that byte-exact

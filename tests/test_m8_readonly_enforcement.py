@@ -50,6 +50,9 @@ class MutatingBrain:
 class RecordingBrain:
     """A brain that records the argv/env passed to the subprocess."""
 
+    claude_model = "sonnet"
+    glm_model = "zai-coding-plan/glm-4.5-air"
+
     def __init__(self, events, backend="claude"):
         self.events = list(events)
         self.backend = backend
@@ -75,6 +78,9 @@ class NoModelEventBrain:
 
 class GLMIdentityMismatchBrain:
     """A brain that reports a model from the wrong family."""
+
+    glm_model = "zai-coding-plan/glm-4.5-air"
+    claude_model = "sonnet"
 
     def reply_stream(self, prompt, *, model="glm", execution_root=None,
                      read_only=False, **kwargs):
@@ -172,11 +178,9 @@ def test_claude_argv_contains_read_only_mode(monkeypatch, tmp_path):
     assert argv[plan_idx + 1] == "plan"
     assert "--disallowedTools" in argv
     disallow_idx = argv.index("--disallowedTools")
-    disallowed = argv[disallow_idx + 1]
-    assert "Bash" in disallowed
-    assert "Edit" in disallowed
-    assert "Write" in disallowed
-    assert "NotebookEdit" in disallowed
+    assert argv[disallow_idx + 1:disallow_idx + 5] == [
+        "Bash", "Edit", "Write", "NotebookEdit",
+    ]
 
 
 def test_glm_env_contains_deny_by_default(monkeypatch, tmp_path):
@@ -209,11 +213,12 @@ def test_glm_env_contains_deny_by_default(monkeypatch, tmp_path):
     assert len(envs_seen) >= 1
     env = envs_seen[0]
     assert "OPENCODE_PERMISSION" in env
-    perm = env["OPENCODE_PERMISSION"]
-    assert "deny" in perm
-    assert "edit" in perm.lower()
-    assert "write" in perm.lower()
-    assert "bash" in perm.lower()
+    perm = json.loads(env["OPENCODE_PERMISSION"])
+    assert perm["*"] == "deny"
+    assert perm["edit"] == "deny"  # edit covers write and patch
+    assert perm["bash"] == "deny"
+    assert perm["task"] == "deny"
+    assert perm["external_directory"] == "deny"
 
 
 def test_no_worktree_path_uses_isolated_temp_dir(monkeypatch):

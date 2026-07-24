@@ -14,6 +14,9 @@ from joao_orchestrator.supervisor import ProviderBridge, SupervisorCore
 
 
 class FakeBrain:
+    claude_model = "sonnet"
+    glm_model = "zai-coding-plan/glm-4.5-air"
+
     def __init__(self, events):
         self.events = list(events)
         self.calls = []
@@ -75,10 +78,10 @@ def _post(api, path, body):
 
 def test_chat_cli_provider_collects_stream_without_write_tier(monkeypatch):
     brain = FakeBrain([
-        {"event": "model", "model": "glm-real"},
+        {"event": "model", "model": "zai-coding-plan/glm-4.5-air"},
         {"event": "delta", "text": "hello "},
         {"event": "delta", "text": "world"},
-        {"event": "done", "text": "hello world", "model": "glm-real"},
+        {"event": "done", "text": "hello world", "model": "zai-coding-plan/glm-4.5-air"},
     ])
     monkeypatch.setattr(
         "joao_orchestrator.providers.chat_cli.available_brains",
@@ -313,7 +316,7 @@ def test_codex_review_provider_detects_non_git_sandbox_mutation(tmp_path):
 def test_chat_cli_provider_rejects_quota_message(monkeypatch):
     brain = FakeBrain([
         {"event": "delta", "text": "You've hit your weekly limit"},
-        {"event": "done", "text": "You've hit your weekly limit", "model": "claude"},
+        {"event": "done", "text": "You've hit your weekly limit", "model": "claude-sonnet-4"},
     ])
     monkeypatch.setattr(
         "joao_orchestrator.providers.chat_cli.available_brains",

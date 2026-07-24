@@ -411,9 +411,13 @@ class ChatBrain:
                 "--append-system-prompt", CHAT_SYSTEM, "--output-format", "stream-json",
                 "--verbose", "--include-partial-messages"]
         if read_only:
-            # Force plan mode — Claude cannot execute tools, only plan.
-            argv.extend(["--permission-mode", "plan",
-                         "--disallowedTools", "Bash,Edit,Write,NotebookEdit"])
+            # Force plan mode and pass each denied tool as a distinct CLI value.
+            # A comma-joined token can be interpreted as one unknown tool name.
+            argv.extend([
+                "--permission-mode", "plan",
+                "--disallowedTools",
+                "Bash", "Edit", "Write", "NotebookEdit",
+            ])
         # P1-2: Do NOT default to local config.  The model must come from an
         # authoritative message_start event.  If none is received, identity is
         # not proven and the adapter rejects the response.
@@ -480,15 +484,44 @@ class ChatBrain:
     def _stream_glm(self, prompt: str, *, cwd: Optional[str] = None,
                     read_only: bool = False) -> Iterator[dict]:
         argv = [self.opencode_executable, "run", "-m", self.glm_model, "--format", "json", prompt]
-        # Read-only enforcement: deny all tools by default, allow only read-only ones.
-        # OPENCODE_PERMISSION uses a comma-separated allow/deny list.
-        # When read_only, we set a strict deny-by-default policy.
+        # Read-only enforcement. OpenCode expects OPENCODE_PERMISSION to be
+        # an inlined JSON permission object, not a custom delimiter string.
+        # The same object is also supplied through OPENCODE_CONFIG_CONTENT,
+        # which has runtime override precedence over project/user config.
         env_overrides: dict[str, str] = {}
         if read_only:
-            env_overrides["OPENCODE_PERMISSION"] = (
-                "deny:edit,write,patch,bash,task,external_directory,plugins;"
-                "allow:read,glob,grep,list"
-            )
+            permission = {
+                "*": "deny",
+                "read": "allow",
+                "glob": "allow",
+                "grep": "allow",
+                "list": "allow",
+                "edit": "deny",
+                "bash": "deny",
+                "task": "deny",
+                "skill": "deny",
+                "lsp": "deny",
+                "question": "deny",
+                "webfetch": "deny",
+                "websearch": "deny",
+                "external_directory": "deny",
+                "doom_loop": "deny",
+            }
+            permission_json = json.dumps(permission, sort_keys=True, separators=(",", ":"))
+            env_overrides.update({
+                "OPENCODE_PERMISSION": permission_json,
+                "OPENCODE_CONFIG_CONTENT": json.dumps(
+                    {"permission": permission},
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "OPENCODE_DISABLE_DEFAULT_PLUGINS": "true",
+                "OPENCODE_DISABLE_CLAUDE_CODE": "true",
+                "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT": "true",
+                "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "true",
+                "OPENCODE_DISABLE_LSP_DOWNLOAD": "true",
+                "OPENCODE_ENABLE_EXA": "false",
+            })
         # Do NOT yield a model event yet — we must extract the real model from
         # the OpenCode event stream.  If no authoritative model record is found,
         # the adapter rejects the response (identity not proven).
