@@ -84,7 +84,7 @@ def test_claude_stream_surfaces_real_model_then_deltas():
 
 def _glm_lines(_argv):
     return [
-        json.dumps({"type": "step_start", "part": {}}),
+        json.dumps({"type": "step_start", "part": {"model": "zai-coding-plan/glm-4.5-air"}}),
         json.dumps({"type": "text", "part": {"text": "PONG"}}),
         json.dumps({"type": "step_finish", "part": {"cost": 0, "tokens": {"total": 10}}}),
     ]
@@ -93,8 +93,12 @@ def _glm_lines(_argv):
 def test_glm_stream_parses_text_and_cost():
     brain = ChatBrain(_line_source=_glm_lines)
     events = list(brain.reply_stream("ping", model="glm"))
-    assert events[0] == {"event": "model", "model": "zai-coding-plan/glm-4.5-air",
-                         "provider": "zai-coding-plan"}
+    # Model event is now emitted after stream processing (identity extracted
+    # from OpenCode events, not trusted from local config).
+    model_events = [e for e in events if e["event"] == "model"]
+    assert len(model_events) == 1
+    assert model_events[0]["model"] == "zai-coding-plan/glm-4.5-air"
+    assert model_events[0]["provider"] == "zai-coding-plan"
     assert "".join(e["text"] for e in events if e["event"] == "delta") == "PONG"
     assert events[-1]["event"] == "done" and events[-1]["cost"] == 0
 

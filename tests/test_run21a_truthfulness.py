@@ -417,7 +417,7 @@ def test_a8_non_regression_claude_glm_route_attachments_write_tier_disabled(tmp_
 
         def glm_fake(argv):
             return [
-                json.dumps({"type": "step_start", "part": {}}),
+                json.dumps({"type": "step_start", "part": {"model": "zai-coding-plan/glm-4.5-air"}}),
                 json.dumps({"type": "text", "part": {"text": "Réponse GLM"}}),
                 json.dumps({"type": "step_finish", "part": {"cost": 0}}),
             ]

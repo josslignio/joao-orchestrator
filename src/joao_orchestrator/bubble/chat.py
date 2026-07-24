@@ -499,8 +499,9 @@ class ChatBrain:
                 part = obj.get("part", {})
                 obj_type = obj.get("type", "")
                 # Extract the authoritative model from OpenCode events.
-                # The model field in session_start or step_finish is authoritative.
-                if obj_type in {"session_start", "session.start"}:
+                # The model can appear in session_start, step_start, or
+                # step_finish events.  We check all of them.
+                if obj_type in {"session_start", "session.start", "step_start", "step.start"}:
                     event_model = part.get("model") or obj.get("model")
                     if event_model:
                         proven_model = str(event_model)
