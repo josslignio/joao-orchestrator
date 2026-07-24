@@ -18,8 +18,8 @@ class FakeBrain:
         self.events = list(events)
         self.calls = []
 
-    def reply_stream(self, prompt, *, model):
-        self.calls.append((prompt, model))
+    def reply_stream(self, prompt, *, model, execution_root=None, read_only=False, **kwargs):
+        self.calls.append((prompt, model, execution_root, read_only))
         yield from self.events
 
 
@@ -94,7 +94,9 @@ def test_chat_cli_provider_collects_stream_without_write_tier(monkeypatch):
     assert provider.is_enabled() is True
     assert response.ok is True
     assert response.content == "hello world"
-    assert brain.calls == [("review this", "glm")]
+    assert brain.calls[0][0] == "review this"
+    assert brain.calls[0][1] == "glm"
+    assert brain.calls[0][3] is True  # read_only enforcement
 
 
 def test_chat_cli_provider_fails_honestly_on_error(monkeypatch):

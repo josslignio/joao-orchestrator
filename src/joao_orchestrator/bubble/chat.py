@@ -368,8 +368,15 @@ class ChatBrain:
 
     def reply_stream(self, message: str, *, history: Optional[list[dict]] = None,
                      model: str = "claude", attachments: Optional[list[Attachment]] = None,
-                     active_project_id: Optional[str] = None) -> Iterator[dict]:
-        """Yield {event: model|delta|done|error, ...}. The real model is always surfaced."""
+                     active_project_id: Optional[str] = None,
+                     execution_root: Optional[str] = None,
+                     read_only: bool = False) -> Iterator[dict]:
+        """Yield {event: model|delta|done|error, ...}. The real model is always surfaced.
+
+        When ``read_only`` is True and ``execution_root`` is provided, the
+        subprocess is launched with ``cwd=execution_root`` and read-only
+        enforcement flags are injected into the CLI argv.
+        """
         # H defect fix: handle identity/capability questions locally
         if _is_identity_or_capability_question(message):
             response = _get_identity_or_capability_response(message)
@@ -391,23 +398,29 @@ class ChatBrain:
             return
 
         prompt = compose_prompt(message, history, attachments)
+        cwd = execution_root if execution_root else None
         if model == "glm":
-            yield from self._stream_glm(prompt)
+            yield from self._stream_glm(prompt, cwd=cwd, read_only=read_only)
         else:
-            yield from self._stream_claude(prompt)
+            yield from self._stream_claude(prompt, cwd=cwd, read_only=read_only)
 
     # ── Claude: real token streaming, real model read from message_start ──
-    def _stream_claude(self, prompt: str) -> Iterator[dict]:
+    def _stream_claude(self, prompt: str, *, cwd: Optional[str] = None,
+                       read_only: bool = False) -> Iterator[dict]:
         argv = [self.claude_executable, "-p", prompt, "--model", self.claude_model,
                 "--append-system-prompt", CHAT_SYSTEM, "--output-format", "stream-json",
                 "--verbose", "--include-partial-messages"]
+        if read_only:
+            # Force plan mode — Claude cannot execute tools, only plan.
+            argv.extend(["--permission-mode", "plan",
+                         "--disallowedTools", "Bash,Edit,Write,NotebookEdit"])
         model_seen = f"claude-cli:{self.claude_model}"
         announced = False
         full: list[str] = []
         any_delta = False
 
         try:
-            for line in self._lines(argv):
+            for line in self._lines(argv, cwd=cwd):
                 try:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
@@ -457,26 +470,49 @@ class ChatBrain:
                    "provider": "claude-cli", "cost": None}
 
     # ── GLM via opencode: text parts + real cost from step_finish (0 Claude forfait) ──
-    def _stream_glm(self, prompt: str) -> Iterator[dict]:
+    def _stream_glm(self, prompt: str, *, cwd: Optional[str] = None,
+                    read_only: bool = False) -> Iterator[dict]:
         argv = [self.opencode_executable, "run", "-m", self.glm_model, "--format", "json", prompt]
-        yield {"event": "model", "model": self.glm_model, "provider": "zai-coding-plan"}
+        # Read-only enforcement: deny all tools by default, allow only read-only ones.
+        # OPENCODE_PERMISSION uses a comma-separated allow/deny list.
+        # When read_only, we set a strict deny-by-default policy.
+        env_overrides: dict[str, str] = {}
+        if read_only:
+            env_overrides["OPENCODE_PERMISSION"] = (
+                "deny:edit,write,patch,bash,task,external_directory,plugins;"
+                "allow:read,glob,grep,list"
+            )
+        # Do NOT yield a model event yet — we must extract the real model from
+        # the OpenCode event stream.  If no authoritative model record is found,
+        # the adapter rejects the response (identity not proven).
         full: list[str] = []
         cost = None
         any_delta = False
+        proven_model: Optional[str] = None
 
         try:
-            for line in self._lines(argv):
+            for line in self._lines(argv, cwd=cwd, env_overrides=env_overrides):
                 try:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
                 part = obj.get("part", {})
-                if obj.get("type") == "text" and part.get("text"):
+                obj_type = obj.get("type", "")
+                # Extract the authoritative model from OpenCode events.
+                # The model field in session_start or step_finish is authoritative.
+                if obj_type in {"session_start", "session.start"}:
+                    event_model = part.get("model") or obj.get("model")
+                    if event_model:
+                        proven_model = str(event_model)
+                elif obj_type == "step_finish":
+                    event_model = part.get("model")
+                    if event_model:
+                        proven_model = str(event_model)
+                    cost = part.get("cost", cost)
+                if obj_type == "text" and part.get("text"):
                     full.append(part["text"])
                     any_delta = True
                     yield {"event": "delta", "text": part["text"]}
-                elif obj.get("type") == "step_finish":
-                    cost = part.get("cost", cost)
         except OSError as exc:
             yield {"event": "error", "message": f"CLI indisponible: {exc}"}
             return
@@ -492,20 +528,33 @@ class ChatBrain:
             yield {"event": "error", "message": "Le provider GLM n'a retourné aucun texte (stream vide)"}
             return
 
+        # P1-2: If no authoritative model was extracted from the OpenCode event
+        # stream, the identity is NOT proven.  Emit an error instead of trusting
+        # the locally-configured self.glm_model.
+        if not proven_model:
+            yield {"event": "error",
+                   "message": "GLM identity not proven: no authoritative model record in OpenCode stream"}
+            return
+
         # D defect fix: only emit done if we have content (no error, not empty)
         if any_delta or full:
-            yield {"event": "done", "text": "".join(full), "model": self.glm_model,
+            yield {"event": "model", "model": proven_model, "provider": "zai-coding-plan"}
+            yield {"event": "done", "text": "".join(full), "model": proven_model,
                    "provider": "zai-coding-plan", "cost": cost}
 
     # ── bounded line source (real subprocess by default; injectable for tests) ──
-    def _lines(self, argv: list[str]) -> Iterator[str]:
+    def _lines(self, argv: list[str], *, cwd: Optional[str] = None,
+               env_overrides: Optional[dict[str, str]] = None) -> Iterator[str]:
         if self._line_source is not None:
             yield from self._line_source(argv)
             return
+        env = os.environ.copy()
+        if env_overrides:
+            env.update(env_overrides)
         try:
             proc = subprocess.Popen(argv, shell=False, stdout=subprocess.PIPE,
                                     stderr=subprocess.PIPE, text=True, bufsize=1,
-                                    start_new_session=True)
+                                    start_new_session=True, cwd=cwd, env=env)
         except OSError as exc:
             raise OSError(f"CLI indisponible: {exc}")
 
