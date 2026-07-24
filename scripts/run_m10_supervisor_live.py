@@ -51,9 +51,12 @@ def main() -> int:
 
     bridge = build_default_bridge(timeout_seconds=240)
     core = SupervisorCore(bridge, state_root)
+    # M10 requires the independent Codex reviewer for the live marker.
+    # Only codex-review (openai family, independent from the builder families)
+    # is accepted — glm-chat and claude-chat are NOT independent for this gate.
     candidates = [
         desc.name for desc in bridge.candidates(role="reviewer")
-        if desc.name in {"codex-review", "glm-chat", "claude-chat"}
+        if desc.name == "codex-review"
     ]
     if args.preferred:
         candidates.sort(key=lambda name: (name != args.preferred, name))
