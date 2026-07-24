@@ -153,14 +153,11 @@ def main() -> int:
             accepted = 1
         elif verdict == "BLOCK":
             blocked = 1
-        # Hash ALL reasons in the persisted evidence: any provider text (even
-        # validated JSON) could echo secrets.  The full BLOCK reason is written
-        # to a temporary file outside the evidence directory for repair use,
-        # but the evidence JSON only stores verdict + reason hash.
+        # Hash ALL reasons: any provider text (even validated JSON) could echo
+        # secrets.  No raw provider text is persisted anywhere — not in the
+        # evidence JSON, not in state_root, not on disk.  The verdict and a
+        # SHA256 hash of the reason are the only persisted artifacts.
         reason_safe = f"REDACTED:{hashlib.sha256(reason.encode('utf-8')).hexdigest()[:16]}"
-        if verdict == "BLOCK":
-            # Write to state_root (outside evidence dir) for repair visibility.
-            (state_root / "M9_BLOCK_REASON.txt").write_text(reason + "\n")
         records.append({
             "provider": codex.name,
             "family": codex.family,
