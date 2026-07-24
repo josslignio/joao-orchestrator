@@ -12,12 +12,16 @@ from joao_orchestrator.supervisor import SupervisorCore, SupervisorRequest
 
 
 def parse_exact_decision(text: str) -> dict:
-    """Require the whole provider response to be one valid verdict object."""
-    value = json.loads(str(text).strip())
+    """Require the whole provider response to be one valid verdict object.
+
+    No stripping: the provider response must be exactly one JSON object with
+    no surrounding whitespace.  This enforces the exact-response gate.
+    """
+    value = json.loads(str(text))
     if not isinstance(value, dict):
         raise ValueError("review must be one JSON object")
     verdict = str(value.get("verdict", "")).upper()
-    reason = str(value.get("reason", "")).strip()
+    reason = str(value.get("reason", ""))
     if verdict not in {"ACCEPT", "BLOCK"}:
         raise ValueError(f"invalid verdict: {verdict!r}")
     if not reason:
