@@ -473,35 +473,30 @@ def hermetic_injection():
 # ──────────────────────────────────────────────────────────────────────────
 @pytest.fixture
 def allow_test_write_tier(monkeypatch):
-    """Explicit opt-in: allow sandbox builders to write in test sandspaces.
+    """EXPLICIT, per-test SEC-BOOT opt-in for runtime-LOGIC tests only.
 
-    Only tests that explicitly include ``allow_test_write_tier`` in their
-    function signature receive the bypass. All other tests run with
-    the real SEC-BOOT kill-switch.
+    Every production caller reaches the kill-switch through a *lazy* relative
+    import inside its own function body
+    (``from ..bubble.write_tier_policy import assert_write_tier_enabled``), so
+    patching the ``assert_write_tier_enabled`` symbol ON THE write_tier_policy
+    MODULE is sufficient — the lazy import re-reads that attribute at call time.
+
+    The tree is importable under two real package prefixes:
+    ``joao_orchestrator.*`` (PYTHONPATH=src) and ``src.joao_orchestrator.*``
+    (used by the c8/runtime tests). A caller loaded under a given prefix resolves
+    ``..bubble.write_tier_policy`` against THAT prefix's distinct module object,
+    so the exact symbol is patched on both EXPLICITLY NAMED modules when
+    importable. NO sys.modules scan, NO file-path matching, NO generic attribute
+    sweep — only the two named write_tier_policy modules are touched.
     """
-    from joao_orchestrator.bubble import write_tier_policy as _canonical_wtp
-    target_file = Path(_canonical_wtp.__file__).resolve()
     _NOOP = lambda *a, **k: None  # noqa: E731
 
-    # Force-import every known package prefix that can alias this source file.
-    import importlib  # noqa: PLC0415
-    for alias_dotted in (
-        "joao_orchestrator.bubble.write_tier_policy",
-        "src.joao_orchestrator.bubble.write_tier_policy",
-    ):
-        try:
-            importlib.import_module(alias_dotted)
-        except ImportError:
-            continue
+    from joao_orchestrator.bubble import write_tier_policy as _wtp
+    monkeypatch.setattr(_wtp, "assert_write_tier_enabled", _NOOP)
 
-    # Patch every module object wrapping write_tier_policy.py by file path.
-    for mod in list(sys.modules.values()):
-        mod_file = getattr(mod, "__file__", None)
-        if mod_file is None:
-            continue
-        try:
-            if Path(mod_file).resolve() != target_file:
-                continue
-        except (OSError, ValueError):
-            continue
-        monkeypatch.setattr(mod, "assert_write_tier_enabled", _NOOP)
+    try:
+        from src.joao_orchestrator.bubble import write_tier_policy as _wtp_src
+    except ImportError:
+        _wtp_src = None
+    if _wtp_src is not None and _wtp_src is not _wtp:
+        monkeypatch.setattr(_wtp_src, "assert_write_tier_enabled", _NOOP)
