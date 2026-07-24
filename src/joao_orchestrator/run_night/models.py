@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from hashlib import sha256
 from typing import Any
+from pathlib import Path
 
 from ..evaluation.models import sha256_json, validate_safe_id
 
@@ -174,9 +175,15 @@ class RunNightSpec:
             raise ValueError("at least one task is required")
         if len(self.tasks) > self.limits.max_tasks:
             raise ValueError("task count exceeds max_tasks")
+        repo_root = Path(self.repo_root).expanduser().resolve()
         seen: set[str] = set()
         for task in self.tasks:
             task.validate()
+            execution_root = Path(task.execution_root).expanduser().resolve()
+            if execution_root != repo_root and repo_root not in execution_root.parents:
+                raise ValueError(
+                    "task execution_root must be the repository root or a descendant"
+                )
             if task.task_id in seen:
                 raise ValueError(f"duplicate task_id: {task.task_id}")
             seen.add(task.task_id)

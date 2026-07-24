@@ -178,7 +178,7 @@ def _artifact(task_id: str, kind: str, sha: str, summary: str = "safe summary") 
 
 
 def _spec(tmp_path: Path, repo: Path, sha: str, paths):
-    root = tmp_path / "execution"
+    root = repo / "execution"
     root.mkdir()
     task = NightTask(
         "task-1",
@@ -440,3 +440,64 @@ def test_key_file_permissions(tmp_path):
         load_hmac_key(key)
     key.chmod(0o600)
     assert load_hmac_key(key) == b"k" * 32
+
+
+def test_spec_rejects_execution_root_outside_repo(tmp_path):
+    repo, _, sha, _ = _repo(tmp_path)
+    tranche = "a" * 40
+    policy = repo / "src/joao_orchestrator/bubble/write_tier_policy.py"
+    paths = _evidence(tmp_path, tranche, subprocess.check_output(
+        ["git", "rev-parse", "HEAD^{tree}"], cwd=repo, text=True
+    ).strip(), sha, sha256_file(policy))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    task = NightTask(
+        "task-outside", "joao", "Inspect files.", str(outside),
+        "architecture_packet",
+    )
+    spec = RunNightSpec(
+        "rn-outside", sha, "read_only", str(tmp_path / "state"), str(repo),
+        *(str(path) for path in paths), tasks=(task,),
+    )
+    with pytest.raises(ValueError, match="execution_root"):
+        spec.validate()
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "ghp_" + "A" * 40,
+        "github_pat_" + "A" * 30,
+        "sk-" + "A" * 32,
+        "sk-ant-" + "A" * 32,
+        "xoxb-" + "1234567890-" * 2 + "abcdefghijklmnopqrstuvwx",
+    ],
+)
+def test_artifact_rejects_provider_tokens(secret):
+    raw = _artifact("task-1", "architecture_packet", "a" * 40, summary=secret)
+    with pytest.raises(ArtifactError, match="secret-like"):
+        parse_artifact_exact(
+            raw, expected_task_id="task-1", expected_kind="architecture_packet",
+            expected_sha="a" * 40,
+        )
+
+
+def test_spec_rejects_symlink_execution_root_escaping_repo(tmp_path):
+    repo, _, sha, tree = _repo(tmp_path)
+    policy = repo / "src/joao_orchestrator/bubble/write_tier_policy.py"
+    tranche = "a" * 40
+    paths = _evidence(tmp_path, tranche, tree, sha, sha256_file(policy))
+    outside = tmp_path / "private-files"
+    outside.mkdir()
+    link = repo / "linked-outside"
+    link.symlink_to(outside, target_is_directory=True)
+    task = NightTask(
+        "task-symlink", "joao", "Inspect files.", str(link),
+        "architecture_packet",
+    )
+    spec = RunNightSpec(
+        "rn-symlink", sha, "read_only", str(tmp_path / "state"), str(repo),
+        *(str(path) for path in paths), tasks=(task,),
+    )
+    with pytest.raises(ValueError, match="execution_root"):
+        spec.validate()

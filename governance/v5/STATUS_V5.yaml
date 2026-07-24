@@ -1,0 +1,26 @@
+schema_version: 1
+status: CANDIDATE
+runtime_authority: false
+generated_at: '2026-07-24'
+authoritative_bundle: V4
+current_reviewed_state:
+  tranche3:
+    status: CLOSED
+    sha: 1bfa76bb53d3b158f53b54c5b1a18fcf47091fb2
+  runnight_master:
+    status: REQUEST_CHANGES_GLOBAL_HARDENING
+    candidate_sha: 01866310a50658626a7352c6f8e5bd9ba87fa601
+    tree: 1478ad5e070d12f38c98a0e15fa943acb2f5c080
+    write_tier: OFF
+    candidate_build: false
+next_sequence:
+  - global_audit_hardening
+  - codex_exact_sha_review
+  - gpt_counter_audit
+  - merge_and_private_push
+  - provider_mesh_control_room
+  - provider_certification
+  - benchmark_lab
+  - whole_codebase_multi_ai_audit
+  - candidate_build_activation
+  - tranche4_run_nights

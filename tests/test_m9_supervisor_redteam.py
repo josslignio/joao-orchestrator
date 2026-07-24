@@ -187,7 +187,7 @@ def test_provider_content_is_bounded_before_judging_or_return(tmp_path):
 
 def test_secret_like_error_is_redacted_in_persisted_evidence(tmp_path):
     bridge = ProviderBridge()
-    secret = "sk-abcdefghijklmnopqrstuvwxyz1234567890"
+    secret = "sk-" + "abcdefghijklmnopqrstuvwxyz1234567890"
     add(
         bridge,
         ControlledProvider("bad", ("planner",), {"ok": False, "error": f"token={secret}"}),

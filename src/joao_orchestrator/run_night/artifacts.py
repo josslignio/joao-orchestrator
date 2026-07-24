@@ -12,6 +12,7 @@ from hashlib import sha256
 from typing import Any
 
 from ..evaluation.models import sha256_json, validate_safe_id
+from ..observability.secrets_engine import SecretsEngine
 from .models import ArtifactKind
 
 ALLOWED_KEYS = {
@@ -24,6 +25,7 @@ SECRET_PATTERNS = (
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
 )
+_SECRET_ENGINE = SecretsEngine()
 
 
 class ArtifactError(ValueError):
@@ -48,6 +50,8 @@ def _reject_secrets(value: str) -> None:
     for pattern in SECRET_PATTERNS:
         if pattern.search(value):
             raise ArtifactError("artifact contains secret-like material")
+    if _SECRET_ENGINE.scan(value):
+        raise ArtifactError("artifact contains secret-like material")
 
 
 @dataclass(frozen=True)
