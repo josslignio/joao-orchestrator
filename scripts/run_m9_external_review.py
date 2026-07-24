@@ -153,12 +153,18 @@ def main() -> int:
             accepted = 1
         elif verdict == "BLOCK":
             blocked = 1
+        # Redact all raw reasons: provider error messages and review text may
+        # contain secrets if a provider echoes them.  Only the verdict (ACCEPT
+        # or BLOCK) and a SHA256 hash of the reason are persisted.  The full
+        # reason is available only in the non-persisted result object for
+        # immediate debugging.
+        reason_safe = f"REDACTED:{hashlib.sha256(reason.encode('utf-8')).hexdigest()[:16]}"
         records.append({
             "provider": codex.name,
             "family": codex.family,
             "status": result.status,
             "verdict": verdict,
-            "reason": reason,
+            "reason": reason_safe,
             "response_sha256": hashlib.sha256(result.final_content.encode()).hexdigest(),
         })
         if blocked:

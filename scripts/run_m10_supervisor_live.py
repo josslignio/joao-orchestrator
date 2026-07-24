@@ -75,16 +75,19 @@ def main() -> int:
             max_provider_calls=1,
             worktree_path=str(provider_root),
         ))
-        # Redact raw provider content from evidence: never persist prompts or
-        # raw responses.  Only record the SHA256, the marker-match boolean, and
-        # the status/verdict — never the content itself.
+        # Redact raw provider content from evidence: never persist prompts,
+        # raw responses, or reasons that may contain provider error details
+        # or secrets.  Only record SHA256 hashes and safe metadata.
+        reason_safe = result.reason if result.reason in {
+            "direct provider completed", "auto route completed",
+        } else f"REDACTED:{hashlib.sha256(result.reason.encode('utf-8')).hexdigest()[:16]}"
         record = {
             "task_id": result.task_id,
             "mode": result.mode,
             "status": result.status,
             "selected_provider": result.selected_provider,
             "verdict": result.verdict,
-            "reason": result.reason,
+            "reason": reason_safe,
             "prompt_sha256": result.prompt_sha256,
             "final_content_sha256": hashlib.sha256(
                 result.final_content.encode("utf-8")
