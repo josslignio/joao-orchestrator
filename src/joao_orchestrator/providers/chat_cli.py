@@ -47,7 +47,7 @@ class ChatCLIProvider(ProviderAdapter):
             )
         chunks: list[str] = []
         errors: list[str] = []
-        model_seen = self.backend
+        model_seen = None  # fail-closed: must receive an explicit model event
         for event in self.brain.reply_stream(request.prompt, model=self.backend):
             kind = event.get("event")
             if kind == "delta":
@@ -56,6 +56,26 @@ class ChatCLIProvider(ProviderAdapter):
                 errors.append(str(event.get("message", "provider error")))
             elif kind in {"model", "done"} and event.get("model"):
                 model_seen = str(event["model"])
+        # Fail-closed: if no model event was received, we cannot verify identity.
+        # But surface provider errors first (they explain why no model arrived).
+        if model_seen is None:
+            if errors:
+                return ProviderResponse(
+                    role=request.role,
+                    task_id=request.task_id,
+                    ok=False,
+                    content="".join(chunks),
+                    error="; ".join(errors),
+                    provider_name=self.name,
+                )
+            return ProviderResponse(
+                role=request.role,
+                task_id=request.task_id,
+                ok=False,
+                content="".join(chunks),
+                error=f"identity verification failed: no model event received from backend={self.backend}",
+                provider_name=self.name,
+            )
         # Validate that the backend-reported model belongs to the expected
         # family.  A mismatch indicates a silent fallback or misrouted response,
         # which would break identity separation in independent-review modes.
