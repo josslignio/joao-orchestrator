@@ -12,12 +12,17 @@ from joao_orchestrator.supervisor import SupervisorCore, SupervisorRequest
 
 
 def parse_exact_decision(text: str) -> dict:
-    """Require the whole provider response to be one valid verdict object.
+    """Require the whole provider response to be exactly one valid verdict object.
 
-    No stripping: the provider response must be exactly one JSON object with
-    no surrounding whitespace.  This enforces the exact-response gate.
+    No whitespace tolerance: the response must start with '{' and end with '}'.
+    json.loads() silently ignores leading/trailing whitespace, so we enforce
+    byte-exact boundaries before parsing.  This enforces the strict
+    exact-response gate.
     """
-    value = json.loads(str(text))
+    raw = str(text)
+    if not raw or raw[0] != "{" or raw[-1] != "}":
+        raise ValueError("review must be exactly one JSON object (no surrounding text or whitespace)")
+    value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError("review must be one JSON object")
     verdict = str(value.get("verdict", "")).upper()

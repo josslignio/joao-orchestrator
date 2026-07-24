@@ -24,8 +24,12 @@ def test_m9_requires_one_exact_json_object():
         "verdict": "ACCEPT",
         "reason": "clean",
     }
-    with pytest.raises(json.JSONDecodeError):
+    # Surrounding text or whitespace must be rejected — not just as a JSON
+    # parse error but as a strict gate violation.
+    with pytest.raises(ValueError):
         module.parse_exact_decision('Result: {"verdict":"ACCEPT","reason":"clean"}')
+    with pytest.raises(ValueError):
+        module.parse_exact_decision('  {"verdict":"ACCEPT","reason":"clean"}  ')
     with pytest.raises(ValueError, match="invalid verdict"):
         module.parse_exact_decision('{"verdict":"INVALID","reason":"no"}')
 
