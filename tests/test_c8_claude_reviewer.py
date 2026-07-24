@@ -146,7 +146,7 @@ def test_review_stage_malformed_answer_blocks(tmp_path):
     assert result["ok"] is False and result["schema_valid"] is False
 
 
-def test_dynamic_invocation_proof_claude_reviewer_review_stage_is_invoked(tmp_path, monkeypatch):
+def test_dynamic_invocation_proof_claude_reviewer_review_stage_is_invoked(tmp_path, monkeypatch, allow_test_write_tier):
     """G-AUTH-IO dynamic proof: ClaudeCLIReviewer.review_stage is genuinely
     called by the orchestrator (as the critical-tier second reviewer), not
     merely referenced by test code."""

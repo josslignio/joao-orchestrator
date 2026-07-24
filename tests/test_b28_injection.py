@@ -67,13 +67,13 @@ def _drive(tmp_path):
     return rt, run_id, state, seen_builder_mission
 
 
-def test_block_reaches_builder_prompt(tmp_path):
+def test_block_reaches_builder_prompt(tmp_path, allow_test_write_tier):
     _, _, _, seen = _drive(tmp_path)
     assert HEADER in seen["mission"], "builder prompt must carry the RÈGLES ACTIVES block"
     assert "master" in seen["mission"].lower()  # the real mission is still there, after the block
 
 
-def test_block_reaches_reviewer_prompt_with_failure_checklist(tmp_path):
+def test_block_reaches_reviewer_prompt_with_failure_checklist(tmp_path, allow_test_write_tier):
     _drive(tmp_path)
     # the reviewer is invoked at plan, build and final stages — all must carry the block
     assert {"plan", "build", "final"} <= set(CAPTURED)
@@ -89,7 +89,7 @@ def test_planner_records_injected_ids(tmp_path):
     assert all(i.startswith("L-") for i in plan["injected_lesson_ids"])
 
 
-def test_injection_is_logged_as_evidence_for_every_role(tmp_path):
+def test_injection_is_logged_as_evidence_for_every_role(tmp_path, allow_test_write_tier):
     rt, run_id, _, _ = _drive(tmp_path)
     events = [e for e in rt.events(run_id) if e["kind"] == "memory_injected"]
     roles = {e["role"] for e in events}
@@ -101,19 +101,19 @@ def test_injection_is_logged_as_evidence_for_every_role(tmp_path):
     assert (folder / "active-rules-reviewer-final.md").is_file()
 
 
-def test_run_reaches_needs_approval_with_injection_active(tmp_path):
+def test_run_reaches_needs_approval_with_injection_active(tmp_path, allow_test_write_tier):
     # injection must not break the happy path — the mission still completes.
     _, _, state, _ = _drive(tmp_path)
     assert state["status"] == "needs_approval"
 
 
-def test_cv_mission_surfaces_authority_lessons_in_builder(tmp_path):
+def test_cv_mission_surfaces_authority_lessons_in_builder(tmp_path, allow_test_write_tier):
     # a docx/visual mission must inject the authority-chain lessons the ledger graved.
     _, _, _, seen = _drive(tmp_path)
     assert "D-042" in seen["mission"] or "D-034" in seen["mission"]
 
 
-def test_retro_hook_fires_and_records_metric_state_local(tmp_path):
+def test_retro_hook_fires_and_records_metric_state_local(tmp_path, allow_test_write_tier):
     # Phase 4 wiring: finishing a mission writes a retro template and records the metric,
     # into the runtime's own state_root — never the committed brain.
     rt, run_id, _, _ = _drive(tmp_path)

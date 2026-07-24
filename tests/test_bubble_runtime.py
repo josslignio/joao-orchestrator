@@ -38,7 +38,7 @@ def runtime(tmp_path, builder, reviewer=None):
     return RunRuntime(tmp_path / "state", builder=SandboxBuilder(builder), reviewer=reviewer, profiles=LocalProfileAdapter())
 
 
-def test_nominal_run_evidence_and_approval(tmp_path):
+def test_nominal_run_evidence_and_approval(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
     def build(_, workspace, __):
         (workspace / "module.py").write_text("VALUE = 2\n")
@@ -53,7 +53,7 @@ def test_nominal_run_evidence_and_approval(tmp_path):
     assert len(value.events(run)) >= 7
 
 
-def test_out_of_scope_or_failed_test_blocks(tmp_path):
+def test_out_of_scope_or_failed_test_blocks(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
     def build(_, workspace, __):
         (workspace / "secret.txt").write_text("no")
@@ -65,7 +65,7 @@ def test_out_of_scope_or_failed_test_blocks(tmp_path):
     assert evidence["violations"]
 
 
-def test_scope_comes_from_the_run_signed_at_start_not_a_stale_live_profile(tmp_path):
+def test_scope_comes_from_the_run_signed_at_start_not_a_stale_live_profile(tmp_path, allow_test_write_tier):
     # RI-7 non-regression: the run's own persisted profile snapshot (captured
     # at start()) stays authoritative — a later edit of the on-disk profile
     # file must never retroactively widen or narrow what an in-flight run
@@ -123,7 +123,7 @@ def test_pause_resume_and_local_api(tmp_path):
     api.close()
 
 
-def test_console_accepts_a_prompt_and_starts_a_run(tmp_path):
+def test_console_accepts_a_prompt_and_starts_a_run(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
     def build(_, workspace, __):
         (workspace / "module.py").write_text("VALUE = 2\n")
@@ -148,7 +148,7 @@ def test_console_accepts_a_prompt_and_starts_a_run(tmp_path):
     api.close()
 
 
-def test_console_mission_launch_passes_network_capability_through(tmp_path):
+def test_console_mission_launch_passes_network_capability_through(tmp_path, allow_test_write_tier):
     """Found via the real worker-host operational-closure proof
     (2026-07-21): `/missions` never exposed `network_capability` at all — a
     network-requiring builder (e.g. GLMBuilder) silently got `network=False`
@@ -219,7 +219,7 @@ def test_console_refuses_non_local_host_bind(tmp_path):
         LocalAPIServer(runtime(tmp_path, lambda *_: {"ok": True}), host="0.0.0.0")
 
 
-def test_console_refuses_duplicate_dispatch_for_same_worktree(tmp_path):
+def test_console_refuses_duplicate_dispatch_for_same_worktree(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
     started = __import__("threading").Event()
     release = __import__("threading").Event()

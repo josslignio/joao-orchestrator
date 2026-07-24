@@ -131,7 +131,7 @@ def test_fake_reviewer_explicitly_allowed_remains_pass(tmp_path):
 # Test: Real fixer missing cannot succeed
 # ---------------------------------------------------------------------------
 
-def test_real_fixer_missing_returns_non_zero_failure(tmp_path):
+def test_real_fixer_missing_returns_non_zero_failure(tmp_path, allow_test_write_tier):
     """An unavailable or unimplemented real fixer must return non-zero failure, never success."""
     routing = {"selected_provider": "opencode-zai"}  # Real provider, no executable
     config = ConvergenceConfig(fix_executable=None)  # No fake executable configured
@@ -147,7 +147,7 @@ def test_real_fixer_missing_returns_non_zero_failure(tmp_path):
     assert "unavailable or unimplemented" in stdout.lower()
 
 
-def test_fake_fixer_explicitly_allowed_succeeds(tmp_path):
+def test_fake_fixer_explicitly_allowed_succeeds(tmp_path, allow_test_write_tier):
     """Fake fixer remains available only when explicitly configured for tests."""
     routing = {"selected_provider": "fake"}
     config = ConvergenceConfig(fix_executable=None)  # No executable, fake engine

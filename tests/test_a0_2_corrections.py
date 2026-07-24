@@ -95,7 +95,7 @@ class _RecordingBackend(ExecutionBackend):
                 "enforcement": "recording-fake", "pid": 1}
 
 
-def test_a02_1_builder_receives_frozen_capabilities_and_2_network_comes_only_from_scope(tmp_path):
+def test_a02_1_builder_receives_frozen_capabilities_and_2_network_comes_only_from_scope(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
     backend = _RecordingBackend()
     glm = GLMBuilder(executable=Path("joao-glm-fake"), backend=backend)
@@ -331,7 +331,7 @@ def test_a02_6_test_memory_isolation_redirects_lessons_write_target(tmp_path, mo
 # #7 — promote() self-verifies acceptance via the immutable approval record;
 # a bare candidate/run_id is no longer sufficient.
 # ---------------------------------------------------------------------------
-def test_a02_7_promote_refuses_without_run_and_approval_record(tmp_path):
+def test_a02_7_promote_refuses_without_run_and_approval_record(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
 
     def build(_, workspace, __):
@@ -366,7 +366,7 @@ def test_a02_7_promote_refuses_without_run_and_approval_record(tmp_path):
     assert manifest["acceptance_self_verified"] is True
 
 
-def test_a02_7_promote_refuses_if_review_evidence_tampered_after_approval(tmp_path):
+def test_a02_7_promote_refuses_if_review_evidence_tampered_after_approval(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
 
     def build(_, workspace, __):

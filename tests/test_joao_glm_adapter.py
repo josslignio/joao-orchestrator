@@ -113,7 +113,7 @@ def test_workspace_write_rejects_unauthorized_path(tmp_path: Path) -> None:
     assert evidence["unauthorized_paths"] == ["result.txt"]
 
 
-def test_convergence_invokes_real_glm_adapter_path(tmp_path: Path) -> None:
+def test_convergence_invokes_real_glm_adapter_path(tmp_path: Path, allow_test_write_tier) -> None:
     from types import SimpleNamespace
     from joao_orchestrator.runtime.convergence import ConvergenceConfig, _invoke_fixer
 

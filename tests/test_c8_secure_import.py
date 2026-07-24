@@ -173,7 +173,7 @@ def test_gpt_formal_evidence_reviewer_valid_import_accepts(tmp_path):
     assert result["ok"] is True
 
 
-def test_dynamic_invocation_proof_gpt_formal_reviewer_review_is_invoked(tmp_path, monkeypatch):
+def test_dynamic_invocation_proof_gpt_formal_reviewer_review_is_invoked(tmp_path, monkeypatch, allow_test_write_tier):
     """G-AUTH-IO dynamic proof: GPTFormalEvidenceReviewer.review is genuinely
     called by the orchestrator when used as the critical-tier second
     reviewer, not merely referenced."""

@@ -93,7 +93,7 @@ def _repo(tmp_path):
     return ws
 
 
-def test_smoke_mission_selects_haiku_tier(tmp_path):
+def test_smoke_mission_selects_haiku_tier(tmp_path, allow_test_write_tier):
     ws = _repo(tmp_path)
     rd = tmp_path / "run"; rd.mkdir()
     (rd / "run.json").write_text(json.dumps({"run_id": "r", "workspace": str(ws), "critical": True,

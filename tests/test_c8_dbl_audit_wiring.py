@@ -99,7 +99,7 @@ class _FakeReviewer:
         return self.review_stage(run, run_dir, "final")
 
 
-def test_dynamic_invocation_proof_gate_dbl_audit_is_actually_called_by_orchestrator(tmp_path, monkeypatch):
+def test_dynamic_invocation_proof_gate_dbl_audit_is_actually_called_by_orchestrator(tmp_path, monkeypatch, allow_test_write_tier):
     """G-AUTH-IO dynamic proof: gate_dbl_audit is not just referenced by
     orchestrator.py — it is genuinely CALLED, with the real builder/reviewer
     identities, during a real run_c8b_mission() invocation."""

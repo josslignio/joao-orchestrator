@@ -63,7 +63,7 @@ def _glm_broken(_ws, _tf, output, _al, angle):
 
 
 # ─────────────────────────── tier routing ───────────────────────────
-def test_deterministic_tier_is_free_and_wins(tmp_path):
+def test_deterministic_tier_is_free_and_wins(tmp_path, allow_test_write_tier):
     ws = _repo(tmp_path)
     rd = _run_dir(tmp_path, ws)
 
@@ -79,7 +79,7 @@ def test_deterministic_tier_is_free_and_wins(tmp_path):
     assert (ws / "module.py").read_text() == "VALUE = 2\n"
 
 
-def test_glm_solo_when_not_critical(tmp_path):
+def test_glm_solo_when_not_critical(tmp_path, allow_test_write_tier):
     ws = _repo(tmp_path)
     rd = _run_dir(tmp_path, ws, critical=False)
     builder = CascadeBuilder(glm_runner=_glm_writing({}, default=2))
@@ -89,7 +89,7 @@ def test_glm_solo_when_not_critical(tmp_path):
     assert (ws / "module.py").read_text() == "VALUE = 2\n"
 
 
-def test_critical_forces_best_of_n_and_picks_the_passing_angle(tmp_path):
+def test_critical_forces_best_of_n_and_picks_the_passing_angle(tmp_path, allow_test_write_tier):
     ws = _repo(tmp_path)
     rd = _run_dir(tmp_path, ws, critical=True)
     # only the 'readability' angle produces a passing solution
@@ -110,7 +110,7 @@ def test_critical_forces_best_of_n_and_picks_the_passing_angle(tmp_path):
         assert "RÈGLES ACTIVES" in Path(cand["task_file"]).read_text()
 
 
-def test_escalates_to_claude_when_all_glm_fail(tmp_path):
+def test_escalates_to_claude_when_all_glm_fail(tmp_path, allow_test_write_tier):
     ws = _repo(tmp_path)
     rd = _run_dir(tmp_path, ws, critical=True)
 
@@ -126,7 +126,7 @@ def test_escalates_to_claude_when_all_glm_fail(tmp_path):
     assert (ws / "module.py").read_text() == "VALUE = 2\n"
 
 
-def test_fail_closed_blocks_and_leaves_worktree_clean(tmp_path):
+def test_fail_closed_blocks_and_leaves_worktree_clean(tmp_path, allow_test_write_tier):
     ws = _repo(tmp_path)
     rd = _run_dir(tmp_path, ws, critical=True)
 
@@ -145,7 +145,7 @@ def test_fail_closed_blocks_and_leaves_worktree_clean(tmp_path):
                           text=True).stdout.strip() == ""
 
 
-def test_cost_ledger_reports_savings_vs_direct_claude(tmp_path):
+def test_cost_ledger_reports_savings_vs_direct_claude(tmp_path, allow_test_write_tier):
     ws = _repo(tmp_path)
     rd = _run_dir(tmp_path, ws, critical=True)
     builder = CascadeBuilder(glm_runner=_glm_writing({"performance": 2}, default=0))
@@ -168,7 +168,7 @@ class _AcceptReviewer:
                          "findings": [], "reviewer": {"provider": self.provider, "model": self.model}}}
 
 
-def test_cascade_builder_drives_a_full_runruntime_run(tmp_path):
+def test_cascade_builder_drives_a_full_runruntime_run(tmp_path, allow_test_write_tier):
     ws = _repo(tmp_path)
     profile = ProjectProfile(project_id="fixture", display_name="fixture",
                              repository_root=str(ws), allowed_write_paths=["module.py"],
@@ -190,7 +190,7 @@ def test_cascade_builder_drives_a_full_runruntime_run(tmp_path):
     assert builder_ev["model"] == "zai-coding-plan/glm-4.5-air"  # real model always shown
 
 
-def test_runner_crash_leaves_worktree_clean_and_blocks(tmp_path):
+def test_runner_crash_leaves_worktree_clean_and_blocks(tmp_path, allow_test_write_tier):
     # P1-A: a runner that raises (e.g. missing executable) must fail-closed, not strand a dirty tree
     ws = _repo(tmp_path)
     rd = _run_dir(tmp_path, ws, critical=False)
@@ -207,7 +207,7 @@ def test_runner_crash_leaves_worktree_clean_and_blocks(tmp_path):
                           text=True).stdout.strip() == ""
 
 
-def test_preexisting_untracked_wip_is_preserved(tmp_path):
+def test_preexisting_untracked_wip_is_preserved(tmp_path, allow_test_write_tier):
     # P2-A: a user's uncommitted untracked file must survive the best-of-N git resets
     ws = _repo(tmp_path)
     (ws / "my_wip_notes.py").write_text("SECRET = 'do not lose me'\n")   # untracked, not committed
@@ -218,7 +218,7 @@ def test_preexisting_untracked_wip_is_preserved(tmp_path):
     assert (ws / "my_wip_notes.py").read_text() == "SECRET = 'do not lose me'\n"  # NOT wiped
 
 
-def test_bad_judge_returning_noncandidate_fails_closed(tmp_path):
+def test_bad_judge_returning_noncandidate_fails_closed(tmp_path, allow_test_write_tier):
     # P3-A: a custom judge returning a fabricated WorkerResult must block, not crash
     ws = _repo(tmp_path)
     rd = _run_dir(tmp_path, ws, critical=True)

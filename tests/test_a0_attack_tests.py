@@ -58,7 +58,7 @@ def _run_folder(tmp_path, run_id):
 # ---------------------------------------------------------------------------
 # Attack test 1 — untracked file added outside the proof → detected.
 # ---------------------------------------------------------------------------
-def test_attack1_untracked_file_outside_proof_is_detected(tmp_path):
+def test_attack1_untracked_file_outside_proof_is_detected(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
 
     def build(_, workspace, __):
@@ -84,7 +84,7 @@ def test_attack1_untracked_file_outside_proof_is_detected(tmp_path):
 # ---------------------------------------------------------------------------
 # Attack test 2 — staged-but-not-yet-committed modification → detected.
 # ---------------------------------------------------------------------------
-def test_attack2_staged_modification_is_detected(tmp_path):
+def test_attack2_staged_modification_is_detected(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
 
     def build(_, workspace, __):
@@ -123,7 +123,7 @@ class _TamperingTestRunner:
         return {"argv": argv, "returncode": 0, "ok": True, "stdout": "", "stderr": ""}
 
 
-def test_attack3_candidate_tampered_after_tests_invalidates_evidence(tmp_path):
+def test_attack3_candidate_tampered_after_tests_invalidates_evidence(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
 
     def build(_, workspace, __):
@@ -152,7 +152,7 @@ class _WrongShaReviewer:
                          "findings": [], "reviewer": {"provider": self.provider, "model": self.model}}}
 
 
-def test_attack4_reviewer_answers_for_another_sha_is_rejected(tmp_path):
+def test_attack4_reviewer_answers_for_another_sha_is_rejected(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
 
     def build(_, workspace, __):
@@ -172,7 +172,7 @@ def test_attack4_reviewer_answers_for_another_sha_is_rejected(tmp_path):
 # ---------------------------------------------------------------------------
 # Attack test 5 — builder fabricates its own SHA256SUMS → rejected.
 # ---------------------------------------------------------------------------
-def test_attack5_builder_fabricated_hash_is_never_trusted(tmp_path):
+def test_attack5_builder_fabricated_hash_is_never_trusted(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
 
     def build(_, workspace, __):

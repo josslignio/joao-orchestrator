@@ -138,14 +138,14 @@ def _host(tmp_path, **kwargs):
                       reviewers=kwargs.pop("reviewers", {"zai-coding-plan": _FakeReviewer}))
 
 
-def test_handle_dispatches_to_the_registered_builder(tmp_path):
+def test_handle_dispatches_to_the_registered_builder(tmp_path, allow_test_write_tier):
     host = _host(tmp_path)
     result = host.handle(_signed(host, _valid_builder_request(request_id="req-1", workspace=str(tmp_path))))
     assert result["ok"] is True
     assert result["request_id"] == "req-1"
 
 
-def test_handle_rejects_duplicate_request_id(tmp_path):
+def test_handle_rejects_duplicate_request_id(tmp_path, allow_test_write_tier):
     host = _host(tmp_path)
     # Same signed envelope replayed verbatim — request_id AND nonce collide.
     req = _signed(host, _valid_builder_request(request_id="dup-1", workspace=str(tmp_path)))
@@ -156,7 +156,7 @@ def test_handle_rejects_duplicate_request_id(tmp_path):
     assert replay["reason_code"] in {"WORKER_HOST_DUPLICATE_REQUEST", "WORKER_HOST_REPLAYED_NONCE"}
 
 
-def test_duplicate_detection_persists_across_host_restart(tmp_path):
+def test_duplicate_detection_persists_across_host_restart(tmp_path, allow_test_write_tier):
     """A LaunchAgent crash-restart must never re-serve a request_id a prior
     process instance already consumed — the ledger is on-disk, not
     in-memory-only."""
@@ -306,7 +306,7 @@ def test_health_check_over_real_socket(running_server):
     assert result["pong"] is True
 
 
-def test_real_socket_round_trip_dispatch(running_server, tmp_path):
+def test_real_socket_round_trip_dispatch(running_server, tmp_path, allow_test_write_tier):
     request = {"request_id": "socket-1", "run_id": "run-1", "mission_id": "mission-1",
               "worker": "zai-coding-plan", "role": "builder", "model": "m",
               "workspace": str(tmp_path), "timeout": 30, "mission": "do it"}
@@ -363,7 +363,7 @@ def test_client_rejects_a_response_bound_to_a_different_run(monkeypatch, tmp_pat
 # ---------------------------------------------------------------------------
 # Proxies — same BuilderAdapter/ReviewerAdapter contract as GLMBuilder/etc.
 # ---------------------------------------------------------------------------
-def test_remote_builder_proxy_sends_correct_worker_and_identity(running_server, tmp_path):
+def test_remote_builder_proxy_sends_correct_worker_and_identity(running_server, tmp_path, allow_test_write_tier):
     from src.joao_orchestrator.bubble.runtime import BuilderAdapter
     proxy = RemoteBuilderProxy(worker="zai-coding-plan", provider="zai-coding-plan", model="m",
                               provider_family="zai", socket_path=running_server.socket_path,
@@ -459,7 +459,7 @@ class _SlowCapturingBuilder:
         return {"ok": True, "network_capability_seen": (self._capabilities or {}).get("network_capability")}
 
 
-def test_concurrent_requests_never_cross_talk_capabilities(tmp_path):
+def test_concurrent_requests_never_cross_talk_capabilities(tmp_path, allow_test_write_tier):
     """WORKER_ADAPTERS_REQUEST_SCOPED / CAPABILITY_CROSS_TALK proof: two
     concurrent requests with OPPOSITE `network_capability` values must each
     see only their own — with a shared instance (pre-fix), the 50ms sleep
@@ -488,7 +488,7 @@ def test_concurrent_requests_never_cross_talk_capabilities(tmp_path):
     assert results["concurrent-false"]["network_capability_seen"] is False, results["concurrent-false"]
 
 
-def test_concurrent_requests_have_distinct_run_dirs_no_worktree_cross_talk(tmp_path):
+def test_concurrent_requests_have_distinct_run_dirs_no_worktree_cross_talk(tmp_path, allow_test_write_tier):
     """WORKTREE_CROSS_TALK proof: two concurrent requests with different
     run_dir/workspace values must each be dispatched with exactly their own
     — never a shared/leaked path."""

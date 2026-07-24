@@ -91,7 +91,7 @@ def test_resolvable_symbols_resolve_against_real_c8b_modules():
     assert audit_test_entrypoints._resolvable("NoSuchSymbol.nope") is False
 
 
-def test_full_dynamic_and_static_audit_passes_for_the_current_repo():
+def test_full_dynamic_and_static_audit_passes_for_the_current_repo(allow_test_write_tier):
     result = audit_test_entrypoints.main([])
     assert result == 0
 

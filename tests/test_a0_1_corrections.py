@@ -73,7 +73,7 @@ def _run_folder(tmp_path, run_id):
 # A0-1 — the reviewer must run on the immutable candidate copy, never the
 # mutable workspace.
 # ---------------------------------------------------------------------------
-def test_a01_reviewer_runs_on_candidate_copy_never_the_mutable_workspace(tmp_path):
+def test_a01_reviewer_runs_on_candidate_copy_never_the_mutable_workspace(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
     marker = tmp_path / "reviewed-paths.txt"
     fake_codex_py = tmp_path / "fake_codex.py"
@@ -238,7 +238,7 @@ def test_a02_forged_reviewer_metadata_is_overwritten(tmp_path):
 # A0-3 — a declared baseline is genuinely frozen (a real git object), and a
 # pre-existing modification is distinguishable from the builder's own work.
 # ---------------------------------------------------------------------------
-def test_a03_baseline_genuinely_frozen_and_distinguishable_from_builder_work(tmp_path):
+def test_a03_baseline_genuinely_frozen_and_distinguishable_from_builder_work(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
     # A pre-existing, uncommitted modification in an allowed path, present
     # BEFORE the run ever starts.
@@ -300,7 +300,7 @@ def test_a03_baseline_genuinely_frozen_and_distinguishable_from_builder_work(tmp
 # refused, and (defense in depth) do not survive promotion even if one
 # somehow reached the workspace by another route.
 # ---------------------------------------------------------------------------
-def test_a04_gitignored_sensitive_file_detected_refused_and_does_not_survive_promotion(tmp_path):
+def test_a04_gitignored_sensitive_file_detected_refused_and_does_not_survive_promotion(tmp_path, allow_test_write_tier):
     work = sandbox(tmp_path)
     (work / ".gitignore").write_text("*.secret\n")
     _git(["add", ".gitignore"], work)
@@ -510,7 +510,7 @@ def test_a05_forged_tampered_signed_scope_is_caught(tmp_path):
 # already succeeded must never produce a false success; the ref is
 # immediately CAS-rolled-back instead.
 # ---------------------------------------------------------------------------
-def test_a06_worktree_sync_failure_after_ref_cas_never_produces_false_success(tmp_path, monkeypatch):
+def test_a06_worktree_sync_failure_after_ref_cas_never_produces_false_success(tmp_path, monkeypatch, allow_test_write_tier):
     work = sandbox(tmp_path)
 
     def build(_, workspace, __):

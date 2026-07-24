@@ -65,7 +65,7 @@ class _AlwaysP1Reviewer:
         return self.review_stage(run, run_dir, "final")
 
 
-def test_more_than_one_correction_is_refused(tmp_path):
+def test_more_than_one_correction_is_refused(tmp_path, allow_test_write_tier):
     """Exactly ONE bounded correction is permitted — a reviewer that keeps
     returning P1 forever must never get a second free rebuild; the mission
     escalates to NEEDS_APPROVAL instead of looping or silently re-correcting."""

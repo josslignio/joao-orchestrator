@@ -455,99 +455,35 @@ def hermetic_injection():
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# SEC-BOOT sandbox bypass for runtime-logic tests (Codex-approved, opt-in).
+# Function-scoped SEC-BOOT test fixture (Codex-approved, explicit opt-in).
 #
-# These test modules exercise runtime LOGIC (state transitions, review flow,
-# evidence recording) and need builder write capability.  SEC-BOOT enforcement
-# remains active for ALL other tests (M3-M10, Run Night, security matrices).
+# Tests that need builder write capability MUST explicitly request this
+# fixture in their function signature:
 #
-# A test module is auto-tagged with the `runtime_logic` marker if its file
-# path matches one of the entries below.  The marker activates the bypass
-# fixture.  No other tests are affected.
+#   def test_something(tmp_path, allow_test_write_tier):
+#       ...
+#
+# This is NOT autouse. Security tests never request it and run with
+# the real SEC-BOOT kill-switch active.
+#
+# Implementation note (dual-package aliasing): the production tree lives at
+# `src/joao_orchestrator/...` and is importable under TWO distinct package
+# prefixes.  We patch every module object wrapping write_tier_policy.py,
+# identified by resolved file path (prefix-agnostic).
 # ──────────────────────────────────────────────────────────────────────────
-_RUNTIME_LOGIC_TEST_FILES = frozenset({
-    "tests/test_a0_1_corrections.py",
-    "tests/test_a0_2_corrections.py",
-    "tests/test_a0_attack_tests.py",
-    "tests/test_b28_injection.py",
-    "tests/test_b28_kickoff.py",
-    "tests/test_b29_cascade_wired.py",
-    "tests/test_bubble_runtime.py",
-    "tests/test_c8_claude_reviewer.py",
-    "tests/test_c8_dbl_audit_wiring.py",
-    "tests/test_c8_entrypoint_audits.py",
-    "tests/test_c8_glm_reviewer.py",
-    "tests/test_c8_negative_matrix.py",
-    "tests/test_c8_orchestration.py",
-    "tests/test_c8_secure_import.py",
-    "tests/test_fail_closed_runtime.py",
-    "tests/test_joao_glm_adapter.py",
-    "tests/test_phase4_foldins.py",
-    "tests/test_worker_host.py",
-    "tests/test_worker_host_hmac.py",
-})
+@pytest.fixture
+def allow_test_write_tier(monkeypatch):
+    """Explicit opt-in: allow sandbox builders to write in test sandspaces.
 
-
-def pytest_configure(config):
-    config.addinivalue_line(
-        "markers",
-        "runtime_logic: test exercises runtime logic and needs SEC-BOOT bypass",
-    )
-
-
-def pytest_collection_modifyitems(config, items):
-    """Auto-tag runtime-logic test modules with the runtime_logic marker."""
-    for item in items:
-        fspath = str(item.fspath)
-        # Normalize to relative path from repo root
-        if fspath.endswith(".py"):
-            for known in _RUNTIME_LOGIC_TEST_FILES:
-                if Path(fspath).as_posix().endswith(known):
-                    item.add_marker(pytest.mark.runtime_logic)
-                    break
-
-
-@pytest.fixture(autouse=True)
-def _runtime_logic_sec_boot_bypass(request, monkeypatch):
-    """Bypass SEC-BOOT ONLY for tests tagged runtime_logic.
-
-    SEC-BOOT canaries (tests/sec_boot/) and all security matrices
-    (M3-M10, Run Night) are NOT affected — they run with the real
-    kill-switch active.
-
-    Implementation note (dual-package aliasing): the production tree lives at
-    `src/joao_orchestrator/...` and is importable under TWO distinct package
-    prefixes simultaneously — `joao_orchestrator.*` (via PYTHONPATH=src) and
-    `src.joao_orchestrator.*` (via tests that do `from src.joao_orchestrator...`).
-    Python treats these as unrelated packages, so a single source file ends up
-    loaded as TWO separate module objects in `sys.modules` (e.g. both
-    `joao_orchestrator.bubble.write_tier_policy` and
-    `src.joao_orchestrator.bubble.write_tier_policy`). Production code only ever
-    reaches `assert_write_tier_enabled` via a *relative* import
-    (`from ..bubble.write_tier_policy import ...`), so whichever prefix a given
-    test's top-level import used determines which of the two module objects the
-    production relative import resolves against. Patching just one prefix
-    therefore leaves the other prefix's kill-switch fully armed, and the test
-    silently fails with `WriteTierDisabled`. The robust fix is to patch EVERY
-    module object that wraps `write_tier_policy.py`, identified by file path —
-    INCLUDING any alias module that has not been imported yet but WILL be
-    imported lazily during the test (e.g. server.py imports write_tier_policy
-    only inside `_dispatch_builder`, so the `src.*` alias may not exist in
-    sys.modules at fixture-setup time). We force-import both known prefixes up
-    front so both module objects are materialized and patched before the test
-    body runs.
+    Only tests that explicitly include ``allow_test_write_tier`` in their
+    function signature receive the bypass. All other tests run with
+    the real SEC-BOOT kill-switch.
     """
-    marker = request.node.get_closest_marker("runtime_logic")
-    if marker is None:
-        return
     from joao_orchestrator.bubble import write_tier_policy as _canonical_wtp
-
     target_file = Path(_canonical_wtp.__file__).resolve()
     _NOOP = lambda *a, **k: None  # noqa: E731
 
-    # Force-import every known package prefix that can alias this source file,
-    # so lazily-loaded alias modules exist in sys.modules NOW (before dispatch)
-    # and get patched. `importlib.import_module` is a no-op if already loaded.
+    # Force-import every known package prefix that can alias this source file.
     import importlib  # noqa: PLC0415
     for alias_dotted in (
         "joao_orchestrator.bubble.write_tier_policy",
@@ -556,11 +492,9 @@ def _runtime_logic_sec_boot_bypass(request, monkeypatch):
         try:
             importlib.import_module(alias_dotted)
         except ImportError:
-            continue  # that prefix isn't on sys.path for this run — fine
+            continue
 
-    # Patch every module object wrapping write_tier_policy.py, identified by
-    # resolved file path (prefix-agnostic). Covers both the canonical and the
-    # alias copies, however they were imported.
+    # Patch every module object wrapping write_tier_policy.py by file path.
     for mod in list(sys.modules.values()):
         mod_file = getattr(mod, "__file__", None)
         if mod_file is None:

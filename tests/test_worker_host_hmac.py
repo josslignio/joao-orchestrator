@@ -262,7 +262,7 @@ def test_client_no_longer_masks_an_early_block_as_a_response_mismatch(tmp_path):
         shutil.rmtree(short_dir, ignore_errors=True)
 
 
-def test_workspace_inside_allowed_roots_passes(tmp_path):
+def test_workspace_inside_allowed_roots_passes(tmp_path, allow_test_write_tier):
     allowed_root = tmp_path / "allowed-project"
     (allowed_root / "sub").mkdir(parents=True)
     host = WorkerHost(tmp_path / "state", builders={"zai-coding-plan": _FakeBuilder},
@@ -285,7 +285,7 @@ def test_run_dir_outside_allowed_roots_blocks(tmp_path):
     assert result["reason_code"] == "WORKER_HOST_RUN_DIR_OUTSIDE_ALLOWED_ROOTS"
 
 
-def test_no_allowed_roots_configured_skips_the_check(tmp_path):
+def test_no_allowed_roots_configured_skips_the_check(tmp_path, allow_test_write_tier):
     """Default (None) — pre-existing unit tests with arbitrary tmp_path
     workspaces must be entirely unaffected."""
     host = WorkerHost(tmp_path / "state", builders={"zai-coding-plan": _FakeBuilder})

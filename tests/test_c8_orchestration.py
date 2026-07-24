@@ -94,7 +94,7 @@ def test_critical_without_second_reviewer_blocks():
     assert result["ok"] is False and result["reason_code"] == "C8B_MISSING_SECOND_REVIEWER"
 
 
-def test_normal_tier_glm_builder_shape_codex_reviewer_happy_path(tmp_path):
+def test_normal_tier_glm_builder_shape_codex_reviewer_happy_path(tmp_path, allow_test_write_tier):
     # Uses SandboxBuilder to stand in for "a GLM-shaped builder" (same
     # provider_family wiring, no live network) — the REAL GLMBuilder is
     # exercised for real in the required synthetic mission script.
@@ -152,7 +152,7 @@ def test_builder_failure_never_reaches_eligibility_pass(tmp_path):
     assert result["status"] == "blocked"
 
 
-def test_critical_tier_second_reviewer_same_family_blocks(tmp_path):
+def test_critical_tier_second_reviewer_same_family_blocks(tmp_path, allow_test_write_tier):
     from src.joao_orchestrator.bubble.runtime import GPTFormalEvidenceReviewer
     work = _sandbox(tmp_path)
     runtime = RunRuntime(tmp_path / "state", builder=SandboxBuilder(_passing_build),
@@ -167,7 +167,7 @@ def test_critical_tier_second_reviewer_same_family_blocks(tmp_path):
     assert second.calls == 1
 
 
-def test_second_reviewer_wrong_tree_blocks(tmp_path):
+def test_second_reviewer_wrong_tree_blocks(tmp_path, allow_test_write_tier):
     work = _sandbox(tmp_path)
     runtime = RunRuntime(tmp_path / "state", builder=SandboxBuilder(_passing_build),
                          reviewer=_FakeReviewer(CodexCLIReviewer))
@@ -192,7 +192,7 @@ def test_second_reviewer_raising_is_caught_and_blocks(tmp_path):
     assert result["ok"] is False  # a raising reviewer never strands the mission or crashes the orchestrator
 
 
-def test_candidate_mutation_during_second_review_blocks(tmp_path):
+def test_candidate_mutation_during_second_review_blocks(tmp_path, allow_test_write_tier):
     """Adversarial proof: tamper the frozen candidate's readonly_copy between
     freeze and the SECOND reviewer's dispatch — the second reviewer's own
     pre-tree recompute (identical discipline to CodexCLIReviewer) must catch

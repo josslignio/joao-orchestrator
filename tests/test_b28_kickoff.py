@@ -115,7 +115,7 @@ def test_launch_refuses_mission_without_signed_spec(tmp_path):
                  targeted_tests=[], full_tests=[[sys.executable, "-c", "pass"]])
 
 
-def test_e2e_kickoff_then_sign_then_mission_accepted(tmp_path):
+def test_e2e_kickoff_then_sign_then_mission_accepted(tmp_path, allow_test_write_tier):
     # GATE 5 (complete): kickoff toy → signed spec → mission accepted end-to-end.
     ws = _sandbox(tmp_path)
     k = Kickoff(tmp_path / "projects")
