@@ -153,14 +153,14 @@ def main() -> int:
             accepted = 1
         elif verdict == "BLOCK":
             blocked = 1
-        # Redact provider transport errors (may contain secrets), but preserve
-        # validated Codex JSON verdicts (ACCEPT/BLOCK reasons are security
-        # findings needed for repair and GPT audit).  Only the INVALID/transport
-        # error reasons are hashed.
-        if verdict in {"ACCEPT", "BLOCK"} and result.status == "completed":
-            reason_safe = reason  # validated Codex JSON security finding
-        else:
-            reason_safe = f"REDACTED:{hashlib.sha256(reason.encode('utf-8')).hexdigest()[:16]}"
+        # Hash ALL reasons in the persisted evidence: any provider text (even
+        # validated JSON) could echo secrets.  The full BLOCK reason is written
+        # to a temporary file outside the evidence directory for repair use,
+        # but the evidence JSON only stores verdict + reason hash.
+        reason_safe = f"REDACTED:{hashlib.sha256(reason.encode('utf-8')).hexdigest()[:16]}"
+        if verdict == "BLOCK":
+            # Write to state_root (outside evidence dir) for repair visibility.
+            (state_root / "M9_BLOCK_REASON.txt").write_text(reason + "\n")
         records.append({
             "provider": codex.name,
             "family": codex.family,
