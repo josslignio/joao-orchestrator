@@ -11,5 +11,5 @@
 SAME HASH TRACED END TO END (freeze -> build review -> final review -> promoted commit tree): True
   candidate_tree = 87216b5cf63d13b14a90f81b27672825c42d8ae2
 
-Evidence written to /private/tmp/claude-501/-Users-jocelyngrosjean-job-opportunity-radar-cvsec-core-v2/f3be8b52-7a82-4f88-b7b8-f8271743a2fe/scratchpad/joao_clean_evidence/e2e_evidence/trace.json
+Evidence written to <SANITIZED>
 EXIT=0

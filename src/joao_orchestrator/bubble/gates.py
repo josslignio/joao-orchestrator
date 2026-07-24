@@ -18,6 +18,17 @@ directly by `tests/test_c8_gates.py` with hand-built input dicts. Wiring the
 remaining six into `approve()`/`promote()`/the orchestrator is C8-B/C8-C scope
 (`JOAO_C8_GATES_ROADMAP.md`), not this module's job.
 
+DEFERRED ENFORCEMENT NOTICE (Codex full-stack review P1, 2026-07-24):
+The six C8 gate functions (gate_frozen_finish_line excepted) are NOT enforced
+on the approve() or promote() call paths. They are pure contracts pending
+C8-B/C8-C integration, which will define the production evidence sources,
+artifact persistence, and lifecycle ownership for each required gate input.
+Do NOT import or invoke these gates from RunRuntime.approve(),
+RunRuntime.promote(), or promotion.promote() until C8-B/C8-C is complete.
+The existing fail-closed integrity/approval checks (review proof matching,
+candidate identity verification, approval record validation, branch CAS)
+remain enforced independently of C8 gates.
+
 No 8th gate. No OS-security boundary recreation (D-046) — these gates govern
 delivery (who reviews, on what SHA, with what proof, in what order, against
 which frozen criteria), never a process/kernel isolation claim.

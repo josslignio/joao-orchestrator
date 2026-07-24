@@ -2,5 +2,5 @@
 cc796b55808b95210adf9d219ecd91a240b2676c
 7ae68454a64df9063dc3c4f78b14cc888ba6fddf
 --- real repo's real memory (the authoritative one, not this worktree's copy) ---
-92fcd6b81443f97a1d27f29d6ba738ec5b8b5f95d90deb9e912caa43ab44de69  /Users/jocelyngrosjean/joao-orchestrator/memory/lessons.jsonl
+92fcd6b81443f97a1d27f29d6ba738ec5b8b5f95d90deb9e912caa43ab44de69  <SANITIZED>
 (empty status line above = real memory/lessons.jsonl untouched)

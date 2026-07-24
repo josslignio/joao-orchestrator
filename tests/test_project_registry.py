@@ -120,7 +120,7 @@ def test_diagnostics_reports_both_roots():
 def test_project_repository_path_reads_declared_field_from_real_repo():
     registry = ProjectRegistry()
     path = registry.project_repository_path("job-opportunity-radar")
-    assert path == Path("/Users/jocelyngrosjean/job-opportunity-radar")
+    assert path == Path.home() / "job-opportunity-radar"
 
 
 def test_project_repository_path_none_when_not_declared(tmp_path):

@@ -1,7 +1,7 @@
 ============================= test session starts ==============================
 platform darwin -- Python 3.12.10, pytest-9.1.1, pluggy-1.6.0 -- /Library/Frameworks/Python.framework/Versions/3.12/bin/python3
 cachedir: .pytest_cache
-rootdir: /private/tmp/claude-501/-Users-jocelyngrosjean-job-opportunity-radar-cvsec-core-v2/f3be8b52-7a82-4f88-b7b8-f8271743a2fe/scratchpad/joao_clean_wt
+rootdir: <SANITIZED>
 configfile: setup.cfg
 collecting ... collected 23 items
 

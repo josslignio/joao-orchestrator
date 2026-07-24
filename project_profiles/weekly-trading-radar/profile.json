@@ -1,7 +1,7 @@
 {
   "project_id": "weekly-trading-radar",
   "aliases": ["Twitter Bot", "Twitter Radar", "Trading Radar", "Weekly Trading Radar", "weekly-trading-radar"],
-  "repository_path": "/Users/jocelyngrosjean/twitter-scrape-test",
+  "repository_path": "~/twitter-scrape-test",
   "runtime_root": "~/.local/share/joss-orchestrator",
   "known_good_command": ".venv/bin/python scripts/weekly_v1_delivery.py",
   "public_urls": ["https://josslignio.github.io/weekly-trading-radar-dashboard/latest/report.html"],

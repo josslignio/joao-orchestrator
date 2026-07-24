@@ -4,11 +4,11 @@
 .......................................................................  [100%]
 =============================== warnings summary ===============================
 tests/failure_injection_test.py:14
-  /Users/jocelyngrosjean/joao-orchestrator/tests/failure_injection_test.py:14: PytestCollectionWarning: cannot collect test class 'TestResult' because it has a __init__ constructor (from: tests/failure_injection_test.py)
+  <SANITIZED> PytestCollectionWarning: cannot collect test class 'TestResult' because it has a __init__ constructor (from: tests/failure_injection_test.py)
     class TestResult(Enum):
 
 tests/test_package_boundaries.py::test_joss_compatibility_shim_exists
-  /Users/jocelyngrosjean/joao-orchestrator/tests/test_package_boundaries.py:27: DeprecationWarning: joss_orchestrator is a compatibility shim; import from joao_orchestrator.
+  <SANITIZED> DeprecationWarning: joss_orchestrator is a compatibility shim; import from joao_orchestrator.
     import joss_orchestrator
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html

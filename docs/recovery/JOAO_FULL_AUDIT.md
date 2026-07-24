@@ -2,7 +2,7 @@
 
 ## Scope and baseline
 
-- Canonical checkout preserved: `/Users/jocelyngrosjean/joao-orchestrator` at
+- Canonical checkout preserved: `<REPO_ROOT>` at
   `26c1f1c8f9eb31ad56c99a9922d8086593055204`.
 - Recovery branch starts from reviewed Stage-A candidate
   `d37f6354647309ebf8fde0c2770062b1aabc282c` in an isolated worktree.
