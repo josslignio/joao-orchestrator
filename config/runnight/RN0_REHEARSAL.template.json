@@ -1,0 +1,39 @@
+{
+  "run_id": "rn0-rehearsal-001",
+  "authorized_sha": "0000000000000000000000000000000000000000",
+  "mode": "rehearsal",
+  "state_root": "/Users/jocelyngrosjean/JOAO_EVIDENCE/RUN_NIGHT",
+  "repo_root": "/Users/jocelyngrosjean/joao-runnight-master",
+  "tranche3_evidence_path": "/ABSOLUTE/TRANCHE3_FINAL_EVIDENCE.zip",
+  "tranche3_closure_path": "/ABSOLUTE/TRANCHE3_GPT_PASS.json",
+  "runnight_evidence_path": "/ABSOLUTE/RUNNIGHT_MASTER_EVIDENCE.zip",
+  "runnight_closure_path": "/ABSOLUTE/RUNNIGHT_MASTER_GPT_PASS.json",
+  "publication_mode": "none",
+  "stop_on_sensitive": true,
+  "require_clean_repo": true,
+  "limits": {
+    "max_duration_minutes": 30,
+    "hard_duration_minutes": 45,
+    "max_tasks": 2,
+    "max_provider_calls": 5,
+    "max_codex_calls": 2,
+    "max_consecutive_failures": 1,
+    "max_context_bytes": 524288,
+    "max_artifact_bytes": 65536,
+    "max_concurrency": 1
+  },
+  "tasks": [
+    {
+      "task_id": "rn0-control-receipt",
+      "project_id": "joao",
+      "objective": "Return exactly one NightArtifact JSON object for task rn0-control-receipt, kind rehearsal_receipt, bound to the authorized source SHA. Summarize the read-only Run Night controls and list the decisive tests. reviewer_verdict must be ACCEPT only after independent review.",
+      "execution_root": "/Users/jocelyngrosjean/joao-runnight-master",
+      "artifact_kind": "rehearsal_receipt",
+      "supervisor_mode": "builder_reviewer",
+      "max_provider_calls": 4,
+      "require_independent_review": true,
+      "sensitive": false
+    }
+  ],
+  "tranche3_base_sha": "1bfa76bb53d3b158f53b54c5b1a18fcf47091fb2"
+}

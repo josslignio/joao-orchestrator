@@ -1,0 +1,61 @@
+{
+  "run_id": "rn1-tranche4-master-001",
+  "authorized_sha": "0000000000000000000000000000000000000000",
+  "mode": "read_only",
+  "state_root": "/Users/jocelyngrosjean/JOAO_EVIDENCE/RUN_NIGHT",
+  "repo_root": "/Users/jocelyngrosjean/joao-runnight-master",
+  "tranche3_evidence_path": "/ABSOLUTE/TRANCHE3_FINAL_EVIDENCE.zip",
+  "tranche3_closure_path": "/ABSOLUTE/TRANCHE3_GPT_PASS.json",
+  "runnight_evidence_path": "/ABSOLUTE/RUNNIGHT_MASTER_EVIDENCE.zip",
+  "runnight_closure_path": "/ABSOLUTE/RUNNIGHT_MASTER_GPT_PASS.json",
+  "publication_mode": "none",
+  "stop_on_sensitive": true,
+  "require_clean_repo": true,
+  "limits": {
+    "max_duration_minutes": 240,
+    "hard_duration_minutes": 300,
+    "max_tasks": 3,
+    "max_provider_calls": 12,
+    "max_codex_calls": 3,
+    "max_consecutive_failures": 1,
+    "max_context_bytes": 2097152,
+    "max_artifact_bytes": 262144,
+    "max_concurrency": 1
+  },
+  "tasks": [
+    {
+      "task_id": "rn1-attachments-foundation",
+      "project_id": "joao",
+      "objective": "Analyze the exact repository and return exactly one NightArtifact JSON object for task rn1-attachments-foundation, kind architecture_packet. Design RUN 3A TXT/MD/CSV/JSON ingestion: contracts, limits, security, fixtures, allowlist, acceptance gates and rollback. Bind source_sha to the authorized SHA and require independent reviewer ACCEPT.",
+      "execution_root": "/Users/jocelyngrosjean/joao-runnight-master",
+      "artifact_kind": "architecture_packet",
+      "supervisor_mode": "builder_reviewer",
+      "max_provider_calls": 4,
+      "require_independent_review": true,
+      "sensitive": false
+    },
+    {
+      "task_id": "rn1-rich-docs-quality",
+      "project_id": "joao",
+      "objective": "Analyze the exact repository and return exactly one NightArtifact JSON object for task rn1-rich-docs-quality, kind test_plan. Design PDF/DOCX extraction and Quality Lab minimal with deterministic fixtures, honest unsupported cases, security tests, acceptance gates and rollback. Bind source_sha to the authorized SHA and require independent reviewer ACCEPT.",
+      "execution_root": "/Users/jocelyngrosjean/joao-runnight-master",
+      "artifact_kind": "test_plan",
+      "supervisor_mode": "builder_reviewer",
+      "max_provider_calls": 4,
+      "require_independent_review": true,
+      "sensitive": false
+    },
+    {
+      "task_id": "rn1-tranche4-implementation",
+      "project_id": "joao",
+      "objective": "Return exactly one NightArtifact JSON object for task rn1-tranche4-implementation, kind implementation_packet. Produce the ordered implementation packet for RUN 3A, RUN 3B, Quality Lab, Web public, Vision probe, Images, general operator and multi-run nights. Include dependencies, file allowlists, tests, stop conditions, GPT review milestones, Codex gates and rollback. Bind source_sha to the authorized SHA and require independent reviewer ACCEPT.",
+      "execution_root": "/Users/jocelyngrosjean/joao-runnight-master",
+      "artifact_kind": "implementation_packet",
+      "supervisor_mode": "builder_reviewer",
+      "max_provider_calls": 4,
+      "require_independent_review": true,
+      "sensitive": false
+    }
+  ],
+  "tranche3_base_sha": "1bfa76bb53d3b158f53b54c5b1a18fcf47091fb2"
+}
