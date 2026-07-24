@@ -12,28 +12,38 @@ from types import FrameType
 
 
 def terminate_process_group(proc: subprocess.Popen, *, grace_seconds: float = 2.0) -> None:
-    """Terminate the full child process group, escalating to SIGKILL."""
-    if proc.poll() is not None:
-        return
-    try:
-        pgid = os.getpgid(proc.pid)
-    except ProcessLookupError:
-        return
+    """Terminate the full child process group, escalating to SIGKILL.
+
+    Order: SIGTERM → grace → reap leader (proc.wait) → SIGKILL survivors.
+    Reaping the leader before the final SIGKILL prevents zombie-blocked
+    killpg checks from masking surviving grandchildren.
+    """
+    pgid = proc.pid
+    # SIGTERM the whole group
     try:
         os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError:
-        return
+        pass
+    # Grace period for graceful shutdown
     deadline = time.monotonic() + max(0.0, grace_seconds)
-    while proc.poll() is None and time.monotonic() < deadline:
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            break
         time.sleep(0.05)
-    if proc.poll() is None:
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+    # SIGKILL the leader first so we can reap it
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    # Reap the leader BEFORE any further group checks
     try:
         proc.wait(timeout=max(0.1, grace_seconds))
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, ProcessLookupError):
+        pass
+    # Now SIGKILL any grandchildren that survived the leader
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
         pass
 
 
@@ -54,7 +64,11 @@ def main() -> int:
     def handle_signal(signum: int, _frame: FrameType | None) -> None:
         nonlocal received_signal
         received_signal = signum
-        terminate_process_group(proc)
+        # Signal handler must be non-blocking — just SIGKILL the group
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
     previous = {}
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):

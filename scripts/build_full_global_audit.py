@@ -156,7 +156,7 @@ def main() -> int:
         (stage / "ROOT_COMMIT.txt").write_text(root_commit + "\n", encoding="utf-8")
         (stage / "GIT_STATUS.txt").write_text("", encoding="utf-8")
         (stage / "GENERATED_AT_UTC.txt").write_text(
-            datetime.now(timezone.utc).isoformat() + "\n", encoding="utf-8")
+            "REPRODUCIBLE\n", encoding="utf-8")
 
         with (stage / "FULL_TRACKED_SOURCE.tar.gz").open("wb") as handle:
             subprocess.run(["git", "archive", "--format=tar.gz", "HEAD"],
@@ -202,6 +202,18 @@ def main() -> int:
                 [sys.executable, "-m", "pytest", "-q", "tests"],
                 cwd=ROOT, output=stage / "GATE_FULL_REPOSITORY.txt",
             )
+            # Strip variable timing from pytest output for reproducibility
+            import re
+            gate_path = stage / "GATE_FULL_REPOSITORY.txt"
+            raw = gate_path.read_text(encoding="utf-8")
+            raw = re.sub(r"in \d+\.\d+s.*$", "", raw, flags=re.MULTILINE)
+            gate_path.write_text(raw, encoding="utf-8")
+        # Strip variable timing from ALL pytest gate outputs for reproducibility
+        import re as _re
+        for gate_file in stage.glob("GATE_*.txt"):
+            raw = gate_file.read_text(encoding="utf-8")
+            raw = _re.sub(r"in \d+\.\d+s.*$", "", raw, flags=_re.MULTILINE)
+            gate_file.write_text(raw, encoding="utf-8")
         results["diff_check"] = run(
             ["git", "diff", "--check", "HEAD"], cwd=ROOT,
             output=stage / "GATE_DIFF_CHECK.txt",

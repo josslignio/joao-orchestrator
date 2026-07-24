@@ -1566,6 +1566,7 @@ class RunRuntime:
                 review = {
                     "ok": False, "decision": "block", "stage": stage,
                     "reason": "RI-4: reviewer proof missing or bound to a different candidate_tree",
+                    "skipped": "RI-4 override",
                     "expected_candidate_tree": expected,
                     "received_candidate_tree": proof.get("candidate_tree") if isinstance(proof, dict) else None,
                     "adapter_claimed_ok": bool(review.get("ok")),

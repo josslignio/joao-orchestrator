@@ -354,7 +354,7 @@ def test_a02_7_promote_refuses_without_run_and_approval_record(tmp_path):
 
     # RED, second variant: a forged approval record naming a DIFFERENT
     # candidate_commit than the one actually being promoted.
-    forged = create_approval_record(accepted, candidate, review_proof_sha256="0" * 64)
+    forged = create_approval_record(accepted, candidate, hmac_key=value.integrity_key, review_proof_sha256="0" * 64)
     forged["candidate_commit"] = "0" * 40
     with pytest.raises(PromotionError, match="does not match this candidate"):
         promotion_mod.promote(work, folder, candidate, run_id, run=accepted, approval_record=forged)
